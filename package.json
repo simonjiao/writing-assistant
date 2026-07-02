@@ -1,0 +1,29 @@
+{
+  "name": "writing-assistant-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Workflow-driven writing assistant MVP with TypeScript, Fastify, React, skills, externalized state/memory/artifacts.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @wa/core && npm run build --workspace @wa/skills && npm run build --workspace @wa/api && npm run build --workspace @wa/web",
+    "dev": "npm run build --workspace @wa/core && npm run build --workspace @wa/skills && npm run dev --workspace @wa/api",
+    "dev:web": "npm run dev --workspace @wa/web",
+    "test": "vitest run packages/core/src/workflow.test.ts packages/skills/src/task-card-builder.test.ts apps/api/src/app.test.ts",
+    "lint": "npm run lint --workspaces --if-present",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json,css}\"",
+    "clean": "rimraf apps/*/dist apps/*/dist-ts packages/*/dist .data apps/*/.data"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "prettier": "^3.4.2",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.0"
+  }
+}

@@ -1,0 +1,61 @@
+import { join } from 'node:path';
+import { AgentEvent, ArticleArtifact, ArticleVersion, ArtifactStore, EventTraceStore, KnowledgeItem, KnowledgeStore, MemoryStore, newId, nowIso, Session, SessionStore, StateStore, TextPatch, UserWritingProfile, WorkflowRun } from '@wa/core';
+import { SqliteJsonDb } from './sqliteJsonDb';
+
+function dbPath(dataDir: string) { return join(dataDir, 'writing-assistant.sqlite'); }
+
+export class SqliteStateStore implements StateStore {
+  private readonly db: SqliteJsonDb<WorkflowRun>;
+  constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'runs'); }
+  saveRun(run: WorkflowRun) { return this.db.upsert({ ...run, updatedAt: nowIso() }); }
+  getRun(runId: string) { return this.db.get(runId); }
+  updateRun(runId: string, patch: Partial<WorkflowRun>) { return this.db.update(runId, { ...patch, updatedAt: nowIso() }); }
+  async listRuns(filter?: { userId?: string; workflowId?: string }) { const runs = await this.db.list(); return runs.filter((run) => (!filter?.userId || run.metadata.userId === filter.userId) && (!filter?.workflowId || run.workflowId === filter.workflowId)); }
+  close() { this.db.close(); }
+}
+
+export class SqliteSessionStore implements SessionStore {
+  private readonly db: SqliteJsonDb<Session>;
+  constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'sessions'); }
+  async createSession(userId: string) { const now = nowIso(); return this.db.upsert({ id: newId('ses'), userId, panelScope: 'article', createdAt: now, updatedAt: now }); }
+  getSession(sessionId: string) { return this.db.get(sessionId); }
+  updateSession(sessionId: string, patch: Partial<Session>) { return this.db.update(sessionId, { ...patch, updatedAt: nowIso() }); }
+  close() { this.db.close(); }
+}
+
+export class SqliteMemoryStore implements MemoryStore {
+  private readonly db: SqliteJsonDb<UserWritingProfile & { id: string }>;
+  constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'memory'); }
+  async getUserProfile(userId: string) { const existing = await this.db.get(userId); if (existing) return existing; const profile: UserWritingProfile = { userId, stylePreferences: ['表达清楚，避免空泛套话'], structurePreferences: ['先确认任务卡，再生成大纲和正文'], editPreferences: ['默认局部修改，不默认全文重写'], memoryNotes: [], updatedAt: nowIso() }; await this.db.upsert({ ...profile, id: userId }); return profile; }
+  async updateUserProfile(userId: string, patch: Partial<UserWritingProfile>) { const current = await this.getUserProfile(userId); const updated = { ...current, ...patch, userId, updatedAt: nowIso() }; await this.db.upsert({ ...updated, id: userId }); return updated; }
+  close() { this.db.close(); }
+}
+
+export class SqliteArtifactStore implements ArtifactStore {
+  private readonly db: SqliteJsonDb<ArticleArtifact>;
+  constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'artifacts'); }
+  async createArticle(input: { userId: string; title: string; taskCard?: ArticleArtifact['taskCard'] }) { const now = nowIso(); const article: ArticleArtifact = { id: newId('art'), userId: input.userId, title: input.title, taskCard: input.taskCard, outline: [], blocks: [], citations: [], themeTags: [], versions: [], createdAt: now, updatedAt: now }; await this.db.upsert(article); await this.commitVersion(article.id, '创建文章草稿', 'agent'); return (await this.getArticle(article.id)) as ArticleArtifact; }
+  getArticle(articleId: string) { return this.db.get(articleId); }
+  async listArticles(userId: string) { return (await this.db.list()).filter((article) => article.userId === userId); }
+  updateArticle(article: ArticleArtifact) { return this.db.upsert({ ...article, updatedAt: nowIso() }); }
+  async commitVersion(articleId: string, reason: string, author: ArticleVersion['author']) { const article = await this.getArticle(articleId); if (!article) throw new Error(`Article not found: ${articleId}`); const version: ArticleVersion = { id: newId('ver'), reason, author, snapshot: { taskCard: article.taskCard, outline: article.outline, blocks: article.blocks, citations: article.citations, themeTags: article.themeTags }, createdAt: nowIso() }; article.versions = [...article.versions, version]; article.updatedAt = nowIso(); await this.db.upsert(article); return version; }
+  async applyPatch(patch: TextPatch) { const article = await this.getArticle(patch.articleId); if (!article) throw new Error(`Article not found: ${patch.articleId}`); article.blocks = article.blocks.map((block) => block.id === patch.blockId ? { ...block, text: patch.after, updatedAt: nowIso(), status: 'draft' } : block); article.updatedAt = nowIso(); await this.db.upsert(article); await this.commitVersion(article.id, `应用局部修改：${patch.instruction}`, 'agent'); return (await this.getArticle(article.id)) as ArticleArtifact; }
+  close() { this.db.close(); }
+}
+
+export class SqliteKnowledgeStore implements KnowledgeStore {
+  private readonly db: SqliteJsonDb<KnowledgeItem>;
+  constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'knowledge'); }
+  async search(query: string, options?: { limit?: number; themeTags?: string[] }) { await this.seedIfEmpty(); const items = await this.db.list(); const q = query.toLowerCase(); const scored = items.map((item) => { const haystack = `${item.title}\n${item.content}\n${item.themeTags.join(' ')}`.toLowerCase(); const tagScore = options?.themeTags?.some((tag) => item.themeTags.includes(tag)) ? 2 : 0; const textScore = q.split(/\s+/).filter(Boolean).reduce((score, token) => score + (haystack.includes(token) ? 1 : 0), 0); return { item, score: tagScore + textScore }; }).sort((a, b) => b.score - a.score); return scored.slice(0, options?.limit ?? 6).map((entry) => entry.item); }
+  async listByRefs(sourceRefs: string[]) { await this.seedIfEmpty(); const refs = new Set(sourceRefs); return (await this.db.list()).filter((item) => refs.has(item.sourceRef)); }
+  private async seedIfEmpty() { if ((await this.db.list()).length > 0) return; const now = nowIso(); const seeds: KnowledgeItem[] = [{ id: 'k_red_mansion_relation', title: '红楼梦人物关系写作提示', content: '分析人物关系时，优先区分情节关系、精神关系、家族秩序与叙事功能。', sourceType: 'manual', sourceRef: 'seed:red-mansion-relation', themeTags: ['宝黛', '人物', '关系', '知己'], createdAt: now }, { id: 'k_local_edit_policy', title: '局部修改策略', content: '用户选中段落时，默认只修改选中段落。若影响前后文，需要解释影响范围并请求确认。', sourceType: 'manual', sourceRef: 'seed:local-edit-policy', themeTags: ['局部修改', 'workflow'], createdAt: now }, { id: 'k_task_card_policy', title: '任务卡优先原则', content: '在正文写作前先确认任务卡。', sourceType: 'manual', sourceRef: 'seed:task-card-policy', themeTags: ['任务卡', 'workflow'], createdAt: now }]; for (const item of seeds) await this.db.upsert(item); }
+  close() { this.db.close(); }
+}
+
+export class SqliteEventTraceStore implements EventTraceStore {
+  private readonly db: SqliteJsonDb<AgentEvent>;
+  constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'events'); }
+  append(event: AgentEvent) { return this.db.upsert(event).then(() => undefined); }
+  async listByRun(runId: string) { return (await this.db.list()).filter((event) => event.runId === runId).sort((a, b) => a.createdAt.localeCompare(b.createdAt)); }
+  close() { this.db.close(); }
+}

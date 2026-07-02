@@ -1,0 +1,44 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      PORT: 8787
+      HOST: 0.0.0.0
+      DATA_DIR: /data
+      WEB_ORIGIN: http://localhost:5173
+      LLM_PROVIDER: mock
+      WORKFLOW_EXECUTION_MODE: async
+      WORKFLOW_QUEUE_DRIVER: redis
+      ENABLE_WORKERS: "true"
+      RUNNER_CONCURRENCY: 2
+      REDIS_URL: redis://redis:6379
+      RAG_PROVIDER: local
+      RAG_FALLBACK_LOCAL: "true"
+    volumes:
+      - wa-data:/data
+    ports:
+      - "8787:8787"
+    depends_on:
+      - redis
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        VITE_API_BASE: http://localhost:8787
+    environment:
+      VITE_API_BASE: http://localhost:8787
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+
+volumes:
+  wa-data:
