@@ -1,6 +1,6 @@
 import { AgentEvent, EventTraceStore, KnowledgeItem, KnowledgeStore, newId, nowIso } from '@wa/core';
 
-export interface HttpRagKnowledgeStoreConfig { baseURL: string; apiKey?: string; searchPath?: string; refsPath?: string; timeoutMs?: number; fallback?: KnowledgeStore; eventTraceStore?: EventTraceStore }
+export interface HttpRagKnowledgeStoreConfig { baseURL: string; apiKey?: string; searchPath?: string; refsPath?: string; timeoutMs?: number; eventTraceStore?: EventTraceStore }
 
 type RawRagItem = Partial<KnowledgeItem> & { text?: string; source?: string; metadata?: Record<string, unknown> };
 type RagResponse = RawRagItem[] | { items?: RawRagItem[]; results?: RawRagItem[]; data?: RawRagItem[] };
@@ -18,7 +18,6 @@ export class HttpRagKnowledgeStore implements KnowledgeStore {
       return items;
     } catch (error) {
       await this.emit({ ...eventBase, id: newId('evt'), type: 'rag.http.failed', payload: { ...eventBase.payload, error: error instanceof Error ? error.message : String(error) }, createdAt: nowIso() });
-      if (this.config.fallback) return this.config.fallback.search(query, options);
       throw error;
     }
   }
@@ -29,7 +28,6 @@ export class HttpRagKnowledgeStore implements KnowledgeStore {
       const refs = new Set(sourceRefs);
       return this.normalizeResponse(response).filter((item) => refs.has(item.sourceRef));
     } catch (error) {
-      if (this.config.fallback) return this.config.fallback.listByRefs(sourceRefs);
       throw error;
     }
   }

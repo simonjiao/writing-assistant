@@ -19,7 +19,6 @@ services:
       RUNNER_CONCURRENCY: 2
       REDIS_URL: redis://redis:6379
       RAG_PROVIDER: local
-      RAG_FALLBACK_LOCAL: "true"
     volumes:
       - wa-data:/data
     ports:

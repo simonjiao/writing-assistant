@@ -12,7 +12,7 @@ afterEach(async () => { if (dataDir) await rm(dataDir, { recursive: true, force:
 
 function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   dataDir = join(tmpdir(), `wa-api-test-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  return { host: '127.0.0.1', port: 0, dataDir, webOrigin: 'http://localhost:5173', llmProvider: 'mock', openaiBaseURL: 'https://api.openai.com/v1', openaiApiKey: '', openaiModel: 'mock', workflowExecutionMode: 'inline', workflowQueueDriver: 'local', enableWorkers: true, runnerConcurrency: 2, redisUrl: 'redis://localhost:6379', ragProvider: 'local', ragBaseURL: '', ragApiKey: '', ragSearchPath: '/search', ragRefsPath: '/refs', ragTimeoutMs: 1000, ragFallbackToLocal: true, ...overrides };
+  return { host: '127.0.0.1', port: 0, dataDir, webOrigin: 'http://localhost:5173', llmProvider: 'mock', openaiBaseURL: 'https://api.openai.com/v1', openaiApiKey: '', openaiModel: 'mock', workflowExecutionMode: 'inline', workflowQueueDriver: 'local', enableWorkers: true, runnerConcurrency: 2, redisUrl: 'redis://localhost:6379', ragProvider: 'local', ragBaseURL: '', ragApiKey: '', ragSearchPath: '/search', ragRefsPath: '/refs', ragTimeoutMs: 1000, ...overrides };
 }
 
 async function waitForRun(container: ReturnType<typeof createContainer>, runId: string, statuses: string[]) {
@@ -111,7 +111,7 @@ describe('api app', () => {
 
   it('queries an HTTP RAG provider through the knowledge API', async () => {
     const rag = await startRagServer();
-    const config = testConfig({ ragProvider: 'http', ragBaseURL: rag.baseURL, ragFallbackToLocal: false });
+    const config = testConfig({ ragProvider: 'http', ragBaseURL: rag.baseURL });
     const container = createContainer(config);
     const app = createApp(config, container);
     const response = await app.inject({ method: 'POST', url: '/api/knowledge/search', payload: { query: '宝黛关系', limit: 1 } });
@@ -125,7 +125,7 @@ describe('api app', () => {
 
   it('maps Tonglingyu retriever evidence packs into knowledge items', async () => {
     const retriever = await startTonglingyuRetrieverServer();
-    const config = testConfig({ ragProvider: 'tonglingyu', ragBaseURL: retriever.baseURL, ragSearchPath: '/retrieve', ragFallbackToLocal: false });
+    const config = testConfig({ ragProvider: 'tonglingyu', ragBaseURL: retriever.baseURL, ragSearchPath: '/retrieve' });
     const container = createContainer(config);
     const app = createApp(config, container);
     const response = await app.inject({ method: 'POST', url: '/api/knowledge/search', payload: { query: '宝黛关系', limit: 1, themeTags: ['宝黛'] } });

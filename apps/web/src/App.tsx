@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
-import { AgentEvent, ArticleArtifact, ArticleBlock, RunResponse } from './types';
+import { AgentEvent, ArticleArtifact, ArticleBlock, RunResponse, WritingTaskCard } from './types';
 
 const userId = 'demo-user';
 const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']);
@@ -51,15 +51,15 @@ export function App() {
       <main className="workspace">
         <aside className="panel task-panel">
           <h2>任务卡</h2>
-          {!article?.taskCard ? <div className="empty">尚未生成任务卡。</div> : <div className="task-card"><label>主题</label><div>{article.taskCard.topic}</div><label>目标</label><div>{article.taskCard.writingGoal}</div><label>读者</label><div>{article.taskCard.audience}</div><label>结构</label><div>{article.taskCard.structure.articleType} / {article.taskCard.structure.expectedLength}</div><label>风格</label><div>{article.taskCard.style.register}；{article.taskCard.style.tone}</div><label>修改策略</label><div>{article.taskCard.interactionMode.localEditFirst ? '默认局部修改' : '允许全文重写'}</div><label>状态</label><div>{article.taskCard.status}</div></div>}
-          {lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-task-card-confirm' && <button onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'confirm' }))}>确认任务卡</button>}
-          {article?.taskCard?.status === 'confirmed' && !article.outline.length && <button onClick={() => execute(() => api.startOutline(article.id, userId, sessionId))}>生成大纲</button>}
-          {lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-outline-confirm' && <button onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'confirm' }))}>确认大纲</button>}
+          {!article?.taskCard ? <div className="empty">尚未生成任务卡。</div> : <TaskCardView taskCard={article.taskCard} />}
+          {lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-task-card-confirm' && <button disabled={busy} onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'confirm' }))}>确认任务卡</button>}
+          {article?.taskCard?.status === 'confirmed' && !article.outline.length && <button disabled={busy} onClick={() => execute(() => api.startOutline(article.id, userId, sessionId))}>生成大纲</button>}
+          {lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-outline-confirm' && <button disabled={busy} onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'confirm' }))}>确认大纲</button>}
         </aside>
         <section className="panel editor-panel">
           <h2>文章编辑区</h2>
           <div className="input-row"><textarea value={requirement} onChange={(event) => setRequirement(event.target.value)} /><button disabled={busy || !requirement.trim()} onClick={() => execute(() => api.startTaskCard(requirement, userId, sessionId))}>生成任务卡</button></div>
-          {article?.outline.length ? <div className="outline"><h3>大纲</h3>{article.outline.map((item) => <div className="outline-item" key={item.id}><div><strong>{item.title}</strong><p>{item.goal}</p><span>{item.status}</span></div><button disabled={busy} onClick={() => execute(() => api.startSection(article.id, item.id, userId, sessionId))}>生成本节</button></div>)}</div> : null}
+          {article?.outline.length ? <div className="outline"><h3>大纲</h3>{article.outline.map((item) => <div className="outline-item" key={item.id}><div><strong>{item.title}</strong><p>{item.goal}</p><span>{outlineStatusLabel(item.status)}</span></div><button disabled={busy} onClick={() => execute(() => api.startSection(article.id, item.id, userId, sessionId))}>生成本节</button></div>)}</div> : null}
           <div className="article-blocks">{article?.blocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} onSelect={() => setSelectedBlockId(block.id)} />)}</div>
         </section>
         <aside className="panel side-panel">
@@ -74,3 +74,62 @@ export function App() {
   );
 }
 function ArticleBlockView(props: { block: ArticleBlock; selected: boolean; onSelect: () => void }) { return <article className={props.selected ? 'block selected' : 'block'} onClick={props.onSelect}><h3>{props.block.title}</h3><pre>{props.block.text}</pre></article>; }
+
+function TaskCardView(props: { taskCard: WritingTaskCard }) {
+  const card = props.taskCard;
+  return (
+    <div className="task-card">
+      <label>主题</label><div>{card.topic}</div>
+      <label>目标</label><div>{card.writingGoal}</div>
+      <label>读者</label><div>{card.audience}</div>
+      <label>范围</label><div>{displayScope(card)}</div>
+      <label>结构</label><div>{displayStructure(card)}</div>
+      <label>风格</label><div>{displayStyle(card)}</div>
+      <label>约束</label><div>{displayConstraints(card)}</div>
+    </div>
+  );
+}
+
+function displayScope(card: WritingTaskCard): string {
+  const parts = [
+    joinList(card.scope.characters),
+    joinList(card.scope.themes),
+    joinList(card.scope.chapters),
+    joinList(card.scope.editions),
+  ].filter(Boolean);
+  return parts.join('；');
+}
+
+function displayStructure(card: WritingTaskCard): string {
+  return [articleTypeLabel(card.structure.articleType), card.structure.expectedLength, card.structure.outlinePreference].filter(Boolean).join('；');
+}
+
+function displayStyle(card: WritingTaskCard): string {
+  return [card.style.register, card.style.tone, card.style.characterVoice].filter((item) => item?.trim()).join('；');
+}
+
+function displayConstraints(card: WritingTaskCard): string {
+  const include = joinList(card.constraints.mustInclude);
+  const avoid = joinList(card.constraints.mustAvoid);
+  const citation = card.constraints.citationRequired ? '需要可追溯引用' : '';
+  return [
+    include ? `要包含：${include}` : '',
+    avoid ? `避免：${avoid}` : '',
+    citation,
+    card.constraints.sourcePolicy,
+  ].filter(Boolean).join('；');
+}
+
+function articleTypeLabel(value: string): string {
+  const labels: Record<string, string> = { essay: '随笔', analysis: '赏析/分析', commentary: '评论', speech: '演讲稿', longform: '长文' };
+  return labels[value] ?? value;
+}
+
+function outlineStatusLabel(value: string): string {
+  const labels: Record<string, string> = { draft: '待确认', confirmed: '已确认', written: '已写作' };
+  return labels[value] ?? value;
+}
+
+function joinList(items?: string[]): string {
+  return (items ?? []).filter((item) => item.trim().length > 0).join('、');
+}

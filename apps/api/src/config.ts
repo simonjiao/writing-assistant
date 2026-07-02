@@ -36,7 +36,6 @@ export interface AppConfig {
   ragSearchPath: string;
   ragRefsPath: string;
   ragTimeoutMs: number;
-  ragFallbackToLocal: boolean;
 }
 
 function getRagProvider(): AppConfig['ragProvider'] {
@@ -68,6 +67,5 @@ export function getConfig(): AppConfig {
     ragSearchPath: process.env.RAG_SEARCH_PATH ?? (ragProvider === 'tonglingyu' ? '/retrieve' : '/search'),
     ragRefsPath: process.env.RAG_REFS_PATH ?? process.env.RAG_BY_REFS_PATH ?? '/refs',
     ragTimeoutMs: Number(process.env.RAG_TIMEOUT_MS ?? 10000),
-    ragFallbackToLocal: process.env.RAG_FALLBACK_LOCAL !== 'false' && process.env.RAG_FALLBACK_TO_LOCAL !== 'false',
   };
 }

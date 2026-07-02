@@ -63,7 +63,6 @@ POST /refs
 ```bash
 RAG_PROVIDER=http
 RAG_BASE_URL=http://localhost:9000
-RAG_FALLBACK_LOCAL=true
 ```
 
 接入 `tonglingyu-knownledge` 现有 retriever HTTP 服务时：
@@ -73,7 +72,6 @@ RAG_PROVIDER=tonglingyu
 RAG_BASE_URL=http://127.0.0.1:8765
 RAG_SEARCH_PATH=/retrieve
 RAG_TIMEOUT_MS=60000
-RAG_FALLBACK_LOCAL=false
 ```
 
 测试：

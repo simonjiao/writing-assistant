@@ -5,7 +5,6 @@ export interface TonglingyuRetrieverKnowledgeStoreConfig {
   apiKey?: string;
   retrievePath?: string;
   timeoutMs?: number;
-  fallback?: KnowledgeStore;
   eventTraceStore?: EventTraceStore;
 }
 
@@ -54,13 +53,11 @@ export class TonglingyuRetrieverKnowledgeStore implements KnowledgeStore {
       return items;
     } catch (error) {
       await this.emit({ ...eventBase, id: newId('evt'), type: 'rag.http.failed', payload: { ...eventBase.payload, error: error instanceof Error ? error.message : String(error) }, createdAt: nowIso() });
-      if (this.config.fallback) return this.config.fallback.search(query, options);
       throw error;
     }
   }
 
   async listByRefs(sourceRefs: string[]): Promise<KnowledgeItem[]> {
-    if (this.config.fallback) return this.config.fallback.listByRefs(sourceRefs);
     throw new Error('Tonglingyu retriever HTTP adapter does not expose a refs lookup endpoint.');
   }
 

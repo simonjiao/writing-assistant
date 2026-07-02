@@ -43,12 +43,6 @@ RAG_SEARCH_PATH=/search
 RAG_REFS_PATH=/refs
 ```
 
-失败时可配置回退：
-
-```bash
-RAG_FALLBACK_LOCAL=true
-```
-
 `RAG_PROVIDER=http` 适配通用 `/search` 响应，要求返回数组或 `{ items/results/data }`。
 
 ## Tonglingyu Retriever KnowledgeStore
@@ -58,7 +52,6 @@ RAG_PROVIDER=tonglingyu
 RAG_BASE_URL=http://127.0.0.1:8765
 RAG_SEARCH_PATH=/retrieve
 RAG_TIMEOUT_MS=60000
-RAG_FALLBACK_LOCAL=false
 ```
 
 该 driver 适配 `tonglingyu-knownledge` 当前 HTTP contract：

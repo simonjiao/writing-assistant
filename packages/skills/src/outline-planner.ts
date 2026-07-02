@@ -19,64 +19,75 @@ export class OutlinePlannerSkill implements Skill<OutlinePlannerInput, OutlinePl
   };
 
   async invoke({ input, context, llm }: Parameters<Skill<OutlinePlannerInput, OutlinePlannerOutput>['invoke']>[0]): Promise<OutlinePlannerOutput> {
-    try {
-      const response = await llm.chat({
-        jsonMode: true,
-        temperature: 0.25,
-        messages: [
-          { role: 'system', content: '你是写作助手的大纲规划器。输出 JSON，包含 outline 和 summary。' },
-          {
-            role: 'user',
-            content: JSON.stringify({ taskCard: input.taskCard, memory: context.memory, knowledge: context.knowledge }),
-          },
-        ],
-      });
-      const parsed = safeJsonParse<OutlinePlannerOutput>(response.content);
-      if (parsed?.outline?.length) return normalizeOutline(parsed, input.taskCard);
-    } catch {
-      // Use deterministic fallback.
-    }
-    return buildHeuristicOutline(input.taskCard);
+    const response = await llm.chat({
+      jsonMode: true,
+      temperature: 0.25,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            '你是写作助手的大纲规划器。',
+            '只输出 JSON，不要输出 Markdown。',
+            '输出对象必须包含 outline 和 summary。',
+            'outline 必须是 4 到 8 个章节，每个章节必须有具体的 title、goal、expectedBlocks、sourceHints、themeTags。',
+            'title 和 goal 必须直接服务任务卡，不要输出空字段、泛泛占位、纯编号或模板话术。',
+          ].join('\n'),
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            taskCard: input.taskCard,
+            memory: context.memory,
+            knowledge: context.knowledge,
+            requiredOutputShape: {
+              outline: [{
+                title: 'string; 章节标题，必须非空，不能只是编号',
+                goal: 'string; 本节写作目标，必须非空',
+                expectedBlocks: 'number; 正数',
+                sourceHints: 'string[]; 没有来源提示时输出 []',
+                themeTags: 'string[]; 没有标签时输出 []',
+              }],
+              summary: 'string; 必须非空',
+            },
+          }),
+        },
+      ],
+    });
+    const parsed = safeJsonParse<OutlinePlannerOutput>(response.content);
+    if (!parsed) throw new Error(`Outline planner did not return valid JSON: ${response.content.slice(0, 300)}`);
+    return normalizeOutline(parsed);
   }
 }
 
-function normalizeOutline(output: OutlinePlannerOutput, taskCard: WritingTaskCard): OutlinePlannerOutput {
+function normalizeOutline(output: OutlinePlannerOutput): OutlinePlannerOutput {
+  if (!Array.isArray(output.outline) || output.outline.length < 4 || output.outline.length > 8) {
+    throw new Error(`Outline planner must return 4 to 8 sections; got ${Array.isArray(output.outline) ? output.outline.length : 'non-array'}.`);
+  }
   const now = nowIso();
   const outline = output.outline.map((item, index) => ({
     id: item.id ?? newId('sec'),
-    title: item.title,
-    goal: item.goal,
+    title: requireText(item.title, `outline[${index}].title`),
+    goal: requireText(item.goal, `outline[${index}].goal`),
     order: item.order ?? index + 1,
-    expectedBlocks: item.expectedBlocks ?? 2,
-    sourceHints: item.sourceHints ?? [],
-    themeTags: item.themeTags ?? taskCard.scope.themes ?? [],
+    expectedBlocks: requirePositiveNumber(item.expectedBlocks, `outline[${index}].expectedBlocks`),
+    sourceHints: requireStringArray(item.sourceHints, `outline[${index}].sourceHints`),
+    themeTags: requireStringArray(item.themeTags, `outline[${index}].themeTags`),
     status: 'draft' as const,
   }));
-  return { outline, summary: output.summary ?? `已生成 ${outline.length} 个章节。` };
+  return { outline, summary: requireText(output.summary, 'summary') };
 }
 
-export function buildHeuristicOutline(taskCard: WritingTaskCard): OutlinePlannerOutput {
-  const tags = (taskCard.scope.themes ?? []).length ? (taskCard.scope.themes ?? []) : ['主题分析'];
-  const base = [
-    ['问题提出', `界定“${taskCard.topic}”的讨论范围，说明文章主旨。`],
-    ['文本与关系梳理', '结合关键情节或材料，梳理主要对象之间的关系和矛盾。'],
-    ['核心论证', '围绕任务卡中的主题展开分析，形成文章的主要判断。'],
-    ['意义收束', '总结文章观点，并回扣写作目标与读者期待。'],
-  ];
+function requireText(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`Outline planner returned empty ${field}.`);
+  return value.trim();
+}
 
-  const outline = base.map(([title, goal], index) => ({
-    id: newId('sec'),
-    title: `${index + 1}. ${title}`,
-    goal,
-    order: index + 1,
-    expectedBlocks: index === 2 ? 3 : 2,
-    sourceHints: taskCard.constraints.citationRequired ? ['请补充原文、版本或资料依据'] : [],
-    themeTags: tags,
-    status: 'draft' as const,
-  }));
+function requirePositiveNumber(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) throw new Error(`Outline planner returned invalid ${field}.`);
+  return value;
+}
 
-  return {
-    outline,
-    summary: `已按“${taskCard.topic}”生成四段式大纲。`,
-  };
+function requireStringArray(value: unknown, field: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`Outline planner returned invalid ${field}.`);
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim());
 }
