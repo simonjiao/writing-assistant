@@ -31,6 +31,9 @@ export class OutlinePlannerSkill implements Skill<OutlinePlannerInput, OutlinePl
             '输出对象必须包含 outline 和 summary。',
             'outline 必须是 4 到 8 个章节，每个章节必须有具体的 title、goal、expectedBlocks、sourceHints、themeTags。',
             'title 和 goal 必须直接服务任务卡，不要输出空字段、泛泛占位、纯编号或模板话术。',
+            '大纲要组织论证，不要组织情节复述；章节 goal 应写成本节要证明的判断、分析角度或解释任务。',
+            '不要用“详述某情节”“梳理故事经过”“介绍背景故事”作为章节目标；背景和材料只能作为论据线索。',
+            '不要按原文出场顺序、时间顺序或故事发生顺序排章；优先按问题、论点、对照关系、概念层次来组织。',
           ].join('\n'),
         },
         {
@@ -42,9 +45,9 @@ export class OutlinePlannerSkill implements Skill<OutlinePlannerInput, OutlinePl
             requiredOutputShape: {
               outline: [{
                 title: 'string; 章节标题，必须非空，不能只是编号',
-                goal: 'string; 本节写作目标，必须非空',
+                goal: 'string; 本节要证明的判断、分析角度或解释任务，必须非空；不要写成情节复述任务',
                 expectedBlocks: 'number; 正数',
-                sourceHints: 'string[]; 没有来源提示时输出 []',
+                sourceHints: 'string[]; 只列证据线索，不要列待复述的故事梗概或原文顺序节点；没有来源提示时输出 []',
                 themeTags: 'string[]; 没有标签时输出 []',
               }],
               summary: 'string; 必须非空',

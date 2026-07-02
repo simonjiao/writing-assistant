@@ -28,6 +28,13 @@ const section: OutlineItem = {
   status: 'draft',
 };
 
+const articleOutline: OutlineItem[] = [
+  section,
+  { ...section, id: 'sec_2', title: '第二节', order: 2 },
+  { ...section, id: 'sec_3', title: '第三节', order: 3 },
+  { ...section, id: 'sec_4', title: '第四节', order: 4 },
+];
+
 const knowledge: KnowledgeItem[] = [{
   id: 'k1',
   title: '测试资料',
@@ -45,11 +52,46 @@ function llmReturning(content: unknown) {
   };
 }
 
+function capturingLlm(content: unknown, calls: Array<{ messages: Array<{ role: string; content: string }>; maxTokens?: number }>) {
+  return {
+    async chat(request: { messages: Array<{ role: string; content: string }>; maxTokens?: number }) {
+      calls.push({ messages: request.messages, maxTokens: request.maxTokens });
+      return { content: JSON.stringify(content) };
+    },
+    async json<T>() { return {} as T; },
+  };
+}
+
 function context() {
-  return { knowledge, compactSummary: '', article: { outline: [], blocks: [] } } as never;
+  return { knowledge, compactSummary: '', article: { outline: articleOutline, blocks: [] } } as never;
 }
 
 describe('SectionWriterSkill', () => {
+  it('tells the model to write original analysis rather than translate or retell', async () => {
+    const skill = new SectionWriterSkill();
+    const calls: Array<{ messages: Array<{ role: string; content: string }>; maxTokens?: number }> = [];
+    await skill.invoke({
+      input: { articleId: 'art_1', section, taskCard },
+      context: context(),
+      llm: capturingLlm({
+        block: {
+          text: '本段先提出分析判断，再说明材料如何支撑这一判断，避免把资料翻译或复述成正文。',
+          sourceRefs: ['test:k1'],
+          themeTags: ['测试主题'],
+        },
+        candidateSources: ['test:k1'],
+        summary: '已生成分析性正文。',
+      }, calls),
+    });
+    const system = calls[0].messages.find((message) => message.role === 'system')?.content ?? '';
+    const user = JSON.parse(calls[0].messages.find((message) => message.role === 'user')?.content ?? '{}') as { sourceUsePolicy?: { prohibitedModes?: string[] }; writingBudget?: { targetChars?: number; maxChars?: number } };
+    expect(system).toContain('不是翻译、改写、转述、复述');
+    expect(system).toContain('观点驱动');
+    expect(user.sourceUsePolicy?.prohibitedModes).toEqual(['translation', 'paraphrase', 'retelling', 'source-summary']);
+    expect(user.writingBudget).toMatchObject({ targetChars: 300, maxChars: 405 });
+    expect(calls[0].maxTokens).toBeUndefined();
+  });
+
   it('accepts analytical prose with several short quotations', async () => {
     const skill = new SectionWriterSkill();
     const output = await skill.invoke({
@@ -83,6 +125,23 @@ describe('SectionWriterSkill', () => {
         summary: '已生成正文。',
       }),
     })).rejects.toThrow('quote-heavy prose');
+  });
+
+  it('rejects sections that exceed the current section budget', async () => {
+    const skill = new SectionWriterSkill();
+    await expect(skill.invoke({
+      input: { articleId: 'art_1', section, taskCard },
+      context: context(),
+      llm: llmReturning({
+        block: {
+          text: '分析判断。'.repeat(120),
+          sourceRefs: ['test:k1'],
+          themeTags: ['测试主题'],
+        },
+        candidateSources: ['test:k1'],
+        summary: '已生成正文。',
+      }),
+    })).rejects.toThrow('exceeded current section length budget');
   });
 
   it('rejects long copied source passages', async () => {
