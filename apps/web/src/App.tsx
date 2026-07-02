@@ -34,7 +34,7 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar"><div><strong>Writing Assistant MVP</strong><span className="muted">Workflow · RAG · Queue · SSE/WebSocket</span></div><div className="status">{busy ? `执行中：${status}` : status}</div></header>
+      <header className="topbar"><div><strong>Writing Assistant</strong><span className="muted">Workflow · RAG · Queue · SSE/WebSocket</span></div><div className="status">{busy ? `执行中：${status}` : status}</div></header>
       {error && <div className="error">{error}</div>}
       <main className="workspace">
         <aside className="panel task-panel">

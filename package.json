@@ -1,8 +1,8 @@
 {
-  "name": "writing-assistant-mvp",
+  "name": "writing-assistant",
   "version": "0.1.0",
   "private": true,
-  "description": "Workflow-driven writing assistant MVP with TypeScript, Fastify, React, skills, externalized state/memory/artifacts.",
+  "description": "Workflow-driven writing assistant with TypeScript, Fastify, React, skills, externalized state/memory/artifacts.",
   "workspaces": [
     "apps/*",
     "packages/*"
