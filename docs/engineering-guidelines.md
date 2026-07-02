@@ -24,7 +24,7 @@ core      → 无业务框架依赖
 
 - 公共对象必须定义显式类型。
 - workflow state 中的动态字段要在节点边界做类型收窄。
-- API request body 当前为 MVP 轻校验；生产版应加 Zod/JSON Schema。
+- API request body 当前为轻量校验；生产版应加 Zod/JSON Schema。
 - Store 接口返回值应使用 domain type，不返回数据库行。
 
 ## Workflow 规则

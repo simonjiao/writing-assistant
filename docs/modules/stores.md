@@ -15,7 +15,7 @@
 
 ### sqlite
 
-SQLite 是本 MVP 唯一的持久化 Store。它使用 `DATA_DIR/writing-assistant.sqlite`，并通过统一的 `json_records` 表按 namespace 保存不同类型的 JSON 对象。
+SQLite 是当前版本唯一的持久化 Store。它使用 `DATA_DIR/writing-assistant.sqlite`，并通过统一的 `json_records` 表按 namespace 保存不同类型的 JSON 对象。
 
 ```bash
 DATA_DIR=.data
@@ -30,7 +30,7 @@ DATA_DIR=.data
 - 本地 KnowledgeStore
 - EventTraceStore
 
-注意：本实现使用 Node 22 内置 `node:sqlite`。运行时可能出现 ExperimentalWarning，不影响本地 MVP 使用。
+注意：本实现使用 Node 22 内置 `node:sqlite`。运行时可能出现 ExperimentalWarning，不影响本地使用。
 
 Redis 不作为持久化 Store 使用；它只用于可选的 `RedisWorkflowQueue`。
 

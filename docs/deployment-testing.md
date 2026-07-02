@@ -16,7 +16,7 @@ npm run dev
 npm run dev:web
 ```
 
-## 推荐本地 MVP 配置
+## 推荐本地配置
 
 ```bash
 WORKFLOW_EXECUTION_MODE=async

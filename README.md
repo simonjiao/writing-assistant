@@ -1,6 +1,6 @@
-# Writing Assistant MVP
+# Writing Assistant
 
-一版 workflow-driven 写作助手 MVP。它不是普通聊天机器人，而是以 **Task Card / Outline / Article Artifact / Patch / Version** 为中心的写作工作台。
+一版 workflow-driven 写作助手。它不是普通聊天机器人，而是以 **Task Card / Outline / Article Artifact / Patch / Version** 为中心的写作工作台。
 
 本版已经加入：
 
@@ -19,7 +19,7 @@
 ## 目录
 
 ```text
-writing-assistant-mvp/
+writing-assistant/
 ├─ apps/
 │  ├─ api/                 # Fastify API、stores、queue、RAG client
 │  └─ web/                 # React/Vite 写作工作台
@@ -42,7 +42,7 @@ writing-assistant-mvp/
 
 项目通过 `.nvmrc`、`.node-version`、`.npmrc`、`package.json#engines` 和 npm 脚本检查共同限定 Node 22。若当前 shell 不是 Node 22，`npm install`、`npm run build`、`npm run test`、`npm run dev` 会直接失败。
 
-> SQLite 使用 Node 22 的 `node:sqlite`，运行时可能出现 ExperimentalWarning，不影响测试与本地 MVP 使用。
+> SQLite 使用 Node 22 的 `node:sqlite`，运行时可能出现 ExperimentalWarning，不影响测试与本地使用。
 
 ## 本地启动
 
@@ -244,7 +244,7 @@ npm run test
 - SQLite store
 - HTTP RAG provider integration
 
-## MVP 用户流程
+## 用户流程
 
 ```text
 用户输入写作需求
