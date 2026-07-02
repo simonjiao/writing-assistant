@@ -51,7 +51,7 @@ curl http://localhost:8787/api/queue/status
 
 ## HTTP RAG 测试
 
-启动一个兼容服务，提供：
+启动一个通用兼容服务，提供：
 
 ```text
 POST /search
@@ -64,6 +64,16 @@ POST /refs
 RAG_PROVIDER=http
 RAG_BASE_URL=http://localhost:9000
 RAG_FALLBACK_LOCAL=true
+```
+
+接入 `tonglingyu-knownledge` 现有 retriever HTTP 服务时：
+
+```bash
+RAG_PROVIDER=tonglingyu
+RAG_BASE_URL=http://127.0.0.1:8765
+RAG_SEARCH_PATH=/retrieve
+RAG_TIMEOUT_MS=60000
+RAG_FALLBACK_LOCAL=false
 ```
 
 测试：

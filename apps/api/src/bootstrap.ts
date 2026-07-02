@@ -29,6 +29,7 @@ import { registerDefaultSkills } from '@wa/skills';
 import { AppConfig } from './config';
 import { SqliteArtifactStore, SqliteEventTraceStore, SqliteKnowledgeStore, SqliteMemoryStore, SqliteSessionStore, SqliteStateStore } from './stores/sqliteStores';
 import { HttpRagKnowledgeStore } from './stores/httpRagKnowledgeStore';
+import { TonglingyuRetrieverKnowledgeStore } from './stores/tonglingyuRetrieverKnowledgeStore';
 import { RedisWorkflowQueue } from './queue/redisWorkflowQueue';
 
 export interface AppContainer {
@@ -97,6 +98,10 @@ function createStores(config: AppConfig): StoreBundle {
 }
 
 function createKnowledgeStore(config: AppConfig, localStore: KnowledgeStore, eventTraceStore: EventTraceStore): KnowledgeStore {
+  if (config.ragProvider === 'tonglingyu') {
+    if (!config.ragBaseURL) throw new Error('RAG_PROVIDER=tonglingyu requires RAG_BASE_URL.');
+    return new TonglingyuRetrieverKnowledgeStore({ baseURL: config.ragBaseURL, apiKey: config.ragApiKey, retrievePath: config.ragSearchPath, timeoutMs: config.ragTimeoutMs, fallback: config.ragFallbackToLocal ? localStore : undefined, eventTraceStore });
+  }
   if (config.ragProvider === 'http') {
     if (!config.ragBaseURL) throw new Error('RAG_PROVIDER=http requires RAG_BASE_URL.');
     return new HttpRagKnowledgeStore({ baseURL: config.ragBaseURL, apiKey: config.ragApiKey, searchPath: config.ragSearchPath, refsPath: config.ragRefsPath, timeoutMs: config.ragTimeoutMs, fallback: config.ragFallbackToLocal ? localStore : undefined, eventTraceStore });

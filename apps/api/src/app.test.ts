@@ -39,6 +39,39 @@ async function startRagServer(): Promise<{ baseURL: string; close: () => Promise
   return { baseURL: `http://127.0.0.1:${address.port}`, close: () => new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve())) };
 }
 
+async function startTonglingyuRetrieverServer(): Promise<{ baseURL: string; lastRequest: () => Record<string, unknown> | undefined; close: () => Promise<void> }> {
+  let lastRequest: Record<string, unknown> | undefined;
+  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    if (req.method !== 'POST' || req.url !== '/retrieve') { res.writeHead(404); res.end(); return; }
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    lastRequest = JSON.parse(raw || '{}') as Record<string, unknown>;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      ok: true,
+      evidence_pack: {
+        docs: [{
+          doc_id: 'doc-bd-1',
+          route: 'vector',
+          content: '宝黛关系的精神相通证据。',
+          score: 0.91,
+          source: { citation_hint: '第三十二回' },
+          metadata: { chunk_kind: 'passage_segment', evidence_projection: 'answer_basis', evidence_types: ['base_text'] },
+          refs: { segment_ids: ['seg-32-1'] },
+          display: { title: '第三十二回：诉肺腑' },
+          source_scope: { chapter_no: 32 },
+          usage_policy: { cite_allowed: true },
+        }],
+        sufficiency: { sufficient: true },
+      },
+    }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Failed to start Tonglingyu retriever test server.');
+  return { baseURL: `http://127.0.0.1:${address.port}`, lastRequest: () => lastRequest, close: () => new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve())) };
+}
+
 describe('api app', () => {
   it('responds to health and creates task-card run inline', async () => {
     const config = testConfig();
@@ -88,5 +121,26 @@ describe('api app', () => {
     expect(body[0].content).toContain('宝黛关系');
     await app.close();
     await rag.close();
+  });
+
+  it('maps Tonglingyu retriever evidence packs into knowledge items', async () => {
+    const retriever = await startTonglingyuRetrieverServer();
+    const config = testConfig({ ragProvider: 'tonglingyu', ragBaseURL: retriever.baseURL, ragSearchPath: '/retrieve', ragFallbackToLocal: false });
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const response = await app.inject({ method: 'POST', url: '/api/knowledge/search', payload: { query: '宝黛关系', limit: 1, themeTags: ['宝黛'] } });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(retriever.lastRequest()?.top_k).toBe(1);
+    expect(retriever.lastRequest()?.structured_terms).toEqual(['宝黛']);
+    expect(body[0].id).toBe('doc-bd-1');
+    expect(body[0].sourceType).toBe('retriever');
+    expect(body[0].sourceRef).toBe('tonglingyu:doc-bd-1');
+    expect(body[0].title).toBe('第三十二回：诉肺腑');
+    expect(body[0].content).toContain('精神相通');
+    expect(body[0].themeTags).toContain('vector');
+    expect(body[0].metadata.refs.segment_ids).toEqual(['seg-32-1']);
+    await app.close();
+    await retriever.close();
   });
 });

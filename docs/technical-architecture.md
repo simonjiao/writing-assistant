@@ -39,7 +39,7 @@ flowchart TB
 | Context | DefaultContextBuilder | 动态组合 Session/State/Memory/Artifact/Knowledge |
 | Store | SQLite stores | 外部化保存 Session/State/Memory/Artifact/Knowledge/EventTrace |
 | Realtime | EventBus + SSE/WS | 推送 workflow、queue、RAG、artifact 事件 |
-| RAG | HttpRagKnowledgeStore | 通过 HTTP POST 访问真实 RAG 服务 |
+| RAG | HttpRagKnowledgeStore / TonglingyuRetrieverKnowledgeStore | 通过 HTTP POST 访问通用 RAG 或 tonglingyu-knownledge retriever |
 
 ## Engine 与 Runner
 
@@ -68,6 +68,8 @@ worker → queue.reserve → Runner.runUntilBlocked → EventBus/SSE/WS
 
 ## HTTP RAG 协议
 
+通用 RAG 搜索：
+
 搜索：
 
 ```text
@@ -90,9 +92,18 @@ type KnowledgeItem = {
   sourceType: string;
   sourceRef: string;
   themeTags: string[];
+  metadata?: Record<string, unknown>;
   createdAt: string;
 };
 ```
+
+Tonglingyu retriever：
+
+```text
+POST {RAG_BASE_URL}/retrieve
+```
+
+请求使用 `query` 和 `top_k`；响应读取 `evidence_pack.docs[]` 并映射为 `KnowledgeItem[]`。
 
 ## 实时事件
 

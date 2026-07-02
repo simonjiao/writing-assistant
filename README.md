@@ -140,6 +140,18 @@ RAG_TIMEOUT_MS=10000
 RAG_FALLBACK_LOCAL=true
 ```
 
+`RAG_PROVIDER=http` 面向通用 `/search` 风格服务。若接入 `tonglingyu-knownledge` 现有 retriever HTTP 接口，使用：
+
+```bash
+RAG_PROVIDER=tonglingyu
+RAG_BASE_URL=http://127.0.0.1:8765
+RAG_SEARCH_PATH=/retrieve
+RAG_TIMEOUT_MS=60000
+RAG_FALLBACK_LOCAL=false
+```
+
+该模式会向 `/retrieve` 发送 `{ "query": "...", "top_k": 6 }`，并把返回的 `evidence_pack.docs[]` 映射为写作工作台内部的 `KnowledgeItem[]`。
+
 搜索接口请求：
 
 ```http

@@ -8,7 +8,7 @@
 | StateStore | Workflow run、state、checkpoint、waitingFor |
 | MemoryStore | 用户长期写作偏好 |
 | ArtifactStore | 任务卡、大纲、正文 block、引用、版本 |
-| KnowledgeStore | 本地知识或 HTTP RAG 检索结果 |
+| KnowledgeStore | 本地知识、通用 HTTP RAG 或 Tonglingyu retriever 检索结果 |
 | EventTraceStore | workflow、queue、RAG、artifact 事件日志 |
 
 ## Store Driver
@@ -48,3 +48,23 @@ RAG_REFS_PATH=/refs
 ```bash
 RAG_FALLBACK_LOCAL=true
 ```
+
+`RAG_PROVIDER=http` 适配通用 `/search` 响应，要求返回数组或 `{ items/results/data }`。
+
+## Tonglingyu Retriever KnowledgeStore
+
+```bash
+RAG_PROVIDER=tonglingyu
+RAG_BASE_URL=http://127.0.0.1:8765
+RAG_SEARCH_PATH=/retrieve
+RAG_TIMEOUT_MS=60000
+RAG_FALLBACK_LOCAL=false
+```
+
+该 driver 适配 `tonglingyu-knownledge` 当前 HTTP contract：
+
+```text
+POST /retrieve
+```
+
+请求会把内部 `limit` 映射为 retriever 的 `top_k`，把 `themeTags` 映射为 `structured_terms`。响应会从 `evidence_pack.docs[]` 读取证据，并映射为 `KnowledgeItem[]`；`EvidenceDoc` 的 route、score、refs、display、source、source_scope、usage_policy 会保留在 `KnowledgeItem.metadata` 中。

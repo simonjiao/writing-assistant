@@ -4,6 +4,8 @@ import { AgentEvent, ArticleArtifact, ArticleBlock, RunResponse } from './types'
 
 const userId = 'demo-user';
 const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']);
+const activeStatuses = new Set(['queued', 'running']);
+const runRefreshIntervalMs = 1000;
 
 export function App() {
   const [sessionId, setSessionId] = useState<string>();
@@ -16,12 +18,16 @@ export function App() {
   const [error, setError] = useState<string>();
   const [liveEvents, setLiveEvents] = useState<AgentEvent[]>([]);
   const refreshTimer = useRef<number | undefined>(undefined);
+  const activeRunId = useRef<string | undefined>(undefined);
 
   useEffect(() => { api.createSession(userId).then((session) => setSessionId(session.id)).catch((err) => setError(String(err))); }, []);
   useEffect(() => {
     if (!lastRun?.run.id) return;
+    const runId = lastRun.run.id;
+    activeRunId.current = runId;
     setLiveEvents(lastRun.events ?? []);
-    const close = api.streamRunEvents(lastRun.run.id, (event) => { setLiveEvents((items) => [...items.filter((item) => item.id !== event.id), event].slice(-80)); if (['workflow.waiting','workflow.completed','workflow.failed','review.required','artifact.updated','queue.dequeued','queue.completed'].includes(event.type)) scheduleRunRefresh(lastRun.run.id); }, () => scheduleRunRefresh(lastRun.run.id));
+    const close = api.streamRunEvents(runId, (event) => { setLiveEvents((items) => [...items.filter((item) => item.id !== event.id), event].slice(-80)); if (['workflow.waiting','workflow.completed','workflow.failed','review.required','artifact.updated','queue.dequeued','queue.completed'].includes(event.type)) scheduleRunRefresh(runId); }, () => scheduleRunRefresh(runId, runRefreshIntervalMs));
+    if (activeStatuses.has(lastRun.run.status)) scheduleRunRefresh(runId);
     return close;
   }, [lastRun?.run.id]);
 
@@ -29,8 +35,14 @@ export function App() {
   const patchPreview = (lastRun?.run.state.patchResult as { patch?: { before: string; after: string; changeSummary: string[] } } | undefined)?.patch;
   const status = lastRun ? `${lastRun.run.workflowId} / ${lastRun.run.status}` : '就绪';
 
-  function scheduleRunRefresh(runId: string) { window.clearTimeout(refreshTimer.current); refreshTimer.current = window.setTimeout(() => { void api.getRun(runId).then((response) => { setLastRun(response); if (response.article) setArticle(response.article); if (terminalStatuses.has(response.run.status)) setBusy(false); }).catch((err) => setError(err instanceof Error ? err.message : String(err))); }, 200); }
-  async function execute(action: () => Promise<RunResponse>) { setBusy(true); setError(undefined); try { const response = await action(); setLastRun(response); if (response.article) setArticle(response.article); if (terminalStatuses.has(response.run.status)) setBusy(false); else scheduleRunRefresh(response.run.id); return response; } catch (err) { setError(err instanceof Error ? err.message : String(err)); setBusy(false); } }
+  function applyRunResponse(response: RunResponse) {
+    setLastRun(response);
+    if (response.article) setArticle(response.article);
+    if (terminalStatuses.has(response.run.status)) { setBusy(false); if (activeRunId.current === response.run.id) activeRunId.current = undefined; }
+    else if (activeStatuses.has(response.run.status)) { activeRunId.current = response.run.id; scheduleRunRefresh(response.run.id, runRefreshIntervalMs); }
+  }
+  function scheduleRunRefresh(runId: string, delayMs = 200) { window.clearTimeout(refreshTimer.current); refreshTimer.current = window.setTimeout(() => { void api.getRun(runId).then((response) => { if (activeRunId.current && activeRunId.current !== runId) return; applyRunResponse(response); }).catch((err) => { setError(err instanceof Error ? err.message : String(err)); if (activeRunId.current === runId) scheduleRunRefresh(runId, 1000); }); }, delayMs); }
+  async function execute(action: () => Promise<RunResponse>) { setBusy(true); setError(undefined); window.clearTimeout(refreshTimer.current); try { const response = await action(); activeRunId.current = response.run.id; applyRunResponse(response); return response; } catch (err) { setError(err instanceof Error ? err.message : String(err)); setBusy(false); activeRunId.current = undefined; } }
 
   return (
     <div className="app-shell">

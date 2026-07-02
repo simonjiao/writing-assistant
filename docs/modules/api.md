@@ -52,7 +52,7 @@ WS /api/events/ws?runId=&userId=
 
 1. 创建 SQLite stores。
 2. 包装 EventTraceStore，使事件同时持久化和发布到 EventBus。
-3. 选择 local/http knowledge store。
+3. 选择 local/http/tonglingyu knowledge store。
 4. 选择 mock/openai-compatible LLM。
 5. 创建 WorkflowEngine。
 6. 在 async 模式下创建 queue 和 worker pool。

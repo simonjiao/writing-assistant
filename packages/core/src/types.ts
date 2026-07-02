@@ -136,9 +136,10 @@ export interface KnowledgeItem {
   id: string;
   title: string;
   content: string;
-  sourceType: 'note' | 'book' | 'web' | 'file' | 'manual';
+  sourceType: 'note' | 'book' | 'web' | 'file' | 'manual' | 'retriever';
   sourceRef: string;
   themeTags: string[];
+  metadata?: Record<string, unknown>;
   createdAt: string;
 }
 

@@ -1,7 +1,20 @@
 import { config as loadDotenv } from 'dotenv';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { WorkflowExecutionMode } from '@wa/core';
 
-loadDotenv();
+function loadAppEnv() {
+  const envPaths = [resolve(process.cwd(), '.env'), resolve(__dirname, '../../..', '.env')];
+  const seen = new Set<string>();
+  for (const path of envPaths) {
+    if (!seen.has(path) && existsSync(path)) {
+      loadDotenv({ path });
+      seen.add(path);
+    }
+  }
+}
+
+loadAppEnv();
 
 export interface AppConfig {
   host: string;
@@ -17,7 +30,7 @@ export interface AppConfig {
   enableWorkers: boolean;
   runnerConcurrency: number;
   redisUrl: string;
-  ragProvider: 'local' | 'http';
+  ragProvider: 'local' | 'http' | 'tonglingyu';
   ragBaseURL: string;
   ragApiKey: string;
   ragSearchPath: string;
@@ -26,7 +39,15 @@ export interface AppConfig {
   ragFallbackToLocal: boolean;
 }
 
+function getRagProvider(): AppConfig['ragProvider'] {
+  const provider = (process.env.RAG_PROVIDER ?? '').toLowerCase();
+  if (provider === 'tonglingyu' || provider === 'knownledge' || provider === 'tonglingyu-knownledge') return 'tonglingyu';
+  if (provider === 'http' || process.env.RAG_BASE_URL) return 'http';
+  return 'local';
+}
+
 export function getConfig(): AppConfig {
+  const ragProvider = getRagProvider();
   return {
     host: process.env.HOST ?? '0.0.0.0',
     port: Number(process.env.PORT ?? 8787),
@@ -41,10 +62,10 @@ export function getConfig(): AppConfig {
     enableWorkers: process.env.ENABLE_WORKERS !== 'false',
     runnerConcurrency: Math.max(1, Number(process.env.RUNNER_CONCURRENCY ?? process.env.RUNNER_COUNT ?? 2)),
     redisUrl: process.env.REDIS_URL ?? 'redis://localhost:6379',
-    ragProvider: process.env.RAG_PROVIDER === 'http' || process.env.RAG_BASE_URL ? 'http' : 'local',
+    ragProvider,
     ragBaseURL: process.env.RAG_BASE_URL ?? '',
     ragApiKey: process.env.RAG_API_KEY ?? '',
-    ragSearchPath: process.env.RAG_SEARCH_PATH ?? '/search',
+    ragSearchPath: process.env.RAG_SEARCH_PATH ?? (ragProvider === 'tonglingyu' ? '/retrieve' : '/search'),
     ragRefsPath: process.env.RAG_REFS_PATH ?? process.env.RAG_BY_REFS_PATH ?? '/refs',
     ragTimeoutMs: Number(process.env.RAG_TIMEOUT_MS ?? 10000),
     ragFallbackToLocal: process.env.RAG_FALLBACK_LOCAL !== 'false' && process.env.RAG_FALLBACK_TO_LOCAL !== 'false',
