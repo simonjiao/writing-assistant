@@ -35,16 +35,19 @@ writing-assistant-mvp/
 
 ## 环境要求
 
-- Node.js `>=22.12.0`
+- Node.js `22.x`（`>=22.12.0 <23`）
 - npm `>=10`
 - 可选：Docker / Docker Compose
 - 可选：Redis，仅在 `WORKFLOW_QUEUE_DRIVER=redis` 时需要
+
+项目通过 `.nvmrc`、`.node-version`、`.npmrc`、`package.json#engines` 和 npm 脚本检查共同限定 Node 22。若当前 shell 不是 Node 22，`npm install`、`npm run build`、`npm run test`、`npm run dev` 会直接失败。
 
 > SQLite 使用 Node 22 的 `node:sqlite`，运行时可能出现 ExperimentalWarning，不影响测试与本地 MVP 使用。
 
 ## 本地启动
 
 ```bash
+nvm use
 cp .env.example .env
 npm install
 npm run build
