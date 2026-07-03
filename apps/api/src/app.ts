@@ -6,7 +6,7 @@ import type { TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
 import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfileSummaries, recommendDomainProfiles, resolveDomainProfileSelection } from './domainProfiles';
-import { getWritingStandardSummary, resolveWritingStandardSelection, WritingStandardSelectionRequest } from './writingStandards';
+import { getWritingStandardDisplaySummary, getWritingStandardSummary, resolveWritingStandardSelection, WritingStandardSelectionRequest } from './writingStandards';
 
 export function createApp(config: AppConfig, container: AppContainer) {
   const app = Fastify({ logger: true });
@@ -75,9 +75,9 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const workspace = await requireWorkspaceAccess(container, userId, workspaceId);
     if (!workspace) return reply.code(403).send({ error: 'Workspace access required.' });
     const articles = await container.stores.artifactStore.listArticles(workspace.id, { includeDeleted: query.includeDeleted === 'true' });
-    return query.view === 'summary' ? articles.map(articleSummary) : articles;
+    return query.view === 'summary' ? articles.map(articleSummary) : articles.map(withWritingStandardSummary);
   });
-  app.get('/api/articles/:articleId', async (request, reply) => { const { articleId } = request.params as { articleId: string }; const query = request.query as { userId?: string }; const userId = readUserId(query.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); return access.article; });
+  app.get('/api/articles/:articleId', async (request, reply) => { const { articleId } = request.params as { articleId: string }; const query = request.query as { userId?: string }; const userId = readUserId(query.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); return withWritingStandardSummary(access.article); });
   app.delete('/api/articles/:articleId', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
     const body = (request.body ?? {}) as { userId?: string };
@@ -113,7 +113,8 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const reason = `修订任务卡：${result.summary.slice(0, 80)}`;
     await container.stores.artifactStore.commitVersion(article.id, reason, 'user');
     await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'task-card-revised', changedFields: result.changedFields, userId }, createdAt: nowIso() });
-    return { article: await container.stores.artifactStore.getArticle(updated.id), summary: result.summary, changedFields: result.changedFields };
+    const updatedArticle = await container.stores.artifactStore.getArticle(updated.id);
+    return { article: updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle, summary: result.summary, changedFields: result.changedFields };
   });
   app.patch('/api/articles/:articleId/outline/:sectionId', async (request, reply) => {
     const { articleId, sectionId } = request.params as { articleId: string; sectionId: string };
@@ -132,7 +133,8 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const updated = await container.stores.artifactStore.updateArticle(article);
     await container.stores.artifactStore.commitVersion(article.id, `编辑大纲章节：${title}`, 'user');
     await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, sectionId, reason: 'outline-section-edited', userId }, createdAt: nowIso() });
-    return container.stores.artifactStore.getArticle(updated.id);
+    const updatedArticle = await container.stores.artifactStore.getArticle(updated.id);
+    return updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle;
   });
   app.post('/api/knowledge/search', async (request) => { const body = request.body as { query: string; limit?: number; themeTags?: string[] }; return container.stores.knowledgeStore.search(body.query, { limit: body.limit, themeTags: body.themeTags }); });
 
@@ -217,6 +219,20 @@ function articleSummary(article: ArticleArtifact) {
   };
 }
 
+function withWritingStandardSummary(article: ArticleArtifact): ArticleArtifact {
+  const topRules = article.taskCard?.topRules;
+  if (!article.taskCard || !topRules || topRules.summary?.trim()) return article;
+  const summary = getWritingStandardDisplaySummary(topRules.languageEra);
+  if (!summary) return article;
+  return {
+    ...article,
+    taskCard: {
+      ...article.taskCard,
+      topRules: { ...topRules, summary },
+    },
+  };
+}
+
 async function openSseStream(container: AppContainer, reply: FastifyReply, filter: EventSubscriptionFilter) {
   reply.hijack();
   reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
@@ -234,5 +250,5 @@ async function enrichRun(container: AppContainer, runId: string) {
   const articleId = (run.state.draftArticle as { articleId?: string } | undefined)?.articleId ?? (run.state.finalizedTaskCard as { articleId?: string } | undefined)?.articleId ?? (run.state.outlineDraft as { articleId?: string } | undefined)?.articleId ?? (run.state.finalizedOutline as { articleId?: string } | undefined)?.articleId ?? (run.state.committedSection as { articleId?: string } | undefined)?.articleId ?? (run.state.appliedPatch as { articleId?: string } | undefined)?.articleId ?? (typeof run.metadata.articleId === 'string' ? run.metadata.articleId : undefined);
   const article = articleId ? await container.stores.artifactStore.getArticle(articleId) : undefined;
   const events = await container.stores.eventTraceStore.listByRun(run.id);
-  return { run, article, events };
+  return { run, article: article ? withWritingStandardSummary(article) : article, events };
 }

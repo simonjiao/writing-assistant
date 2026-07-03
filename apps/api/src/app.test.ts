@@ -272,6 +272,7 @@ describe('api app', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.article.taskCard.topRules.languageEra).toBe('自然传统');
+    expect(body.article.taskCard.topRules.summary).toBe('自然、有传统中文文章气息，避免突兀的现代抽象词和学术评论腔。');
     expect(body.article.taskCard.topRules.writingStandards.join('\n')).toContain('语言时代感选择“自然传统”');
     expect(body.article.taskCard.topRules.replacementHints[0]).toMatchObject({ avoid: '价值观' });
     expect(body.article.taskCard.constraints.mustAvoid.join('\n')).toContain('价值观');

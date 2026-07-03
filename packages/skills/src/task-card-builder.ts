@@ -23,6 +23,7 @@ export interface TaskCardWritingStandardContext {
   id: string;
   label: string;
   languageEra: { id: string; label: string };
+  summary: string;
   topRules: string[];
   mustInclude: string[];
   mustAvoid: string[];
@@ -76,6 +77,7 @@ export class TaskCardBuilderSkill implements Skill<TaskCardBuilderInput, TaskCar
           audience: 'string; 目标读者，必须非空',
           topRules: {
             languageEra: 'string; 语言时代感标签，没有则输出空字符串',
+            summary: 'string; 写作标准给用户看的简短摘要，没有则输出空字符串',
             writingStandards: 'string[]; 顶部写作规则，没有则输出 []',
             replacementHints: 'Array<{ avoid: string; prefer: string }>; 替代表，没有则输出 []',
           },
@@ -140,6 +142,7 @@ function normalizeOutput(output: Partial<TaskCardBuilderOutput>, rawRequirement:
     audience: requireText(source.audience, 'taskCard.audience'),
     topRules: {
       languageEra: nonEmptyString(source.topRules?.languageEra, writingStandard?.languageEra.label),
+      summary: nonEmptyString(source.topRules?.summary, writingStandard?.summary),
       writingStandards: mergeStrings(mergeStrings(selectedTopRules(writingStandard), explicit.topRules), source.topRules?.writingStandards),
       replacementHints: mergeReplacementHints(selectedReplacementHints(writingStandard), source.topRules?.replacementHints),
     },

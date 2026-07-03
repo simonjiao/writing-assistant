@@ -81,6 +81,7 @@ function normalizeOutput(output: Partial<TaskCardReviserOutput>, current: Writin
     audience: requireText(source.audience, 'taskCard.audience'),
     topRules: {
       languageEra: typeof source.topRules?.languageEra === 'string' && source.topRules.languageEra.trim() ? source.topRules.languageEra.trim() : current.topRules?.languageEra,
+      summary: typeof source.topRules?.summary === 'string' && source.topRules.summary.trim() ? source.topRules.summary.trim() : current.topRules?.summary,
       writingStandards: mergeStrings(mergeStrings(current.topRules?.writingStandards, source.topRules?.writingStandards), extractConfiguredAvoidanceRules(instruction)),
       replacementHints: mergeReplacementHints(current.topRules?.replacementHints, source.topRules?.replacementHints),
     },

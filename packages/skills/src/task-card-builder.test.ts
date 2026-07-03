@@ -119,6 +119,7 @@ describe('TaskCardBuilderSkill', () => {
           id: 'language-era',
           label: '语言时代感',
           languageEra: { id: 'natural-traditional', label: '自然传统' },
+          summary: '自然、有传统中文文章气息，避免突兀的现代抽象词和学术评论腔。',
           topRules: ['语言时代感选择“自然传统”：避免现代评论腔和现代抽象词汇。'],
           mustInclude: [],
           mustAvoid: ['现代评论腔和现代抽象词汇（如价值观、责任观、维度）'],
@@ -145,6 +146,7 @@ describe('TaskCardBuilderSkill', () => {
       }),
     });
     expect(output.taskCard.topRules?.languageEra).toBe('自然传统');
+    expect(output.taskCard.topRules?.summary).toBe('自然、有传统中文文章气息，避免突兀的现代抽象词和学术评论腔。');
     expect(output.taskCard.topRules?.writingStandards).toContain('语言时代感选择“自然传统”：避免现代评论腔和现代抽象词汇。');
     expect(output.taskCard.topRules?.replacementHints).toContainEqual({ avoid: '维度', prefer: '一层、一面、一个关节' });
     expect(output.taskCard.constraints.mustAvoid).toContain('现代评论腔和现代抽象词汇（如价值观、责任观、维度）');

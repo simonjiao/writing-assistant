@@ -27,6 +27,7 @@ export interface ResolvedWritingStandardContext {
   id: string;
   label: string;
   languageEra: { id: string; label: string };
+  summary: string;
   topRules: string[];
   mustInclude: string[];
   mustAvoid: string[];
@@ -75,6 +76,7 @@ export function resolveWritingStandardSelection(request?: WritingStandardSelecti
     id: standard.id,
     label: standard.label,
     languageEra: { id: option.id, label: option.label },
+    summary: option.description,
     topRules: uniqueStrings([
       ...(option.apply.topRules ?? []),
       ...(extraForbiddenTerms.length ? [`额外禁用词：${extraForbiddenTerms.join('、')}`] : []),
@@ -84,6 +86,13 @@ export function resolveWritingStandardSelection(request?: WritingStandardSelecti
     replacementHints: uniqueReplacementHints(option.apply.replacementHints),
     sourcePolicies: uniqueStrings(option.apply.sourcePolicies),
   };
+}
+
+export function getWritingStandardDisplaySummary(languageEra?: string): string | undefined {
+  const value = languageEra?.trim();
+  if (!value) return undefined;
+  const option = writingStandards.languageEra.options.find((item) => item.id === value || item.label === value);
+  return option?.description;
 }
 
 function uniqueStrings(values: string[] = []): string[] {
