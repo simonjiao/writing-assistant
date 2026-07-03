@@ -100,6 +100,37 @@ describe('TaskCardReviserSkill', () => {
     expect(output.taskCard.constraints.mustAvoid).toContain('现代评论腔和现代抽象词汇（如价值观、责任观、世界观、维度、机制、结构性、主体性、规训、不可调和的产物）');
   });
 
+  it('updates remaining follow-up prompts after a user answer', async () => {
+    const skill = new TaskCardReviserSkill();
+    const draftCard: WritingTaskCard = {
+      ...currentTaskCard,
+      status: 'draft',
+      interactionMode: {
+        askBeforeWriting: true,
+        localEditFirst: true,
+        followUpQuestions: ['希望文章更偏赏析还是论证？'],
+        followUpPrompts: [{ id: 'prompt-1', question: '希望文章更偏赏析还是论证？', options: ['赏析', '论证'], allowCustom: true }],
+      },
+    };
+    const output = await skill.invoke({
+      input: { articleId: 'art_1', instruction: '希望更偏论证。', currentTaskCard: draftCard },
+      context: { memory: {} } as never,
+      llm: llmReturning({
+        taskCard: {
+          ...draftCard,
+          writingGoal: '围绕主题形成论证型文章。',
+          structure: { ...draftCard.structure, outlinePreference: '按论点分层展开。' },
+        },
+        summary: '已明确为论证型文章。',
+        missingQuestions: ['篇幅希望多长？'],
+        followUpPrompts: [{ question: '篇幅希望多长？', options: ['800字', '1500字', '3000字'], allowCustom: true }],
+        changedFields: ['writingGoal', 'structure.outlinePreference'],
+      }),
+    });
+    expect(output.taskCard.interactionMode.followUpQuestions).toEqual(['篇幅希望多长？']);
+    expect(output.taskCard.interactionMode.followUpPrompts?.[0].options).toEqual(['800字', '1500字', '3000字']);
+  });
+
   it('rejects incomplete revised task cards', async () => {
     const skill = new TaskCardReviserSkill();
     await expect(skill.invoke({

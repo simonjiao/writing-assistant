@@ -1,4 +1,4 @@
-import { newId, nowIso, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
+import { newId, nowIso, safeJsonParse, Skill, TaskCardFollowUpPrompt, WritingTaskCard } from '@wa/core';
 import { extractConfiguredAvoidanceRules, extractExplicitAvoidances } from './writing-constraints';
 
 export interface TaskCardBuilderInput {
@@ -34,6 +34,7 @@ export interface TaskCardWritingStandardContext {
 export interface TaskCardBuilderOutput {
   taskCard: WritingTaskCard;
   missingQuestions: string[];
+  followUpPrompts?: TaskCardFollowUpPrompt[];
   summary: string;
   confidence: number;
 }
@@ -58,6 +59,8 @@ export class TaskCardBuilderSkill implements Skill<TaskCardBuilderInput, TaskCar
       '任务卡要适合后续大纲、章节写作、局部修改和引用检查。',
       '所有面向用户展示的字段必须是自然语言；可以包含自然英文术语，但不要把内部英文枚举、空字符串或技术状态词当展示文案。',
       '不要省略任何必填键，不要输出空字符串；无法确定的信息放入 missingQuestions，但能从 rawRequirement 直接确定的字段必须填写。',
+      '第一轮创建任务卡时，即使能生成草稿，也要把用户未明确选择的重要项做成 followUpPrompts，最多 3 项；常见项包括篇幅、结构、重点、资料边界、语气。每项包含 question、2 到 4 个可选 options，并允许用户自定义输入。',
+      'missingQuestions 用于确实缺少的关键信息；followUpPrompts 用于引导用户选择或补充，两者可以相同，也可以只有 followUpPrompts。',
       'taskCard.writingGoal 必须概括用户要完成的写作目标，不能留空。',
       'style.register 和 style.tone 必须是具体的中文写作风格描述，不能留空。',
       'structure.articleType 只能使用 essay、analysis、commentary、speech、longform 这些内部枚举；structure.expectedLength 和 outlinePreference 必须使用中文。',
@@ -110,6 +113,7 @@ export class TaskCardBuilderSkill implements Skill<TaskCardBuilderInput, TaskCar
           },
         },
         missingQuestions: 'string[]; 没有问题时输出 []',
+        followUpPrompts: 'Array<{ question: string; options: string[]; allowCustom: boolean }>; 和 missingQuestions 对应，没有问题时输出 []',
         summary: 'string; 必须非空',
         confidence: 'number; 0 到 1',
       },
@@ -134,6 +138,8 @@ function normalizeOutput(output: Partial<TaskCardBuilderOutput>, rawRequirement:
   const now = nowIso();
   const source = output.taskCard;
   if (!source) throw new Error('Task card builder returned no taskCard.');
+  const missingQuestions = requireStringArray(output.missingQuestions, 'missingQuestions');
+  const followUpPrompts = normalizeFollowUpPrompts(output.followUpPrompts, missingQuestions);
   const taskCard: WritingTaskCard = {
     ...source,
     id: source.id ?? newId('task'),
@@ -175,13 +181,38 @@ function normalizeOutput(output: Partial<TaskCardBuilderOutput>, rawRequirement:
     interactionMode: {
       askBeforeWriting: true,
       localEditFirst: true,
+      followUpQuestions: missingQuestions,
+      followUpPrompts,
     },
   };
   return {
     taskCard,
-    missingQuestions: requireStringArray(output.missingQuestions, 'missingQuestions'),
+    missingQuestions,
+    followUpPrompts,
     summary: requireText(output.summary, 'summary'),
     confidence: requireConfidence(output.confidence),
+  };
+}
+
+function normalizeFollowUpPrompts(value: unknown, fallbackQuestions: string[]): TaskCardFollowUpPrompt[] {
+  const prompts = Array.isArray(value) ? value : [];
+  const normalized = prompts
+    .map((item, index) => normalizeFollowUpPrompt(item, index))
+    .filter((item): item is TaskCardFollowUpPrompt => Boolean(item));
+  if (normalized.length) return normalized.slice(0, 3);
+  return fallbackQuestions.slice(0, 3).map((question, index) => ({ id: `prompt-${index + 1}`, question, options: [], allowCustom: true }));
+}
+
+function normalizeFollowUpPrompt(value: unknown, index: number): TaskCardFollowUpPrompt | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as { id?: unknown; question?: unknown; options?: unknown; allowCustom?: unknown };
+  if (typeof raw.question !== 'string' || !raw.question.trim()) return undefined;
+  const options = Array.isArray(raw.options) ? raw.options.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim()).slice(0, 4) : [];
+  return {
+    id: typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `prompt-${index + 1}`,
+    question: raw.question.trim(),
+    options: [...new Set(options)],
+    allowCustom: typeof raw.allowCustom === 'boolean' ? raw.allowCustom : true,
   };
 }
 

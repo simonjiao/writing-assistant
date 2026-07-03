@@ -327,6 +327,58 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   font-size: 18px;
   line-height: 1;
 }
+.task-guidance {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #d8dde6;
+  border-radius: 10px;
+  background: #fffdf8;
+}
+.task-guidance-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.task-guidance-head strong {
+  font-size: 14px;
+}
+.task-guidance-head span {
+  color: #6f665b;
+  font-size: 12px;
+}
+.task-guidance-item {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #e7e0d5;
+}
+.task-guidance-item:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+.task-guidance-question {
+  color: #2f2a22;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.task-guidance-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.task-guidance-option {
+  padding: 6px 10px;
+  border: 1px solid #d9d1c4;
+  border-radius: 999px;
+  background: #f7f1e8;
+  color: #18202a;
+  font-size: 13px;
+}
+.task-guidance-option:hover {
+  background: #ede7dc;
+}
 .writing-standard-controls {
   display: grid;
   gap: 10px;

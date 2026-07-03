@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
-import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RunResponse, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RunResponse, TaskCardFollowUpPrompt, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
 
 const userId = 'demo-user';
 const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']);
@@ -122,6 +122,7 @@ export function App() {
   const canGenerateOutline = visibleArticle?.taskCard?.status === 'confirmed';
   const canDeleteWorkspace = Boolean(selectedWorkspace && !selectedWorkspace.isDefault && selectedWorkspace.userId === userId);
   const canSubmitTaskCardMessage = Boolean(activeTaskCardMessage.trim() && (taskCardDialogTarget === 'current' || selectedWorkspaceId));
+  const taskCardFollowUpPrompts = useMemo(() => visibleArticle?.taskCard?.status === 'draft' ? taskCardPrompts(visibleArticle.taskCard) : [], [visibleArticle?.taskCard]);
 
   function applyRunResponse(response: RunResponse) {
     setLastRun(response);
@@ -330,6 +331,9 @@ export function App() {
     }
     await reviseTaskCard(message);
   }
+  function chooseTaskCardPromptOption(prompt: TaskCardFollowUpPrompt, option: string) {
+    setCurrentTaskMessage((current) => appendPromptAnswer(current, prompt.question, option));
+  }
   async function reviseTaskCard(instruction: string) {
     if (!article?.taskCard || !instruction.trim()) return;
     setBusy(true);
@@ -414,8 +418,9 @@ export function App() {
               </div>
               <span>{taskCardDialogTarget === 'new' ? '尚未创建' : article.taskCard.topic}</span>
             </div> : null}
+            {taskCardDialogTarget === 'current' && taskCardFollowUpPrompts.length ? <TaskCardGuidance prompts={taskCardFollowUpPrompts} onChooseOption={chooseTaskCardPromptOption} /> : null}
             <div className="task-dialog-input-row">
-              <textarea value={activeTaskCardMessage} onChange={(event) => setActiveTaskCardMessage(event.target.value)} placeholder={taskCardDialogTarget === 'new' ? '输入写作需求，创建新的任务卡。' : '输入对当前任务卡的修改意见。'} />
+              <textarea value={activeTaskCardMessage} onChange={(event) => setActiveTaskCardMessage(event.target.value)} placeholder={taskCardPlaceholder(taskCardDialogTarget, taskCardFollowUpPrompts)} />
               <button className="send-button" aria-label="发送" title="发送" disabled={busy || !canSubmitTaskCardMessage} onClick={() => void submitTaskCardMessage()}>↑</button>
             </div>
             {taskCardDialogTarget === 'current' && taskCardRevisionSummary ? <div className="revision-summary">{taskCardRevisionSummary}</div> : null}
@@ -440,6 +445,18 @@ function SectionBlocksView(props: { blocks: ArticleBlock[]; selectedBlockId?: st
         const collapsed = props.collapsedBlockIds.includes(block.id);
         return <article className={['section-paragraph', props.selectedBlockId === block.id ? 'selected' : '', collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} key={block.id} onClick={() => props.onSelectBlock(block.id)}><div className="paragraph-head"><button type="button" className="collapse-button" aria-label={collapsed ? `展开第 ${index + 1} 段` : `折叠第 ${index + 1} 段`} title={collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleBlockCollapse(block.id); }}>{collapsed ? '>' : 'v'}</button><span>第 {index + 1} 段</span><span>{block.text.length} 字</span></div>{collapsed ? null : <pre>{block.text}</pre>}</article>;
       })}
+    </div>
+  );
+}
+
+function TaskCardGuidance(props: { prompts: TaskCardFollowUpPrompt[]; onChooseOption: (prompt: TaskCardFollowUpPrompt, option: string) => void }) {
+  return (
+    <div className="task-guidance">
+      <div className="task-guidance-head"><strong>待确认项</strong><span>{props.prompts.length} 项</span></div>
+      {props.prompts.map((prompt) => <div className="task-guidance-item" key={prompt.id}>
+        <div className="task-guidance-question">{prompt.question}</div>
+        {prompt.options.length ? <div className="task-guidance-options">{prompt.options.map((option) => <button type="button" className="task-guidance-option" key={option} onClick={() => props.onChooseOption(prompt, option)}>{option}</button>)}</div> : null}
+      </div>)}
     </div>
   );
 }
@@ -725,6 +742,23 @@ function defaultProfileSelections(profile: DomainProfileSummary): Record<string,
     if (group.type === 'single') return [group.id, defaults[0] ?? group.options[0]?.id ?? ''];
     return [group.id, defaults];
   }));
+}
+
+function taskCardPrompts(taskCard: WritingTaskCard): TaskCardFollowUpPrompt[] {
+  const prompts = taskCard.interactionMode.followUpPrompts?.filter((prompt) => prompt.question.trim()) ?? [];
+  if (prompts.length) return prompts;
+  return (taskCard.interactionMode.followUpQuestions ?? []).filter((question) => question.trim()).slice(0, 3).map((question, index) => ({ id: `question-${index + 1}`, question, options: [], allowCustom: true }));
+}
+
+function appendPromptAnswer(current: string, question: string, answer: string): string {
+  const line = `${question}：${answer}`;
+  return current.trim() ? `${current.trim()}\n${line}` : line;
+}
+
+function taskCardPlaceholder(target: TaskCardTarget, prompts: TaskCardFollowUpPrompt[]): string {
+  if (target === 'new') return '输入写作需求，创建新的任务卡。';
+  if (prompts.length) return '选择上方选项，或直接补充任务卡信息。';
+  return '输入对当前任务卡的修改意见。';
 }
 
 function singleSelection(value: string | string[] | undefined): string {

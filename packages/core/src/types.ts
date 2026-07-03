@@ -33,6 +33,13 @@ export interface LLMProvider {
 
 export type ArticleType = 'essay' | 'analysis' | 'commentary' | 'speech' | 'longform';
 
+export interface TaskCardFollowUpPrompt {
+  id: string;
+  question: string;
+  options: string[];
+  allowCustom: boolean;
+}
+
 export interface WritingTaskCard {
   id: string;
   topic: string;
@@ -43,7 +50,7 @@ export interface WritingTaskCard {
   structure: { articleType: ArticleType; expectedLength: string; outlinePreference?: string };
   style: { register: string; tone: string; classicalFlavor: boolean; characterVoice?: string };
   constraints: { mustInclude: string[]; mustAvoid: string[]; citationRequired: boolean; sourcePolicy: string };
-  interactionMode: { askBeforeWriting: boolean; localEditFirst: boolean };
+  interactionMode: { askBeforeWriting: boolean; localEditFirst: boolean; followUpQuestions?: string[]; followUpPrompts?: TaskCardFollowUpPrompt[] };
   status: 'draft' | 'confirmed';
   createdAt: string;
   updatedAt: string;

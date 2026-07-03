@@ -109,6 +109,32 @@ describe('TaskCardBuilderSkill', () => {
     expect(output.taskCard.constraints.sourcePolicy).toContain('以脂评本前八十回为主要依据');
   });
 
+  it('stores selectable follow-up prompts on the draft task card', async () => {
+    const skill = new TaskCardBuilderSkill();
+    const output = await skill.invoke({
+      input: { rawRequirement: '写一篇关于宝黛关系的文章。', userId: 'u1' },
+      context: { memory: {} } as never,
+      llm: llmReturning({
+        taskCard: {
+          topic: '宝黛关系',
+          writingGoal: '分析宝黛关系。',
+          audience: '普通中文读者',
+          scope: { editions: [], chapters: [], characters: [], themes: [] },
+          structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+          style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+          constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+          interactionMode: { askBeforeWriting: true, localEditFirst: true },
+        },
+        missingQuestions: ['希望文章更偏赏析还是论证？'],
+        followUpPrompts: [{ question: '希望文章更偏赏析还是论证？', options: ['赏析', '论证'], allowCustom: true }],
+        summary: '已生成任务卡。',
+        confidence: 0.7,
+      }),
+    });
+    expect(output.taskCard.interactionMode.followUpQuestions).toEqual(['希望文章更偏赏析还是论证？']);
+    expect(output.taskCard.interactionMode.followUpPrompts?.[0]).toMatchObject({ question: '希望文章更偏赏析还是论证？', options: ['赏析', '论证'], allowCustom: true });
+  });
+
   it('merges selected writing standards as top rules', async () => {
     const skill = new TaskCardBuilderSkill();
     const output = await skill.invoke({

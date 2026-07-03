@@ -109,12 +109,24 @@ function mockTaskCard(rawRequirement: string) {
       structure: { articleType: rawRequirement.includes('长文') ? 'longform' : 'analysis', expectedLength: rawRequirement.includes('长文') ? '2500-4000字' : '1200-2000字', outlinePreference: '先提出问题，再分层展开，最后收束观点。' },
       style: { register: rawRequirement.includes('半文半白') ? '有文学感的中文，可带轻微半文半白' : '清晰自然的中文', tone: rawRequirement.includes('不要太学术') ? '温和、可读、不过度学术化' : '稳健、清楚', classicalFlavor: rawRequirement.includes('半文半白') },
       constraints: { mustInclude: [], mustAvoid: rawRequirement.includes('不要太学术') ? ['不要太学术'] : [], citationRequired: false, sourcePolicy: '按任务卡写作，必要时补充资料。' },
-      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      interactionMode: {
+        askBeforeWriting: true,
+        localEditFirst: true,
+        followUpQuestions: ['希望文章更偏哪种展开方式？', '篇幅大致控制在多少？'],
+        followUpPrompts: [
+          { id: 'prompt-1', question: '希望文章更偏哪种展开方式？', options: ['赏析', '论证', '随笔'], allowCustom: true },
+          { id: 'prompt-2', question: '篇幅大致控制在多少？', options: ['800字', '1500字', '3000字'], allowCustom: true },
+        ],
+      },
       status: 'draft',
       createdAt: now,
       updatedAt: now,
     },
-    missingQuestions: [],
+    missingQuestions: ['希望文章更偏哪种展开方式？', '篇幅大致控制在多少？'],
+    followUpPrompts: [
+      { id: 'prompt-1', question: '希望文章更偏哪种展开方式？', options: ['赏析', '论证', '随笔'], allowCustom: true },
+      { id: 'prompt-2', question: '篇幅大致控制在多少？', options: ['800字', '1500字', '3000字'], allowCustom: true },
+    ],
     summary: 'Mock task card generated.',
     confidence: 0.7,
   };
@@ -133,11 +145,14 @@ function mockTaskCardRevision(currentTaskCard: ReturnType<typeof mockTaskCard>['
     topic,
     writingGoal: instruction.includes('目标') ? `${base.writingGoal} ${instruction}`.trim() : base.writingGoal,
     scope: { ...base.scope, themes: topic === base.topic ? base.scope.themes : [topic] },
+    interactionMode: { askBeforeWriting: true, localEditFirst: true, followUpQuestions: [], followUpPrompts: [] },
     updatedAt: new Date().toISOString(),
   };
   return {
     taskCard,
     summary: 'Mock task card revision generated.',
+    missingQuestions: [],
+    followUpPrompts: [],
     changedFields,
   };
 }
