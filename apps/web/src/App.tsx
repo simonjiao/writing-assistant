@@ -88,6 +88,7 @@ export function App() {
 
   const selectedBlock = useMemo(() => article?.blocks.find((block) => block.id === selectedBlockId), [article, selectedBlockId]);
   const unassignedBlocks = useMemo(() => {
+    if (article?.outline.length) return [];
     const outlineIds = new Set(article?.outline.map((item) => item.id) ?? []);
     return article?.blocks.filter((block) => !block.sectionId || !outlineIds.has(block.sectionId)) ?? [];
   }, [article]);

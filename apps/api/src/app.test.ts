@@ -312,6 +312,7 @@ describe('api app', () => {
     const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'outline-user', name: '重建大纲工作台' });
     const article = await container.stores.artifactStore.createArticle({ userId: 'outline-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
     article.outline = [{ id: 'old-sec', title: '旧大纲', goal: '旧目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: ['旧主题'], status: 'confirmed' }];
+    article.blocks = [{ id: 'old-block', type: 'paragraph', sectionId: 'old-sec', title: '旧正文', text: '旧大纲下生成过的正文。', sourceRefs: [], themeTags: ['旧主题'], status: 'draft', createdAt: now, updatedAt: now }];
     await container.stores.artifactStore.updateArticle(article);
     const response = await app.inject({ method: 'POST', url: '/api/workflows/outline/start', payload: { articleId: article.id, userId: 'outline-user' } });
     expect(response.statusCode).toBe(200);
@@ -319,6 +320,7 @@ describe('api app', () => {
     expect(body.run.status).toBe('waiting');
     expect(body.article.outline.map((item: { id: string }) => item.id)).not.toContain('old-sec');
     expect(body.article.outline[0].goal).toContain('更新后的主题');
+    expect(body.article.blocks).toHaveLength(0);
     await app.close();
   });
 
