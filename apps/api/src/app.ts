@@ -116,6 +116,25 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const updatedArticle = await container.stores.artifactStore.getArticle(updated.id);
     return { article: updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle, summary: result.summary, changedFields: result.changedFields };
   });
+  app.post('/api/articles/:articleId/task-card/confirm', async (request, reply) => {
+    const { articleId } = request.params as { articleId: string };
+    const body = (request.body ?? {}) as { userId?: string; sessionId?: string };
+    const userId = readUserId(body.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const access = await requireArticleAccess(container, userId, articleId);
+    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
+    const article = access.article;
+    if (!article.taskCard) return reply.code(400).send({ error: 'Article has no task card to confirm.' });
+    if (article.taskCard.status !== 'confirmed') {
+      article.taskCard = { ...article.taskCard, status: 'confirmed', updatedAt: nowIso() };
+      await container.stores.artifactStore.updateArticle(article);
+      await container.stores.artifactStore.commitVersion(article.id, '确认任务卡', 'user');
+      await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'task-card-confirmed', userId }, createdAt: nowIso() });
+    }
+    if (body.sessionId) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: article.id, currentWorkspaceId: article.workspaceId });
+    const updatedArticle = await container.stores.artifactStore.getArticle(article.id);
+    return updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle;
+  });
   app.patch('/api/articles/:articleId/outline/:sectionId', async (request, reply) => {
     const { articleId, sectionId } = request.params as { articleId: string; sectionId: string };
     const body = request.body as { title?: string; goal?: string; userId?: string };
@@ -134,6 +153,25 @@ export function createApp(config: AppConfig, container: AppContainer) {
     await container.stores.artifactStore.commitVersion(article.id, `编辑大纲章节：${title}`, 'user');
     await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, sectionId, reason: 'outline-section-edited', userId }, createdAt: nowIso() });
     const updatedArticle = await container.stores.artifactStore.getArticle(updated.id);
+    return updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle;
+  });
+  app.post('/api/articles/:articleId/outline/confirm', async (request, reply) => {
+    const { articleId } = request.params as { articleId: string };
+    const body = (request.body ?? {}) as { userId?: string; sessionId?: string };
+    const userId = readUserId(body.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const access = await requireArticleAccess(container, userId, articleId);
+    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
+    const article = access.article;
+    if (!article.outline.length) return reply.code(400).send({ error: 'Article has no outline to confirm.' });
+    if (article.outline.some((item) => item.status !== 'confirmed')) {
+      article.outline = article.outline.map((item) => ({ ...item, status: 'confirmed' as const }));
+      await container.stores.artifactStore.updateArticle(article);
+      await container.stores.artifactStore.commitVersion(article.id, '确认大纲', 'user');
+      await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'outline-confirmed', userId }, createdAt: nowIso() });
+    }
+    if (body.sessionId) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: article.id, currentWorkspaceId: article.workspaceId });
+    const updatedArticle = await container.stores.artifactStore.getArticle(article.id);
     return updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle;
   });
   app.post('/api/knowledge/search', async (request) => { const body = request.body as { query: string; limit?: number; themeTags?: string[] }; return container.stores.knowledgeStore.search(body.query, { limit: body.limit, themeTags: body.themeTags }); });

@@ -122,6 +122,8 @@ export function App() {
   const taskCardConfirmed = visibleArticle?.taskCard?.status === 'confirmed';
   const taskCardDraft = visibleArticle?.taskCard?.status === 'draft';
   const taskCardConfirmationRunId = lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-task-card-confirm' ? lastRun.run.id : undefined;
+  const outlineConfirmationRunId = lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-outline-confirm' ? lastRun.run.id : undefined;
+  const canConfirmOutline = Boolean(visibleArticle?.outline.length && visibleArticle.outline.some((item) => item.status !== 'confirmed'));
   const canDeleteWorkspace = Boolean(selectedWorkspace && !selectedWorkspace.isDefault && selectedWorkspace.userId === userId);
   const canSubmitTaskCardMessage = Boolean(activeTaskCardMessage.trim() && (taskCardDialogTarget === 'current' || selectedWorkspaceId));
   const taskCardFollowUpPrompts = useMemo(() => visibleArticle?.taskCard?.status === 'draft' ? taskCardPrompts(visibleArticle.taskCard) : [], [visibleArticle?.taskCard]);
@@ -354,6 +356,44 @@ export function App() {
       setBusy(false);
     }
   }
+  async function confirmTaskCard() {
+    if (!visibleArticle?.taskCard) return;
+    if (taskCardConfirmationRunId) {
+      await execute(() => api.resume(taskCardConfirmationRunId, { decision: 'confirm' }));
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    try {
+      const updated = await api.confirmTaskCard(visibleArticle.id, { userId, sessionId });
+      setArticle(updated);
+      setLastRun(undefined);
+      await refreshArticleSummaries(updated.workspaceId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function confirmOutline() {
+    if (!visibleArticle?.outline.length) return;
+    if (outlineConfirmationRunId) {
+      await execute(() => api.resume(outlineConfirmationRunId, { decision: 'confirm' }));
+      return;
+    }
+    setBusy(true);
+    setError(undefined);
+    try {
+      const updated = await api.confirmOutline(visibleArticle.id, { userId, sessionId });
+      setArticle(updated);
+      setLastRun(undefined);
+      await refreshArticleSummaries(updated.workspaceId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="app-shell">
@@ -382,11 +422,11 @@ export function App() {
           <h2>任务卡</h2>
           {visibleArticle.taskCard ? <TaskCardView taskCard={visibleArticle.taskCard} /> : null}
           {visibleArticle && canGenerateOutline && <button disabled={busy} onClick={() => execute(() => api.startOutline(visibleArticle.id, userId, sessionId))}>{visibleArticle.outline.length ? '重新生成大纲' : '生成大纲'}</button>}
-          {visibleArticle && lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-outline-confirm' && <button disabled={busy} onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'confirm' }))}>确认大纲</button>}
+          {canConfirmOutline ? <button disabled={busy} onClick={() => void confirmOutline()}>确认大纲</button> : null}
         </aside> : null}
         <section className="panel editor-panel">
           <div className="editor-scroll-content">
-          {taskCardDraft && visibleArticle?.taskCard ? <section className="draft-task-card-main"><div className="draft-task-card-head"><h2>任务卡草稿</h2>{taskCardConfirmationRunId ? <button disabled={busy} onClick={() => execute(() => api.resume(taskCardConfirmationRunId, { decision: 'confirm' }))}>确认任务卡</button> : null}</div><TaskCardView taskCard={visibleArticle.taskCard} /></section> : null}
+          {taskCardDraft && visibleArticle?.taskCard ? <section className="draft-task-card-main"><div className="draft-task-card-head"><h2>任务卡草稿</h2><button disabled={busy} onClick={() => void confirmTaskCard()}>确认任务卡</button></div><TaskCardView taskCard={visibleArticle.taskCard} /></section> : null}
           {visibleArticle?.outline.length ? <div className="outline"><h3>大纲</h3>{visibleArticle.outline.map((item) => {
             const isEditing = editingOutline?.id === item.id;
             const sectionBlocks = visibleArticle.blocks.filter((block) => block.sectionId === item.id);

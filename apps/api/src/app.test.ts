@@ -297,6 +297,22 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('confirms a draft outline through the article API', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'outline-confirm-user', name: '大纲确认工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'outline-confirm-user', workspaceId: workspace.id, title: '待确认大纲' });
+    article.outline = [{ id: 'sec-1', title: '草稿标题', goal: '草稿目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'draft' }];
+    await container.stores.artifactStore.updateArticle(article);
+    const response = await app.inject({ method: 'POST', url: `/api/articles/${article.id}/outline/confirm`, payload: { userId: 'outline-confirm-user' } });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.outline[0].status).toBe('confirmed');
+    expect(body.versions[body.versions.length - 1].reason).toBe('确认大纲');
+    await app.close();
+  });
+
   it('revises a task card through the article API', async () => {
     const config = testConfig();
     const container = createContainer(config);
@@ -326,6 +342,35 @@ describe('api app', () => {
     expect(body.article.taskCard.status).toBe('draft');
     expect(body.changedFields).toContain('topic');
     expect(body.article.versions[body.article.versions.length - 1].reason).toContain('修订任务卡');
+    await app.close();
+  });
+
+  it('confirms a draft task card through the article API', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-confirm',
+      topic: '待确认主题',
+      writingGoal: '写一篇待确认文章。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: [], themes: ['待确认主题'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'draft',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'confirm-user', name: '确认工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'confirm-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    const response = await app.inject({ method: 'POST', url: `/api/articles/${article.id}/task-card/confirm`, payload: { userId: 'confirm-user' } });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.taskCard.status).toBe('confirmed');
+    expect(body.versions[body.versions.length - 1].reason).toBe('确认任务卡');
     await app.close();
   });
 
