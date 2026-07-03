@@ -32,11 +32,13 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [liveEvents, setLiveEvents] = useState<AgentEvent[]>([]);
+  const [progressVisible, setProgressVisible] = useState(false);
   const [editingOutline, setEditingOutline] = useState<{ id: string; title: string; goal: string }>();
   const [collapsedOutlineIds, setCollapsedOutlineIds] = useState<string[]>([]);
   const [collapsedBlockIds, setCollapsedBlockIds] = useState<string[]>([]);
   const [sectionGeneration, setSectionGeneration] = useState<SectionGenerationState>();
   const refreshTimer = useRef<number | undefined>(undefined);
+  const progressDismissTimer = useRef<number | undefined>(undefined);
   const activeRunId = useRef<string | undefined>(undefined);
 
   async function refreshArticleSummaries(workspaceId = selectedWorkspaceId) {
@@ -89,6 +91,7 @@ export function App() {
     setCollapsedBlockIds([]);
     setSectionGeneration(undefined);
   }, [article?.id]);
+  useEffect(() => () => window.clearTimeout(progressDismissTimer.current), []);
 
   const selectedBlock = useMemo(() => article?.blocks.find((block) => block.id === selectedBlockId), [article, selectedBlockId]);
   const unassignedBlocks = useMemo(() => {
@@ -105,6 +108,8 @@ export function App() {
 
   function applyRunResponse(response: RunResponse) {
     setLastRun(response);
+    setProgressVisible(true);
+    window.clearTimeout(progressDismissTimer.current);
     if (response.article) {
       setArticle(response.article);
       setSelectedWorkspaceId(response.article.workspaceId);
@@ -117,11 +122,20 @@ export function App() {
       setBusy(false);
       if (response.run.status === 'failed' && response.run.error) setError(userFacingRunError(response.run.error));
       if (activeRunId.current === response.run.id) activeRunId.current = undefined;
+      scheduleProgressDismiss(response.run);
     }
     else if (activeStatuses.has(response.run.status)) { activeRunId.current = response.run.id; scheduleRunRefresh(response.run.id, runRefreshIntervalMs); }
   }
   function scheduleRunRefresh(runId: string, delayMs = 200) { window.clearTimeout(refreshTimer.current); refreshTimer.current = window.setTimeout(() => { void api.getRun(runId).then((response) => { if (activeRunId.current && activeRunId.current !== runId) return; applyRunResponse(response); }).catch((err) => { setError(err instanceof Error ? err.message : String(err)); if (activeRunId.current === runId) scheduleRunRefresh(runId, 1000); }); }, delayMs); }
-  async function execute(action: () => Promise<RunResponse>) { setBusy(true); setError(undefined); window.clearTimeout(refreshTimer.current); try { const response = await action(); activeRunId.current = response.run.id; applyRunResponse(response); return response; } catch (err) { setError(err instanceof Error ? err.message : String(err)); setBusy(false); activeRunId.current = undefined; } }
+  function scheduleProgressDismiss(run: WorkflowRun) {
+    if (run.status !== 'completed' && run.status !== 'failed' && run.status !== 'cancelled' && run.status !== 'waiting') return;
+    const delayMs = run.status === 'failed' ? 5000 : 2000;
+    progressDismissTimer.current = window.setTimeout(() => {
+      setProgressVisible(false);
+      setSectionGeneration((current) => current?.runId === run.id ? undefined : current);
+    }, delayMs);
+  }
+  async function execute(action: () => Promise<RunResponse>) { setBusy(true); setError(undefined); setProgressVisible(true); window.clearTimeout(refreshTimer.current); window.clearTimeout(progressDismissTimer.current); try { const response = await action(); activeRunId.current = response.run.id; applyRunResponse(response); return response; } catch (err) { setError(err instanceof Error ? err.message : String(err)); setBusy(false); activeRunId.current = undefined; progressDismissTimer.current = window.setTimeout(() => setProgressVisible(false), 5000); } }
   async function openArticle(articleId: string) {
     setBusy(true);
     setError(undefined);
@@ -132,6 +146,7 @@ export function App() {
       setLastRun(undefined);
       setSelectedBlockId(undefined);
       setLiveEvents([]);
+      setProgressVisible(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -151,6 +166,7 @@ export function App() {
         setLastRun(undefined);
         setSelectedBlockId(undefined);
         setLiveEvents([]);
+        setProgressVisible(false);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -185,9 +201,6 @@ export function App() {
       return;
     }
     setSectionGeneration((current) => current?.sectionId === sectionId ? { ...current, runId: response.run.id, status: response.run.status, error: response.run.error } : current);
-    if (response.run.status === 'completed') {
-      window.setTimeout(() => setSectionGeneration((current) => current?.runId === response.run.id ? undefined : current), 1600);
-    }
   }
   function updateNavigationCollapsed(collapsed: boolean) {
     setNavigationCollapsed(collapsed);
@@ -203,6 +216,7 @@ export function App() {
     setLastRun(undefined);
     setSelectedBlockId(undefined);
     setLiveEvents([]);
+    setProgressVisible(false);
     await refreshArticleSummaries(workspaceId);
   }
   async function createWorkspace() {
@@ -222,6 +236,7 @@ export function App() {
       setLastRun(undefined);
       setSelectedBlockId(undefined);
       setLiveEvents([]);
+      setProgressVisible(false);
       setArticleSummaries([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -244,6 +259,7 @@ export function App() {
       setLastRun(undefined);
       setSelectedBlockId(undefined);
       setLiveEvents([]);
+      setProgressVisible(false);
       if (nextWorkspace) await refreshArticleSummaries(nextWorkspace.id);
       else setArticleSummaries([]);
     } catch (err) {
@@ -333,7 +349,7 @@ export function App() {
               <div className={outlineCollapsed ? 'outline-item collapsed' : 'outline-item'} key={item.id}>
                 {isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div className="outline-main"><div className="outline-heading"><button type="button" className="collapse-button" aria-label={outlineCollapsed ? `展开 ${item.title}` : `折叠 ${item.title}`} title={outlineCollapsed ? '展开' : '折叠'} onClick={() => toggleOutlineCollapsed(item.id)}>{outlineCollapsed ? '>' : 'v'}</button><div className="outline-title"><strong>{item.title}</strong><span>{outlineStatusLabel(item.status)}{sectionBlocks.length ? ` · ${sectionBlocks.length} 段正文` : ''}</span></div></div>{outlineCollapsed ? null : <p>{item.goal}</p>}</div>}
                 <div className="outline-actions">{isEditing ? <><button disabled={busy || !editingOutline.title.trim() || !editingOutline.goal.trim()} onClick={() => void saveOutlineEdit()}>保存</button><button disabled={busy} onClick={() => setEditingOutline(undefined)}>取消</button></> : <><button disabled={busy} onClick={() => setEditingOutline({ id: item.id, title: item.title, goal: item.goal })}>编辑</button><button disabled={busy} onClick={() => void startSectionGeneration(item.id)}>{sectionBlocks.length ? '重新生成本节' : '生成本节'}</button></>}</div>
-                {!outlineCollapsed && sectionGeneration?.sectionId === item.id ? <GenerationProgressView progress={sectionGeneration} events={liveEvents} /> : null}
+                {!outlineCollapsed && progressVisible && sectionGeneration?.sectionId === item.id ? <GenerationProgressView progress={sectionGeneration} events={liveEvents} /> : null}
                 {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={setSelectedBlockId} onToggleBlockCollapse={toggleBlockCollapsed} /> : null}
               </div>
             );
@@ -342,7 +358,7 @@ export function App() {
           <div className="editor-support">
             <section className="support-card"><h3>知识 / 引用 / 标签</h3>{selectedBlock ? <div><p className="mono">{selectedBlock.id}</p><h4>引用来源</h4>{selectedBlock.sourceRefs.length ? selectedBlock.sourceRefs.map((ref) => <span className="tag" key={ref}>{ref}</span>) : <div className="empty">暂无引用绑定</div>}<h4>主题标签</h4>{selectedBlock.themeTags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div> : <div className="empty">选择一个段落后显示对应来源和标签。</div>}</section>
             <section className="support-card"><h3>修订日志</h3><RevisionLogView article={article} /></section>
-            <section className="support-card"><h3>执行进度</h3><ProgressTimeline events={liveEvents} run={lastRun?.run} /></section>
+            {progressVisible ? <section className="support-card"><h3>执行进度</h3><ProgressTimeline events={liveEvents} run={lastRun?.run} /></section> : null}
           </div>
         </section>
       </main>
