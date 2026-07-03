@@ -242,7 +242,31 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   border-radius: 12px;
   background: #fffaf1;
 }
-.profile-header { display: grid; grid-template-columns: auto minmax(180px, 280px); gap: 10px; align-items: center; }
+.profile-header { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; }
+.profile-summary { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; align-items: center; }
+.profile-pill,
+.profile-recommendation {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid #d9d1c4;
+  border-radius: 999px;
+  background: #f7f1e8;
+  color: #18202a;
+  font-size: 13px;
+}
+.profile-recommendation {
+  cursor: pointer;
+}
+.profile-pill.active {
+  border-color: #9ca3af;
+  background: #eef2f7;
+}
+.profile-select {
+  max-width: 320px;
+  justify-self: end;
+}
 .profile-group { display: grid; grid-template-columns: 86px 1fr; gap: 10px; align-items: start; }
 .profile-group > span { color: #6f665b; font-size: 13px; padding-top: 9px; }
 .profile-options { display: flex; flex-wrap: wrap; gap: 8px 12px; }
@@ -258,11 +282,93 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   padding: 12px;
   margin-bottom: 10px;
 }
+.outline-item.collapsed {
+  padding-block: 10px;
+}
+.outline-main {
+  min-width: 0;
+}
+.outline-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.outline-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.outline-title strong {
+  line-height: 1.35;
+}
 .outline-item p { margin: 6px 0; color: #4d5966; }
 .outline-item span { color: #7c7266; font-size: 12px; }
 .outline-actions { display: flex; flex-direction: column; gap: 8px; min-width: 86px; }
 .outline-edit { display: grid; gap: 8px; }
 .outline-edit textarea { min-height: 110px; }
+.collapse-button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+  border: 1px solid #d9d1c4;
+  border-radius: 50%;
+  background: #f7f1e8;
+  color: #4d5966;
+  font-size: 11px;
+  line-height: 1;
+}
+.collapse-button:hover {
+  background: #ede7dc;
+  color: #18202a;
+}
+.section-blocks {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #eee6da;
+}
+.section-blocks-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: #7c7266;
+  font-size: 12px;
+}
+.section-paragraph {
+  border-left: 3px solid #d8c8aa;
+  background: #fff8e7;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+.section-paragraph.selected {
+  border-left-color: #111827;
+  background: #fff4d7;
+}
+.section-paragraph.collapsed {
+  padding-block: 8px;
+}
+.paragraph-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  color: #7c7266;
+  font-size: 12px;
+}
+.section-paragraph.collapsed .paragraph-head {
+  margin-bottom: 0;
+}
+.section-paragraph pre,
+.block pre {
+  color: #2f2a22;
+  font-family: "Kaiti SC", "STKaiti", "KaiTi", "BiauKai", "Songti SC", serif;
+  font-size: 16px;
+  line-height: 1.9;
+}
 .article-blocks { margin-top: 16px; display: grid; gap: 12px; }
 .editor-support {
   display: grid;
@@ -287,14 +393,34 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   font-size: 13px;
 }
 .block {
-  border: 1px solid #e0d8cb;
-  background: #fffaf1;
+  border: 1px solid #d8c8aa;
+  background: #fff8e7;
   border-radius: 16px;
   padding: 14px;
   cursor: pointer;
 }
 .block.selected { outline: 3px solid #111827; }
-.block h3 { margin: 0 0 10px; }
+.block.collapsed {
+  padding-block: 10px;
+}
+.block-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.block.collapsed .block-head {
+  margin-bottom: 0;
+}
+.block-head h3 {
+  flex: 1;
+  margin: 0;
+  line-height: 1.35;
+}
+.block-head span {
+  color: #7c7266;
+  font-size: 12px;
+}
 .tag {
   display: inline-block;
   margin: 4px 4px 4px 0;
@@ -326,6 +452,11 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .secondary-button {
   background: #ede7dc;
   color: #18202a;
+}
+.secondary-button.compact {
+  min-height: 32px;
+  padding: 6px 10px;
+  font-size: 13px;
 }
 .modal-backdrop {
   position: fixed;

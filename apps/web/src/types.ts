@@ -7,6 +7,7 @@ export interface WritingWorkspace { id: string; userId: string; memberUserIds: s
 export interface DomainProfileOption { id: string; label: string; description?: string; defaultSelected?: boolean }
 export interface DomainProfileGroup { id: string; label: string; type: 'single' | 'multi'; options: DomainProfileOption[] }
 export interface DomainProfileSummary { id: string; label: string; description: string; groups: DomainProfileGroup[] }
+export interface DomainProfileRecommendation { id: string; label: string; description: string; score: number }
 export interface DomainProfileSelection { id: string; selections: Record<string, string | string[]> }
 export interface WorkflowRun { id: string; workflowId: string; status: 'idle' | 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'; currentNodeId?: string; waitingFor?: { nodeId: string; reason: string }; state: Record<string, unknown>; error?: string }
 export interface AgentEvent { id: string; runId?: string; type: string; payload: Record<string, unknown>; createdAt: string }

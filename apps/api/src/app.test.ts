@@ -200,6 +200,18 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('recommends matching domain profiles from a writing requirement', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const response = await app.inject({ method: 'POST', url: '/api/domain-profiles/recommend', payload: { rawRequirement: '写一篇关于《红楼梦》中宝黛关系的长文，重点写精神相通。' } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()[0]).toMatchObject({ id: 'hongloumeng-baodai', label: '红楼梦：宝黛关系' });
+    const triangleResponse = await app.inject({ method: 'POST', url: '/api/domain-profiles/recommend', payload: { rawRequirement: '写一篇关于宝黛钗关系的文章。' } });
+    expect(triangleResponse.json()).toEqual([]);
+    await app.close();
+  });
+
   it('resolves selected domain profile ids into task card constraints', async () => {
     const config = testConfig();
     const container = createContainer(config);

@@ -5,7 +5,7 @@ import { AgentEvent, ArticleArtifact, EventSubscriptionFilter, newId, nowIso, Un
 import type { TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
-import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfileSummaries, resolveDomainProfileSelection } from './domainProfiles';
+import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfileSummaries, recommendDomainProfiles, resolveDomainProfileSelection } from './domainProfiles';
 
 export function createApp(config: AppConfig, container: AppContainer) {
   const app = Fastify({ logger: true });
@@ -55,6 +55,10 @@ export function createApp(config: AppConfig, container: AppContainer) {
     return container.stores.workspaceStore.updateWorkspace({ ...workspace, deletedAt: workspace.deletedAt ?? nowIso() });
   });
   app.get('/api/domain-profiles', async () => listDomainProfileSummaries());
+  app.post('/api/domain-profiles/recommend', async (request) => {
+    const body = request.body as { rawRequirement?: string; limit?: number };
+    return recommendDomainProfiles(body.rawRequirement ?? '', body.limit);
+  });
   app.get('/api/domain-profiles/:profileId', async (request, reply) => {
     const { profileId } = request.params as { profileId: string };
     const profile = getDomainProfileSummary(profileId);

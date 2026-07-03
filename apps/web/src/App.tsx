@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
-import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DomainProfileSelection, DomainProfileSummary, RunResponse, WritingTaskCard, WritingWorkspace } from './types';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RunResponse, WritingTaskCard, WritingWorkspace } from './types';
 
 const userId = 'demo-user';
 const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']);
@@ -19,6 +19,7 @@ export function App() {
   const [workspaceModalOpen, setWorkspaceModalOpen] = useState(false);
   const [navigationCollapsed, setNavigationCollapsed] = useState(false);
   const [domainProfiles, setDomainProfiles] = useState<DomainProfileSummary[]>([]);
+  const [domainProfileRecommendations, setDomainProfileRecommendations] = useState<DomainProfileRecommendation[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>();
   const [profileSelections, setProfileSelections] = useState<Record<string, string | string[]>>({});
   const [lastRun, setLastRun] = useState<RunResponse>();
@@ -30,6 +31,8 @@ export function App() {
   const [error, setError] = useState<string>();
   const [liveEvents, setLiveEvents] = useState<AgentEvent[]>([]);
   const [editingOutline, setEditingOutline] = useState<{ id: string; title: string; goal: string }>();
+  const [collapsedOutlineIds, setCollapsedOutlineIds] = useState<string[]>([]);
+  const [collapsedBlockIds, setCollapsedBlockIds] = useState<string[]>([]);
   const refreshTimer = useRef<number | undefined>(undefined);
   const activeRunId = useRef<string | undefined>(undefined);
 
@@ -49,13 +52,13 @@ export function App() {
         setWorkspaces(workspaceList);
         const workspaceId = session.currentWorkspaceId ?? workspaceList[0]?.id;
         setSelectedWorkspaceId(workspaceId);
-        if (workspaceId) setArticleSummaries(await api.listArticles(userId, workspaceId));
-        setDomainProfiles(profiles);
-        const firstProfile = profiles[0];
-        if (firstProfile) {
-          setSelectedProfileId(firstProfile.id);
-          setProfileSelections(defaultProfileSelections(firstProfile));
+        if (workspaceId) {
+          const summaries = await api.listArticles(userId, workspaceId);
+          setArticleSummaries(summaries);
+          const firstArticleId = summaries[0]?.id;
+          if (firstArticleId) setArticle(await api.getArticle(firstArticleId, userId));
         }
+        setDomainProfiles(profiles);
       })
       .catch((err) => setError(String(err)));
   }, []);
@@ -68,8 +71,26 @@ export function App() {
     if (activeStatuses.has(lastRun.run.status)) scheduleRunRefresh(runId);
     return close;
   }, [lastRun?.run.id]);
+  useEffect(() => {
+    if (!domainProfiles.length || !requirement.trim()) {
+      setDomainProfileRecommendations([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void api.recommendDomainProfiles(requirement).then(setDomainProfileRecommendations).catch(() => setDomainProfileRecommendations([]));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [domainProfiles.length, requirement]);
+  useEffect(() => {
+    setCollapsedOutlineIds([]);
+    setCollapsedBlockIds([]);
+  }, [article?.id]);
 
   const selectedBlock = useMemo(() => article?.blocks.find((block) => block.id === selectedBlockId), [article, selectedBlockId]);
+  const unassignedBlocks = useMemo(() => {
+    const outlineIds = new Set(article?.outline.map((item) => item.id) ?? []);
+    return article?.blocks.filter((block) => !block.sectionId || !outlineIds.has(block.sectionId)) ?? [];
+  }, [article]);
   const selectedWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === selectedWorkspaceId), [selectedWorkspaceId, workspaces]);
   const selectedProfile = useMemo(() => domainProfiles.find((profile) => profile.id === selectedProfileId), [domainProfiles, selectedProfileId]);
   const patchPreview = (lastRun?.run.state.patchResult as { patch?: { before: string; after: string; changeSummary: string[] } } | undefined)?.patch;
@@ -84,7 +105,11 @@ export function App() {
       setSelectedWorkspaceId(response.article.workspaceId);
       void refreshArticleSummaries(response.article.workspaceId).catch((err) => setError(err instanceof Error ? err.message : String(err)));
     }
-    if (terminalStatuses.has(response.run.status)) { setBusy(false); if (activeRunId.current === response.run.id) activeRunId.current = undefined; }
+    if (terminalStatuses.has(response.run.status)) {
+      setBusy(false);
+      if (response.run.status === 'failed' && response.run.error) setError(response.run.error);
+      if (activeRunId.current === response.run.id) activeRunId.current = undefined;
+    }
     else if (activeStatuses.has(response.run.status)) { activeRunId.current = response.run.id; scheduleRunRefresh(response.run.id, runRefreshIntervalMs); }
   }
   function scheduleRunRefresh(runId: string, delayMs = 200) { window.clearTimeout(refreshTimer.current); refreshTimer.current = window.setTimeout(() => { void api.getRun(runId).then((response) => { if (activeRunId.current && activeRunId.current !== runId) return; applyRunResponse(response); }).catch((err) => { setError(err instanceof Error ? err.message : String(err)); if (activeRunId.current === runId) scheduleRunRefresh(runId, 1000); }); }, delayMs); }
@@ -135,6 +160,12 @@ export function App() {
   }
   function updateProfileGroup(groupId: string, value: string | string[]) {
     setProfileSelections((current) => ({ ...current, [groupId]: value }));
+  }
+  function toggleOutlineCollapsed(outlineId: string) {
+    setCollapsedOutlineIds((current) => toggleId(current, outlineId));
+  }
+  function toggleBlockCollapsed(blockId: string) {
+    setCollapsedBlockIds((current) => toggleId(current, blockId));
   }
   async function selectWorkspace(workspaceId: string) {
     setSelectedWorkspaceId(workspaceId);
@@ -263,12 +294,20 @@ export function App() {
         <section className="panel editor-panel">
           <h2>文章编辑区</h2>
           <div className="input-row"><textarea value={requirement} onChange={(event) => setRequirement(event.target.value)} /><button disabled={busy || !requirement.trim() || !selectedWorkspaceId} onClick={() => execute(() => api.startTaskCard(requirement, userId, sessionId, selectedWorkspaceId, currentDomainProfileSelection()))}>生成任务卡</button></div>
-          {domainProfiles.length ? <DomainProfileControls profiles={domainProfiles} selectedProfileId={selectedProfileId} selections={profileSelections} onSelectProfile={selectProfile} onUpdateGroup={updateProfileGroup} /> : null}
+          {domainProfiles.length ? <DomainProfileControls profiles={domainProfiles} recommendations={domainProfileRecommendations} selectedProfileId={selectedProfileId} selections={profileSelections} onSelectProfile={selectProfile} onUpdateGroup={updateProfileGroup} /> : null}
           {article?.outline.length ? <div className="outline"><h3>大纲</h3>{article.outline.map((item) => {
             const isEditing = editingOutline?.id === item.id;
-            return <div className="outline-item" key={item.id}>{isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div><strong>{item.title}</strong><p>{item.goal}</p><span>{outlineStatusLabel(item.status)}</span></div>}<div className="outline-actions">{isEditing ? <><button disabled={busy || !editingOutline.title.trim() || !editingOutline.goal.trim()} onClick={() => void saveOutlineEdit()}>保存</button><button disabled={busy} onClick={() => setEditingOutline(undefined)}>取消</button></> : <><button disabled={busy} onClick={() => setEditingOutline({ id: item.id, title: item.title, goal: item.goal })}>编辑</button><button disabled={busy} onClick={() => execute(() => api.startSection(article.id, item.id, userId, sessionId))}>生成本节</button></>}</div></div>;
+            const sectionBlocks = article.blocks.filter((block) => block.sectionId === item.id);
+            const outlineCollapsed = !isEditing && collapsedOutlineIds.includes(item.id);
+            return (
+              <div className={outlineCollapsed ? 'outline-item collapsed' : 'outline-item'} key={item.id}>
+                {isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div className="outline-main"><div className="outline-heading"><button type="button" className="collapse-button" aria-label={outlineCollapsed ? `展开 ${item.title}` : `折叠 ${item.title}`} title={outlineCollapsed ? '展开' : '折叠'} onClick={() => toggleOutlineCollapsed(item.id)}>{outlineCollapsed ? '>' : 'v'}</button><div className="outline-title"><strong>{item.title}</strong><span>{outlineStatusLabel(item.status)}{sectionBlocks.length ? ` · ${sectionBlocks.length} 段正文` : ''}</span></div></div>{outlineCollapsed ? null : <p>{item.goal}</p>}</div>}
+                <div className="outline-actions">{isEditing ? <><button disabled={busy || !editingOutline.title.trim() || !editingOutline.goal.trim()} onClick={() => void saveOutlineEdit()}>保存</button><button disabled={busy} onClick={() => setEditingOutline(undefined)}>取消</button></> : <><button disabled={busy} onClick={() => setEditingOutline({ id: item.id, title: item.title, goal: item.goal })}>编辑</button><button disabled={busy} onClick={() => execute(() => api.startSection(article.id, item.id, userId, sessionId))}>{sectionBlocks.length ? '重新生成本节' : '生成本节'}</button></>}</div>
+                {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={setSelectedBlockId} onToggleBlockCollapse={toggleBlockCollapsed} /> : null}
+              </div>
+            );
           })}</div> : null}
-          <div className="article-blocks">{article?.blocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} onSelect={() => setSelectedBlockId(block.id)} />)}</div>
+          <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => setSelectedBlockId(block.id)} onToggleCollapse={() => toggleBlockCollapsed(block.id)} />)}</div>
           <div className="editor-support">
             <section className="support-card"><h3>知识 / 引用 / 标签</h3>{selectedBlock ? <div><p className="mono">{selectedBlock.id}</p><h4>引用来源</h4>{selectedBlock.sourceRefs.length ? selectedBlock.sourceRefs.map((ref) => <span className="tag" key={ref}>{ref}</span>) : <div className="empty">暂无引用绑定</div>}<h4>主题标签</h4>{selectedBlock.themeTags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div> : <div className="empty">选择一个段落后显示对应来源和标签。</div>}</section>
             <section className="support-card"><h3>版本</h3><div className="versions">{article?.versions.slice().reverse().slice(0, 6).map((version) => <div key={version.id} className="version-item"><strong>{version.reason}</strong><span>{new Date(version.createdAt).toLocaleString()}</span></div>)}</div></section>
@@ -281,13 +320,36 @@ export function App() {
     </div>
   );
 }
-function ArticleBlockView(props: { block: ArticleBlock; selected: boolean; onSelect: () => void }) { return <article className={props.selected ? 'block selected' : 'block'} onClick={props.onSelect}><h3>{props.block.title}</h3><pre>{props.block.text}</pre></article>; }
+function ArticleBlockView(props: { block: ArticleBlock; selected: boolean; collapsed: boolean; onSelect: () => void; onToggleCollapse: () => void }) {
+  return <article className={['block', props.selected ? 'selected' : '', props.collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} onClick={props.onSelect}><div className="block-head"><button type="button" className="collapse-button" aria-label={props.collapsed ? `展开 ${props.block.title}` : `折叠 ${props.block.title}`} title={props.collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleCollapse(); }}>{props.collapsed ? '>' : 'v'}</button><h3>{props.block.title}</h3><span>{props.block.text.length} 字</span></div>{props.collapsed ? null : <pre>{props.block.text}</pre>}</article>;
+}
 
-function DomainProfileControls(props: { profiles: DomainProfileSummary[]; selectedProfileId?: string; selections: Record<string, string | string[]>; onSelectProfile: (profileId: string) => void; onUpdateGroup: (groupId: string, value: string | string[]) => void }) {
+function SectionBlocksView(props: { blocks: ArticleBlock[]; selectedBlockId?: string; collapsedBlockIds: string[]; onSelectBlock: (blockId: string) => void; onToggleBlockCollapse: (blockId: string) => void }) {
+  const totalLength = props.blocks.reduce((sum, block) => sum + block.text.length, 0);
+  return (
+    <div className="section-blocks">
+      <div className="section-blocks-head"><span>{props.blocks.length} 段正文</span><span>{totalLength} 字</span></div>
+      {props.blocks.map((block, index) => {
+        const collapsed = props.collapsedBlockIds.includes(block.id);
+        return <article className={['section-paragraph', props.selectedBlockId === block.id ? 'selected' : '', collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} key={block.id} onClick={() => props.onSelectBlock(block.id)}><div className="paragraph-head"><button type="button" className="collapse-button" aria-label={collapsed ? `展开第 ${index + 1} 段` : `折叠第 ${index + 1} 段`} title={collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleBlockCollapse(block.id); }}>{collapsed ? '>' : 'v'}</button><span>第 {index + 1} 段</span><span>{block.text.length} 字</span></div>{collapsed ? null : <pre>{block.text}</pre>}</article>;
+      })}
+    </div>
+  );
+}
+
+function DomainProfileControls(props: { profiles: DomainProfileSummary[]; recommendations: DomainProfileRecommendation[]; selectedProfileId?: string; selections: Record<string, string | string[]>; onSelectProfile: (profileId: string) => void; onUpdateGroup: (groupId: string, value: string | string[]) => void }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
   const profile = props.profiles.find((item) => item.id === props.selectedProfileId);
+  const recommendation = props.recommendations.find((item) => item.id !== props.selectedProfileId);
+  const showPicker = pickerOpen || (!profile && !recommendation);
+  function chooseProfile(profileId: string) {
+    props.onSelectProfile(profileId);
+    setPickerOpen(false);
+  }
   return (
     <div className="profile-controls">
-      <div className="profile-header"><strong>写作标准</strong><select value={props.selectedProfileId ?? ''} onChange={(event) => props.onSelectProfile(event.target.value)}>{props.profiles.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></div>
+      <div className="profile-header"><strong>写作标准</strong><div className="profile-summary">{profile ? <span className="profile-pill active">{profile.label}</span> : recommendation ? <button type="button" className="profile-recommendation" onClick={() => chooseProfile(recommendation.id)}>推荐：{recommendation.label}</button> : <span className="profile-pill">未应用</span>}<button type="button" className="secondary-button compact" onClick={() => setPickerOpen((current) => !current)}>{pickerOpen ? '收起' : '更换'}</button></div></div>
+      {showPicker ? <select className="profile-select" value={props.selectedProfileId ?? ''} onChange={(event) => chooseProfile(event.target.value)}><option value="">不使用写作标准</option>{props.profiles.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select> : null}
       {profile?.groups.map((group) => <div className="profile-group" key={group.id}><span>{group.label}</span>{group.type === 'single' ? <select value={singleSelection(props.selections[group.id])} onChange={(event) => props.onUpdateGroup(group.id, event.target.value)}>{group.options.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select> : <div className="profile-options">{group.options.map((option) => {
         const checked = multiSelection(props.selections[group.id]).includes(option.id);
         return <label key={option.id}><input type="checkbox" checked={checked} onChange={(event) => props.onUpdateGroup(group.id, toggleSelection(multiSelection(props.selections[group.id]), option.id, event.target.checked))} />{option.label}</label>;
@@ -384,6 +446,10 @@ function multiSelection(value: string | string[] | undefined): string[] {
 
 function toggleSelection(values: string[], value: string, checked: boolean): string[] {
   return checked ? [...new Set([...values, value])] : values.filter((item) => item !== value);
+}
+
+function toggleId(values: string[], value: string): string[] {
+  return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
 }
 
 function parseMemberUserIds(value: string): string[] {

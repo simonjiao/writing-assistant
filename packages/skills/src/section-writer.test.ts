@@ -110,6 +110,50 @@ describe('SectionWriterSkill', () => {
     expect(output.block.text).toContain('正文重点仍在解释材料');
   });
 
+  it('does not require duplicate top-level candidateSources when block sourceRefs are present', async () => {
+    const skill = new SectionWriterSkill();
+    const output = await skill.invoke({
+      input: { articleId: 'art_1', section, taskCard },
+      context: context(),
+      llm: llmReturning({
+        block: {
+          text: '本段围绕章节目标提出判断，再用材料作为论证线索，正文重点放在解释家庭关系中的教育张力。',
+          sourceRefs: ['test:k1'],
+          themeTags: ['测试主题'],
+        },
+        summary: '已生成分析性正文。',
+      }),
+    });
+    expect(output.candidateSources).toEqual(['test:k1']);
+    expect(output.block.sourceRefs).toEqual(['test:k1']);
+  });
+
+  it('accepts multiple section blocks when expectedBlocks leads the model to split prose', async () => {
+    const skill = new SectionWriterSkill();
+    const output = await skill.invoke({
+      input: { articleId: 'art_1', section: { ...section, expectedBlocks: 2 }, taskCard },
+      context: context(),
+      llm: llmReturning({
+        blocks: [
+          {
+            text: '第一段先提出判断，说明事件中的管教冲突并非单一过错触发，而是多重压力叠加。',
+            sourceRefs: ['test:k1'],
+            themeTags: ['测试主题'],
+          },
+          {
+            text: '第二段继续分析人物反应，把材料作为论据线索，而不是复述成故事经过。',
+            sourceRefs: ['test:k1'],
+            themeTags: ['测试主题'],
+          },
+        ],
+        summary: '已生成多个正文块。',
+      }),
+    });
+    expect(output.blocks).toHaveLength(2);
+    expect(output.block.text).toContain('第一段');
+    expect(output.candidateSources).toEqual(['test:k1']);
+  });
+
   it('rejects quote-heavy prose', async () => {
     const skill = new SectionWriterSkill();
     await expect(skill.invoke({

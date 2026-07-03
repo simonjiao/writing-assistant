@@ -8,8 +8,16 @@ export interface SectionWriterInput {
 
 export interface SectionWriterOutput {
   block: ArticleBlock;
+  blocks: ArticleBlock[];
   candidateSources: string[];
   summary: string;
+}
+
+interface SectionWriterRawOutput {
+  block?: Partial<ArticleBlock>;
+  blocks?: Array<Partial<ArticleBlock>>;
+  candidateSources?: unknown;
+  summary?: unknown;
 }
 
 export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWriterOutput> {
@@ -35,8 +43,10 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
           content: [
             '你是写作助手的章节写作者。',
             '你的任务是原创写作和论证展开，不是翻译、改写、转述、复述或资料整理。',
-            '只输出 JSON：block、candidateSources、summary。',
-            'block.text 必须是完整正文，不能留空。',
+            '只输出 JSON：blocks、summary；blocks 必须是 ArticleBlock 数组，每个 block.sourceRefs 必须是 string[]，没有可用来源时输出 []。',
+            'section.expectedBlocks 是正文块数量参考；如果只需要一个正文块，blocks 输出长度为 1 的数组。',
+            '每个 block.text 必须是完整正文，不能留空。',
+            '所有 blocks 的正文总字数不得超过 writingBudget.maxChars；宁可凝练，不要超预算。',
             '资料和原文只能作为证据，不得把整段原文、资料摘要或近似复述当作正文主体。',
             '正文应以分析、判断、过渡和解释为主；可以短引关键词句，但引用不能承担正文主体。',
             '不要写成故事梗概、人物小传、原著情节重述或“话说/看官听说”式讲述。',
@@ -69,8 +79,8 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
         },
       ],
     });
-    const parsed = safeJsonParse<Partial<SectionWriterOutput>>(response.content);
-    if (!parsed?.block?.text) throw new Error(`Section writer did not return a valid block: ${response.content.slice(0, 300)}`);
+    const parsed = safeJsonParse<SectionWriterRawOutput>(response.content);
+    if (!parsed?.block?.text && !parsed?.blocks?.some((block) => block.text)) throw new Error(`Section writer did not return a valid block: ${response.content.slice(0, 300)}`);
     return normalizeOutput(parsed, input, context.knowledge, writingBudget);
   }
 }
@@ -84,28 +94,41 @@ interface SectionWritingBudget {
   policy: string;
 }
 
-function normalizeOutput(output: Partial<SectionWriterOutput>, input: SectionWriterInput, knowledge: KnowledgeItem[], writingBudget: SectionWritingBudget): SectionWriterOutput {
+function normalizeOutput(output: SectionWriterRawOutput, input: SectionWriterInput, knowledge: KnowledgeItem[], writingBudget: SectionWritingBudget): SectionWriterOutput {
   const now = nowIso();
-  const candidateSources = requireStringArray(output.candidateSources, 'candidateSources');
-  const block: ArticleBlock = {
-    id: output.block?.id ?? newId('blk'),
-    type: 'section',
-    sectionId: input.section.id,
-    title: output.block?.title ?? input.section.title,
-    text: requireText(output.block?.text, 'block.text'),
-    sourceRefs: Array.isArray(output.block?.sourceRefs) ? requireStringArray(output.block.sourceRefs, 'block.sourceRefs') : candidateSources,
-    themeTags: output.block?.themeTags ?? input.section.themeTags,
-    status: 'draft',
-    createdAt: output.block?.createdAt ?? now,
-    updatedAt: now,
-  };
-  validateLengthBudget(block.text, writingBudget);
-  validateSourceUse(block.text, knowledge);
+  const candidateSources = optionalStringArray(output.candidateSources, 'candidateSources') ?? [];
+  const blocks = normalizeBlockOutputs(output, input).map((sourceBlock, index) => {
+    const sourceRefs = optionalStringArray(sourceBlock.sourceRefs, `blocks[${index}].sourceRefs`) ?? candidateSources;
+    return {
+      id: sourceBlock.id ?? newId('blk'),
+      type: 'section' as const,
+      sectionId: input.section.id,
+      title: sourceBlock.title ?? input.section.title,
+      text: requireText(sourceBlock.text, `blocks[${index}].text`),
+      sourceRefs,
+      themeTags: optionalStringArray(sourceBlock.themeTags, `blocks[${index}].themeTags`) ?? input.section.themeTags,
+      status: 'draft' as const,
+      createdAt: sourceBlock.createdAt ?? now,
+      updatedAt: now,
+    };
+  });
+  const combinedText = blocks.map((block) => block.text).join('\n\n');
+  validateLengthBudget(combinedText, writingBudget);
+  validateSourceUse(combinedText, knowledge);
+  const block = blocks[0];
   return {
     block,
-    candidateSources,
+    blocks,
+    candidateSources: candidateSources.length ? candidateSources : [...new Set(blocks.flatMap((item) => item.sourceRefs))],
     summary: requireText(output.summary, 'summary'),
   };
+}
+
+function normalizeBlockOutputs(output: SectionWriterRawOutput, input: SectionWriterInput): Array<Partial<ArticleBlock>> {
+  const blocks = output.blocks?.filter((block) => typeof block.text === 'string' && block.text.trim()) ?? [];
+  if (blocks.length) return blocks;
+  if (output.block?.text) return [output.block];
+  return [{ title: input.section.title }];
 }
 
 function requireText(value: unknown, field: string): string {
@@ -116,6 +139,10 @@ function requireText(value: unknown, field: string): string {
 function requireStringArray(value: unknown, field: string): string[] {
   if (!Array.isArray(value)) throw new Error(`Section writer returned invalid ${field}.`);
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim());
+}
+
+function optionalStringArray(value: unknown, field: string): string[] | undefined {
+  return value === undefined ? undefined : requireStringArray(value, field);
 }
 
 function buildSectionWritingBudget(taskCard: WritingTaskCard, outlineSections: number): SectionWritingBudget {

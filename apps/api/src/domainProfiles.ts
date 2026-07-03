@@ -24,6 +24,13 @@ export interface DomainProfileSummary {
   groups: DomainProfileGroupSummary[];
 }
 
+export interface DomainProfileRecommendation {
+  id: string;
+  label: string;
+  description: string;
+  score: number;
+}
+
 export interface ResolvedDomainProfileContext {
   profileId: string;
   label: string;
@@ -45,10 +52,16 @@ interface DomainProfileGroup {
   options: DomainProfileOption[];
 }
 
+interface DomainProfileRecommendationRules {
+  includeAny: string[];
+  excludeAny?: string[];
+}
+
 interface DomainProfile {
   id: string;
   label: string;
   description: string;
+  recommendation: DomainProfileRecommendationRules;
   groups: DomainProfileGroup[];
 }
 
@@ -56,6 +69,10 @@ const domainProfiles: DomainProfile[] = [{
   id: 'hongloumeng-baodai',
   label: '红楼梦：宝黛关系',
   description: '适用于宝黛关系、精神相通、版本边界类写作。',
+  recommendation: {
+    includeAny: ['宝黛关系', '宝黛', '贾宝玉林黛玉', '宝玉黛玉', '精神相通', '木石前盟'],
+    excludeAny: ['宝黛钗', '宝钗', '薛宝钗', '钗黛', '金玉良缘'],
+  },
   groups: [
     {
       id: 'edition',
@@ -167,6 +184,16 @@ export function getDomainProfileSummary(profileId: string): DomainProfileSummary
   return profile ? toSummary(profile) : undefined;
 }
 
+export function recommendDomainProfiles(rawRequirement: string, limit = 3): DomainProfileRecommendation[] {
+  const text = normalizeMatchText(rawRequirement);
+  if (!text) return [];
+  return domainProfiles
+    .map((profile) => ({ id: profile.id, label: profile.label, description: profile.description, score: scoreProfile(profile, text) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label))
+    .slice(0, limit);
+}
+
 export function resolveDomainProfileSelection(request?: DomainProfileSelectionRequest): ResolvedDomainProfileContext | undefined {
   if (!request?.id) return undefined;
   const profile = domainProfiles.find((item) => item.id === request.id);
@@ -195,6 +222,16 @@ function toSummary(profile: DomainProfile): DomainProfileSummary {
       options: group.options.map(({ id, label, description, defaultSelected }) => ({ id, label, description, defaultSelected })),
     })),
   };
+}
+
+function scoreProfile(profile: DomainProfile, normalizedText: string): number {
+  const excluded = profile.recommendation.excludeAny?.some((term) => normalizedText.includes(normalizeMatchText(term)));
+  if (excluded) return 0;
+  return profile.recommendation.includeAny.reduce((score, term) => score + (normalizedText.includes(normalizeMatchText(term)) ? 1 : 0), 0);
+}
+
+function normalizeMatchText(value: string): string {
+  return value.replace(/\s+/g, '').toLowerCase();
 }
 
 function selectedOptionIds(group: DomainProfileGroup, value: string | string[] | undefined): string[] {
