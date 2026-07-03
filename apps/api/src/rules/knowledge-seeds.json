@@ -1,0 +1,26 @@
+[
+  {
+    "id": "k_red_mansion_relation",
+    "title": "红楼梦人物关系写作提示",
+    "content": "分析人物关系时，优先区分情节关系、精神关系、家族秩序与叙事功能。",
+    "sourceType": "manual",
+    "sourceRef": "seed:red-mansion-relation",
+    "themeTags": ["宝黛", "人物", "关系", "知己"]
+  },
+  {
+    "id": "k_local_edit_policy",
+    "title": "局部修改策略",
+    "content": "用户选中段落时，默认只修改选中段落。若影响前后文，需要解释影响范围并请求确认。",
+    "sourceType": "manual",
+    "sourceRef": "seed:local-edit-policy",
+    "themeTags": ["局部修改", "workflow"]
+  },
+  {
+    "id": "k_task_card_policy",
+    "title": "任务卡优先原则",
+    "content": "在正文写作前先确认任务卡。",
+    "sourceType": "manual",
+    "sourceRef": "seed:task-card-policy",
+    "themeTags": ["任务卡", "workflow"]
+  }
+]

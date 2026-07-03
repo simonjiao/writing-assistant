@@ -83,6 +83,23 @@ describe('TaskCardReviserSkill', () => {
     expect(output.changedFields).toContain('writingGoal');
   });
 
+  it('keeps modern commentary complaints as avoid constraints', async () => {
+    const skill = new TaskCardReviserSkill();
+    const output = await skill.invoke({
+      input: { articleId: 'art_1', instruction: '还有不可调和的产物，像是个现代评论。', currentTaskCard },
+      context: { memory: {} } as never,
+      llm: llmReturning({
+        taskCard: {
+          ...currentTaskCard,
+          constraints: { ...currentTaskCard.constraints, mustAvoid: [] },
+        },
+        summary: '已增加语言限制。',
+        changedFields: ['constraints.mustAvoid'],
+      }),
+    });
+    expect(output.taskCard.constraints.mustAvoid).toContain('现代评论腔和现代抽象词汇（如价值观、责任观、世界观、维度、机制、结构性、主体性、规训、不可调和的产物）');
+  });
+
   it('rejects incomplete revised task cards', async () => {
     const skill = new TaskCardReviserSkill();
     await expect(skill.invoke({

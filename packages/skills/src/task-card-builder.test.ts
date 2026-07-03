@@ -108,4 +108,28 @@ describe('TaskCardBuilderSkill', () => {
     expect(output.taskCard.constraints.mustAvoid).toContain('黛玉从不要求宝玉');
     expect(output.taskCard.constraints.sourcePolicy).toContain('以脂评本前八十回为主要依据');
   });
+
+  it('turns modern diction requests into explicit avoid constraints', async () => {
+    const skill = new TaskCardBuilderSkill();
+    const output = await skill.invoke({
+      input: { rawRequirement: '写一篇关于宝黛关系的文章，需要避免比较现代的词汇，尤其是哲学数学物理相关的，比如价值观、责任观、维度等。', userId: 'u1' },
+      context: { memory: {} } as never,
+      llm: llmReturning({
+        taskCard: {
+          topic: '宝黛关系',
+          writingGoal: '分析宝黛关系。',
+          audience: '普通中文读者',
+          scope: { editions: [], chapters: [], characters: [], themes: [] },
+          structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+          style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+          constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+          interactionMode: { askBeforeWriting: true, localEditFirst: true },
+        },
+        missingQuestions: [],
+        summary: '已生成任务卡。',
+        confidence: 0.8,
+      }),
+    });
+    expect(output.taskCard.constraints.mustAvoid).toContain('现代评论腔和现代抽象词汇（如价值观、责任观、世界观、维度、机制、结构性、主体性、规训、不可调和的产物）');
+  });
 });

@@ -1,4 +1,5 @@
 import { nowIso, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
+import { extractExplicitAvoidances } from './writing-constraints';
 
 export interface TaskCardReviserInput {
   articleId: string;
@@ -63,11 +64,11 @@ export class TaskCardReviserSkill implements Skill<TaskCardReviserInput, TaskCar
     });
     const parsed = safeJsonParse<Partial<TaskCardReviserOutput>>(response.content);
     if (!parsed?.taskCard) throw new Error(`Task card reviser did not return a valid taskCard: ${response.content.slice(0, 300)}`);
-    return normalizeOutput(parsed, input.currentTaskCard);
+    return normalizeOutput(parsed, input.currentTaskCard, instruction);
   }
 }
 
-function normalizeOutput(output: Partial<TaskCardReviserOutput>, current: WritingTaskCard): TaskCardReviserOutput {
+function normalizeOutput(output: Partial<TaskCardReviserOutput>, current: WritingTaskCard, instruction: string): TaskCardReviserOutput {
   const source = output.taskCard;
   if (!source) throw new Error('Task card reviser returned no taskCard.');
   const taskCard: WritingTaskCard = {
@@ -100,7 +101,7 @@ function normalizeOutput(output: Partial<TaskCardReviserOutput>, current: Writin
     constraints: {
       citationRequired: typeof source.constraints?.citationRequired === 'boolean' ? source.constraints.citationRequired : current.constraints.citationRequired,
       mustInclude: requireStringArray(source.constraints?.mustInclude, 'taskCard.constraints.mustInclude'),
-      mustAvoid: requireStringArray(source.constraints?.mustAvoid, 'taskCard.constraints.mustAvoid'),
+      mustAvoid: mergeStrings(requireStringArray(source.constraints?.mustAvoid, 'taskCard.constraints.mustAvoid'), extractExplicitAvoidances(instruction)),
       sourcePolicy: requireText(source.constraints?.sourcePolicy, 'taskCard.constraints.sourcePolicy'),
     },
     interactionMode: {
@@ -113,6 +114,10 @@ function normalizeOutput(output: Partial<TaskCardReviserOutput>, current: Writin
     summary: requireText(output.summary, 'summary'),
     changedFields: requireStringArray(output.changedFields, 'changedFields'),
   };
+}
+
+function mergeStrings(base: string[] = [], extra: string[] = []): string[] {
+  return [...new Set([...base, ...extra])];
 }
 
 function requireText(value: unknown, field: string): string {

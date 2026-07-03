@@ -1,4 +1,5 @@
 import { newId, nowIso, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
+import { extractExplicitAvoidances } from './writing-constraints';
 
 export interface TaskCardBuilderInput {
   rawRequirement: string;
@@ -223,7 +224,7 @@ function extractExplicitTaskHints(rawRequirement: string): ExplicitTaskHints {
   const emphasis = extractEmphasis(rawRequirement);
   const scope = extractScope(rawRequirement);
   const themes = mergeStrings(scope.themes, emphasis);
-  const mustAvoid = extractAvoidances(rawRequirement);
+  const mustAvoid = extractExplicitAvoidances(rawRequirement);
   return {
     topic,
     themes,
@@ -271,16 +272,6 @@ function sameText(a: string, b: string): boolean {
 function extractEmphasis(rawRequirement: string): string[] {
   const values: string[] = [];
   const pattern = /(?:重点(?:写|突出|呈现|强调)?|主要(?:写|表现|讨论)?|核心是|必须包含|要包含)([^，。,.!?！？；;]+)/g;
-  for (const match of rawRequirement.matchAll(pattern)) {
-    const value = cleanPhrase(match[1]);
-    if (value) values.push(value);
-  }
-  return [...new Set(values)];
-}
-
-function extractAvoidances(rawRequirement: string): string[] {
-  const values: string[] = [];
-  const pattern = /((?:不要|避免|不得|不宜)[^，。,.!?！？；;]+)/g;
   for (const match of rawRequirement.matchAll(pattern)) {
     const value = cleanPhrase(match[1]);
     if (value) values.push(value);

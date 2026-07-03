@@ -215,6 +215,33 @@ describe('SectionWriterSkill', () => {
     })).rejects.toThrow('avoided terms: 价值观');
   });
 
+  it('rejects modern commentary collocations when modern diction is constrained', async () => {
+    const skill = new SectionWriterSkill();
+    await expect(skill.invoke({
+      input: {
+        articleId: 'art_1',
+        section,
+        taskCard: {
+          ...taskCard,
+          constraints: {
+            ...taskCard.constraints,
+            mustAvoid: ['现代评论腔和现代抽象词汇（如价值观、责任观、维度）'],
+          },
+        },
+      },
+      context: context(),
+      llm: llmReturning({
+        block: {
+          text: '本段提出判断，却把父子之争写成不可调和的产物，口吻更像现代评论而非文章正文。',
+          sourceRefs: ['test:k1'],
+          themeTags: ['测试主题'],
+        },
+        candidateSources: ['test:k1'],
+        summary: '已生成正文。',
+      }),
+    })).rejects.toThrow('avoided terms: 不可调和的产物');
+  });
+
   it('rejects long copied source passages', async () => {
     const skill = new SectionWriterSkill();
     await expect(skill.invoke({

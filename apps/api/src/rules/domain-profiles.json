@@ -1,0 +1,111 @@
+[
+  {
+    "id": "hongloumeng-baodai",
+    "label": "红楼梦：宝黛关系",
+    "description": "适用于宝黛关系、精神相通、版本边界类写作。",
+    "recommendation": {
+      "includeAny": ["宝黛关系", "宝黛", "贾宝玉林黛玉", "宝玉黛玉", "精神相通", "木石前盟"],
+      "excludeAny": ["宝黛钗", "宝钗", "薛宝钗", "钗黛", "金玉良缘"]
+    },
+    "groups": [
+      {
+        "id": "edition",
+        "label": "版本",
+        "type": "single",
+        "options": [
+          {
+            "id": "zhiyanzhai",
+            "label": "脂评本",
+            "defaultSelected": true,
+            "apply": {
+              "editions": ["脂评本"],
+              "sourcePolicies": ["以脂评本前八十回为主要依据，后四十回内容默认不作为论据。"],
+              "mustAvoid": ["以后四十回情节作为主要论据"]
+            }
+          },
+          {
+            "id": "include-later-40",
+            "label": "包含后四十回",
+            "apply": {
+              "editions": ["通行本含后四十回"],
+              "sourcePolicies": ["可使用通行本后四十回，但需要标明版本边界。"]
+            }
+          }
+        ]
+      },
+      {
+        "id": "themes",
+        "label": "重点",
+        "type": "multi",
+        "options": [
+          {
+            "id": "wood-stone",
+            "label": "木石前盟",
+            "apply": {
+              "themes": ["木石前盟"],
+              "mustInclude": ["把木石前盟作为宝黛精神相通的神话根源处理，避免大段复述原文。"]
+            }
+          },
+          {
+            "id": "qinqing",
+            "label": "情不情 / 情情",
+            "apply": {
+              "themes": ["情不情", "情情"],
+              "mustInclude": ["区分宝玉的情不情与黛玉的情情，用于说明二人精神契合。"]
+            }
+          },
+          {
+            "id": "career-economy-boundary",
+            "label": "仕途经济边界",
+            "apply": {
+              "themes": ["仕途经济边界"],
+              "mustInclude": ["黛玉对宝玉有规劝，但这不等于认同仕途经济价值，也不是把她写成仕途经济代言人。"],
+              "mustAvoid": ["黛玉从不要求宝玉", "黛玉从不以世俗标准要求宝玉", "把黛玉写成仕途经济代言人", "反对仕途经济的共同体"]
+            }
+          },
+          {
+            "id": "zijuan-test",
+            "label": "紫鹃试玉",
+            "apply": {
+              "themes": ["紫鹃试玉"],
+              "mustInclude": ["用紫鹃试玉说明宝黛关系中的试探、确认与精神牵连。"]
+            }
+          }
+        ]
+      },
+      {
+        "id": "guardrails",
+        "label": "边界",
+        "type": "multi",
+        "options": [
+          {
+            "id": "avoid-anti-feudal-alliance",
+            "label": "不写反封建同盟",
+            "defaultSelected": true,
+            "apply": {
+              "mustAvoid": ["把宝黛关系写成简单的反封建同盟", "反叛的同盟", "反对封建礼教"]
+            }
+          },
+          {
+            "id": "avoid-retelling",
+            "label": "少复述情节",
+            "defaultSelected": true,
+            "apply": {
+              "mustAvoid": ["按故事发生顺序复述情节", "大段复述原文"],
+              "sourcePolicies": ["材料只能作为论据线索，正文应以分析和写作为主。"]
+            }
+          },
+          {
+            "id": "avoid-absolute-daiyu",
+            "label": "不绝对化黛玉",
+            "defaultSelected": true,
+            "apply": {
+              "mustInclude": ["保留黛玉有规劝但不等于认同功利价值的复杂性。"],
+              "mustAvoid": ["黛玉从不要求宝玉", "黛玉完全不要求宝玉", "黛玉没有要求宝玉"]
+            }
+          }
+        ]
+      }
+    ]
+  }
+]

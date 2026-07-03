@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { AgentEvent, ArticleArtifact, ArticleVersion, ArtifactStore, EventTraceStore, KnowledgeItem, KnowledgeStore, MemoryStore, newId, nowIso, Session, SessionStore, StateStore, TextPatch, UserWritingProfile, WorkspaceStore, WritingWorkspace, WorkflowRun } from '@wa/core';
+import knowledgeSeedRules from '../rules/knowledge-seeds.json';
 import { SqliteJsonDb } from './sqliteJsonDb';
 
 function dbPath(dataDir: string) { return join(dataDir, 'writing-assistant.sqlite'); }
@@ -59,7 +60,7 @@ export class SqliteKnowledgeStore implements KnowledgeStore {
   constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'knowledge'); }
   async search(query: string, options?: { limit?: number; themeTags?: string[] }) { await this.seedIfEmpty(); const items = await this.db.list(); const q = query.toLowerCase(); const scored = items.map((item) => { const haystack = `${item.title}\n${item.content}\n${item.themeTags.join(' ')}`.toLowerCase(); const tagScore = options?.themeTags?.some((tag) => item.themeTags.includes(tag)) ? 2 : 0; const textScore = q.split(/\s+/).filter(Boolean).reduce((score, token) => score + (haystack.includes(token) ? 1 : 0), 0); return { item, score: tagScore + textScore }; }).sort((a, b) => b.score - a.score); return scored.slice(0, options?.limit ?? 6).map((entry) => entry.item); }
   async listByRefs(sourceRefs: string[]) { await this.seedIfEmpty(); const refs = new Set(sourceRefs); return (await this.db.list()).filter((item) => refs.has(item.sourceRef)); }
-  private async seedIfEmpty() { if ((await this.db.list()).length > 0) return; const now = nowIso(); const seeds: KnowledgeItem[] = [{ id: 'k_red_mansion_relation', title: '红楼梦人物关系写作提示', content: '分析人物关系时，优先区分情节关系、精神关系、家族秩序与叙事功能。', sourceType: 'manual', sourceRef: 'seed:red-mansion-relation', themeTags: ['宝黛', '人物', '关系', '知己'], createdAt: now }, { id: 'k_local_edit_policy', title: '局部修改策略', content: '用户选中段落时，默认只修改选中段落。若影响前后文，需要解释影响范围并请求确认。', sourceType: 'manual', sourceRef: 'seed:local-edit-policy', themeTags: ['局部修改', 'workflow'], createdAt: now }, { id: 'k_task_card_policy', title: '任务卡优先原则', content: '在正文写作前先确认任务卡。', sourceType: 'manual', sourceRef: 'seed:task-card-policy', themeTags: ['任务卡', 'workflow'], createdAt: now }]; for (const item of seeds) await this.db.upsert(item); }
+  private async seedIfEmpty() { if ((await this.db.list()).length > 0) return; const now = nowIso(); const seeds = knowledgeSeedRules as Array<Omit<KnowledgeItem, 'createdAt'>>; for (const seed of seeds) await this.db.upsert({ ...seed, createdAt: now }); }
   close() { this.db.close(); }
 }
 
