@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { AgentEvent, ArticleArtifact, ArticleVersion, ArtifactStore, EventTraceStore, KnowledgeItem, KnowledgeStore, MemoryStore, newId, nowIso, Session, SessionStore, StateStore, TextPatch, UserWritingProfile, WorkflowRun } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleVersion, ArtifactStore, EventTraceStore, KnowledgeItem, KnowledgeStore, MemoryStore, newId, nowIso, Session, SessionStore, StateStore, TextPatch, UserWritingProfile, WorkspaceStore, WritingWorkspace, WorkflowRun } from '@wa/core';
 import { SqliteJsonDb } from './sqliteJsonDb';
 
 function dbPath(dataDir: string) { return join(dataDir, 'writing-assistant.sqlite'); }
@@ -31,13 +31,24 @@ export class SqliteMemoryStore implements MemoryStore {
   close() { this.db.close(); }
 }
 
+export class SqliteWorkspaceStore implements WorkspaceStore {
+  private readonly db: SqliteJsonDb<WritingWorkspace>;
+  constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'workspaces'); }
+  async createWorkspace(input: { id?: string; userId: string; name: string; isDefault?: boolean; memberUserIds?: string[] }) { const now = nowIso(); return this.db.upsert({ id: input.id ?? newId('wsp'), userId: input.userId, memberUserIds: [...new Set(input.memberUserIds ?? [])], name: input.name, isDefault: input.isDefault ?? false, createdAt: now, updatedAt: now }); }
+  async getWorkspace(workspaceId: string) { const workspace = await this.db.get(workspaceId); return workspace?.deletedAt ? undefined : workspace; }
+  async listWorkspaces(userId: string, options?: { includeDeleted?: boolean }) { return (await this.db.list()).filter((workspace) => (workspace.userId === userId || workspace.memberUserIds?.includes(userId)) && (options?.includeDeleted || !workspace.deletedAt)); }
+  updateWorkspace(workspace: WritingWorkspace) { return this.db.upsert({ ...workspace, updatedAt: nowIso() }); }
+  close() { this.db.close(); }
+}
+
 export class SqliteArtifactStore implements ArtifactStore {
   private readonly db: SqliteJsonDb<ArticleArtifact>;
   constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'artifacts'); }
-  async createArticle(input: { userId: string; title: string; taskCard?: ArticleArtifact['taskCard'] }) { const now = nowIso(); const article: ArticleArtifact = { id: newId('art'), userId: input.userId, title: input.title, taskCard: input.taskCard, outline: [], blocks: [], citations: [], themeTags: [], versions: [], createdAt: now, updatedAt: now }; await this.db.upsert(article); await this.commitVersion(article.id, '创建文章草稿', 'agent'); return (await this.getArticle(article.id)) as ArticleArtifact; }
-  getArticle(articleId: string) { return this.db.get(articleId); }
-  async listArticles(userId: string) { return (await this.db.list()).filter((article) => article.userId === userId); }
+  async createArticle(input: { userId: string; workspaceId: string; title: string; taskCard?: ArticleArtifact['taskCard'] }) { const now = nowIso(); const article: ArticleArtifact = { id: newId('art'), userId: input.userId, workspaceId: input.workspaceId, title: input.title, taskCard: input.taskCard, outline: [], blocks: [], citations: [], themeTags: [], versions: [], createdAt: now, updatedAt: now }; await this.db.upsert(article); await this.commitVersion(article.id, '创建文章草稿', 'agent'); return (await this.getArticle(article.id)) as ArticleArtifact; }
+  async getArticle(articleId: string) { const article = await this.db.get(articleId); return article?.deletedAt ? undefined : article; }
+  async listArticles(workspaceId: string, options?: { includeDeleted?: boolean }) { return (await this.db.list()).filter((article) => article.workspaceId === workspaceId && (options?.includeDeleted || !article.deletedAt)); }
   updateArticle(article: ArticleArtifact) { return this.db.upsert({ ...article, updatedAt: nowIso() }); }
+  async deleteArticle(articleId: string) { const article = await this.db.get(articleId); if (!article) throw new Error(`Article not found: ${articleId}`); const deleted = { ...article, deletedAt: article.deletedAt ?? nowIso(), updatedAt: nowIso() }; await this.db.upsert(deleted); return deleted; }
   async commitVersion(articleId: string, reason: string, author: ArticleVersion['author']) { const article = await this.getArticle(articleId); if (!article) throw new Error(`Article not found: ${articleId}`); const version: ArticleVersion = { id: newId('ver'), reason, author, snapshot: { taskCard: article.taskCard, outline: article.outline, blocks: article.blocks, citations: article.citations, themeTags: article.themeTags }, createdAt: nowIso() }; article.versions = [...article.versions, version]; article.updatedAt = nowIso(); await this.db.upsert(article); return version; }
   async applyPatch(patch: TextPatch) { const article = await this.getArticle(patch.articleId); if (!article) throw new Error(`Article not found: ${patch.articleId}`); article.blocks = article.blocks.map((block) => block.id === patch.blockId ? { ...block, text: patch.after, updatedAt: nowIso(), status: 'draft' } : block); article.updatedAt = nowIso(); await this.db.upsert(article); await this.commitVersion(article.id, `应用局部修改：${patch.instruction}`, 'agent'); return (await this.getArticle(article.id)) as ArticleArtifact; }
   close() { this.db.close(); }

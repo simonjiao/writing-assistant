@@ -18,6 +18,7 @@ import {
   SessionStore,
   SkillRegistry,
   StateStore,
+  WorkspaceStore,
   WorkflowDefinition,
   WorkflowEngine,
   WorkflowQueue,
@@ -27,7 +28,7 @@ import {
 } from '@wa/core';
 import { registerDefaultSkills } from '@wa/skills';
 import { AppConfig } from './config';
-import { SqliteArtifactStore, SqliteEventTraceStore, SqliteKnowledgeStore, SqliteMemoryStore, SqliteSessionStore, SqliteStateStore } from './stores/sqliteStores';
+import { SqliteArtifactStore, SqliteEventTraceStore, SqliteKnowledgeStore, SqliteMemoryStore, SqliteSessionStore, SqliteStateStore, SqliteWorkspaceStore } from './stores/sqliteStores';
 import { HttpRagKnowledgeStore } from './stores/httpRagKnowledgeStore';
 import { TonglingyuRetrieverKnowledgeStore } from './stores/tonglingyuRetrieverKnowledgeStore';
 import { RedisWorkflowQueue } from './queue/redisWorkflowQueue';
@@ -47,6 +48,7 @@ interface StoreBundle {
   stateStore: StateStore;
   sessionStore: SessionStore;
   memoryStore: MemoryStore;
+  workspaceStore: WorkspaceStore;
   artifactStore: ArtifactStore;
   localKnowledgeStore: KnowledgeStore;
   eventTraceStore: EventTraceStore;
@@ -58,7 +60,7 @@ export function createContainer(config: AppConfig): AppContainer {
   const eventBus: EventBus = new InMemoryEventBus();
   const eventTraceStore = new PublishingEventTraceStore(base.eventTraceStore, eventBus) as EventTraceStore;
   const knowledgeStore = createKnowledgeStore(config, base.localKnowledgeStore, eventTraceStore);
-  const stores: ExternalStores = { stateStore: base.stateStore, sessionStore: base.sessionStore, memoryStore: base.memoryStore, artifactStore: base.artifactStore, knowledgeStore, eventTraceStore };
+  const stores: ExternalStores = { stateStore: base.stateStore, sessionStore: base.sessionStore, memoryStore: base.memoryStore, workspaceStore: base.workspaceStore, artifactStore: base.artifactStore, knowledgeStore, eventTraceStore };
 
   const llm = config.llmProvider === 'openai-compatible' ? new OpenAICompatibleProvider({ baseURL: config.openaiBaseURL, apiKey: config.openaiApiKey, model: config.openaiModel }) : new MockLLMProvider();
   const skills = registerDefaultSkills(new SkillRegistry());
@@ -76,6 +78,7 @@ function createStores(config: AppConfig): StoreBundle {
   const stateStore = new SqliteStateStore(config.dataDir);
   const sessionStore = new SqliteSessionStore(config.dataDir);
   const memoryStore = new SqliteMemoryStore(config.dataDir);
+  const workspaceStore = new SqliteWorkspaceStore(config.dataDir);
   const artifactStore = new SqliteArtifactStore(config.dataDir);
   const localKnowledgeStore = new SqliteKnowledgeStore(config.dataDir);
   const eventTraceStore = new SqliteEventTraceStore(config.dataDir);
@@ -83,6 +86,7 @@ function createStores(config: AppConfig): StoreBundle {
     stateStore,
     sessionStore,
     memoryStore,
+    workspaceStore,
     artifactStore,
     localKnowledgeStore,
     eventTraceStore,
@@ -90,6 +94,7 @@ function createStores(config: AppConfig): StoreBundle {
       stateStore.close();
       sessionStore.close();
       memoryStore.close();
+      workspaceStore.close();
       artifactStore.close();
       localKnowledgeStore.close();
       eventTraceStore.close();
@@ -118,7 +123,7 @@ function registerWorkflows(engine: WorkflowEngine, deps: { artifactStore: Artifa
     id: 'task-card-workflow', name: '任务卡生成流程', description: '从模糊需求生成任务卡，创建文章草稿，并等待用户确认。', startNodeId: 'build-task-card',
     nodes: [
       { id: 'build-task-card', label: '生成任务卡草稿', kind: 'skill', skillId: 'task-card-builder', input: ({ run }) => run.input, outputKey: 'taskCardResult', next: 'create-draft-article' },
-      { id: 'create-draft-article', label: '创建文章草稿', kind: 'function', outputKey: 'draftArticle', handler: async ({ run }) => { const result = run.state.taskCardResult as { taskCard: { topic: string } }; const article = await deps.artifactStore.createArticle({ userId: run.metadata.userId, title: result.taskCard.topic, taskCard: result.taskCard as never }); if (run.metadata.sessionId) await deps.sessionStore.updateSession(run.metadata.sessionId, { currentArticleId: article.id, currentRunId: run.id }); await deps.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'artifact.updated', payload: { articleId: article.id, reason: 'task-card-draft-created', userId: run.metadata.userId }, createdAt: nowIso() }); return { articleId: article.id, taskCard: article.taskCard }; }, next: 'wait-task-card-confirm' },
+      { id: 'create-draft-article', label: '创建文章草稿', kind: 'function', outputKey: 'draftArticle', handler: async ({ run }) => { const result = run.state.taskCardResult as { taskCard: { topic: string } }; const input = run.input as { workspaceId?: string }; if (!input.workspaceId) throw new Error('workspaceId is required to create an article.'); const article = await deps.artifactStore.createArticle({ userId: run.metadata.userId, workspaceId: input.workspaceId, title: result.taskCard.topic, taskCard: result.taskCard as never }); if (run.metadata.sessionId) await deps.sessionStore.updateSession(run.metadata.sessionId, { currentArticleId: article.id, currentWorkspaceId: input.workspaceId, currentRunId: run.id }); await deps.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'artifact.updated', payload: { articleId: article.id, workspaceId: input.workspaceId, reason: 'task-card-draft-created', userId: run.metadata.userId }, createdAt: nowIso() }); return { articleId: article.id, workspaceId: input.workspaceId, taskCard: article.taskCard }; }, next: 'wait-task-card-confirm' },
       { id: 'wait-task-card-confirm', label: '等待用户确认任务卡', kind: 'wait', reason: '请确认或修改任务卡。', next: 'finalize-task-card' },
       { id: 'finalize-task-card', label: '确认任务卡', kind: 'function', outputKey: 'finalizedTaskCard', handler: async ({ run }) => { const draft = run.state.draftArticle as { articleId: string }; const response = (run.state['wait-task-card-confirmResponse'] ?? {}) as { taskCardPatch?: Record<string, unknown>; taskCard?: Record<string, unknown> }; const article = await deps.artifactStore.getArticle(draft.articleId); if (!article?.taskCard) throw new Error('Article task card not found.'); const patch = response.taskCard ?? response.taskCardPatch ?? {}; const mergedTaskCard = mergeDeep(article.taskCard as unknown as Record<string, unknown>, patch) as unknown as WritingTaskCard; mergedTaskCard.status = 'confirmed'; mergedTaskCard.updatedAt = nowIso(); article.taskCard = mergedTaskCard; await deps.artifactStore.updateArticle(article); await deps.artifactStore.commitVersion(article.id, '确认任务卡', 'user'); await deps.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'artifact.updated', payload: { articleId: article.id, reason: 'task-card-confirmed', userId: run.metadata.userId }, createdAt: nowIso() }); return { articleId: article.id, taskCard: article.taskCard }; }, next: END },
     ],

@@ -6,6 +6,7 @@ import {
   Session,
   TextPatch,
   UserWritingProfile,
+  WritingWorkspace,
   WorkflowRun,
 } from './types';
 
@@ -28,12 +29,20 @@ export interface MemoryStore {
 }
 
 export interface ArtifactStore {
-  createArticle(input: { userId: string; title: string; taskCard?: ArticleArtifact['taskCard'] }): Promise<ArticleArtifact>;
+  createArticle(input: { userId: string; workspaceId: string; title: string; taskCard?: ArticleArtifact['taskCard'] }): Promise<ArticleArtifact>;
   getArticle(articleId: string): Promise<ArticleArtifact | undefined>;
-  listArticles(userId: string): Promise<ArticleArtifact[]>;
+  listArticles(workspaceId: string, options?: { includeDeleted?: boolean }): Promise<ArticleArtifact[]>;
   updateArticle(article: ArticleArtifact): Promise<ArticleArtifact>;
+  deleteArticle(articleId: string): Promise<ArticleArtifact>;
   commitVersion(articleId: string, reason: string, author: ArticleVersion['author']): Promise<ArticleVersion>;
   applyPatch(patch: TextPatch): Promise<ArticleArtifact>;
+}
+
+export interface WorkspaceStore {
+  createWorkspace(input: { id?: string; userId: string; name: string; isDefault?: boolean; memberUserIds?: string[] }): Promise<WritingWorkspace>;
+  getWorkspace(workspaceId: string): Promise<WritingWorkspace | undefined>;
+  listWorkspaces(userId: string, options?: { includeDeleted?: boolean }): Promise<WritingWorkspace[]>;
+  updateWorkspace(workspace: WritingWorkspace): Promise<WritingWorkspace>;
 }
 
 export interface KnowledgeStore {
@@ -50,6 +59,7 @@ export interface ExternalStores {
   stateStore: StateStore;
   sessionStore: SessionStore;
   memoryStore: MemoryStore;
+  workspaceStore: WorkspaceStore;
   artifactStore: ArtifactStore;
   knowledgeStore: KnowledgeStore;
   eventTraceStore: EventTraceStore;

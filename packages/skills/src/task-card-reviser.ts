@@ -38,7 +38,12 @@ export class TaskCardReviserSkill implements Skill<TaskCardReviserInput, TaskCar
             '只返回一个合法 JSON object，字段为 taskCard、summary、changedFields。',
             '不要只返回局部 patch；不要省略未修改字段；不要输出 Markdown。',
             '没有被用户要求修改的字段应保持原意。',
+            '如果用户是在纠正错误观点，例如“不是”“并非”“不要写成”“不能说成”，必须把被否定的写法转入 taskCard.constraints.mustAvoid，并从 topic、writingGoal、scope.themes、constraints.mustInclude 中移除相冲突的表达。',
+            '纠偏时不要把一个错误极端改写成另一个绝对化极端；例如“不是反对仕途经济”不能改成“从不要求宝玉”或“没有要求”。',
+            '遇到复杂限定时，应在 writingGoal 或 constraints.mustInclude 中保留正向边界，例如“有规劝但不等于认同仕途经济价值”。',
             '所有面向用户展示的字段必须是自然语言；内部枚举只允许用于 structure.articleType。',
+            'structure.articleType 只能是 essay、analysis、commentary、speech、longform 之一。',
+            '如果用户只是要求缩短字数或改成短文，不要输出 shortform；保留或选择最贴切的 articleType，并把篇幅变化写入 structure.expectedLength。',
           ].join('\n'),
         },
         {
@@ -48,7 +53,7 @@ export class TaskCardReviserSkill implements Skill<TaskCardReviserInput, TaskCar
             currentTaskCard: input.currentTaskCard,
             userPreferences: context.memory,
             requiredOutputShape: {
-              taskCard: '完整 WritingTaskCard',
+              taskCard: '完整 WritingTaskCard；structure.articleType 只能是 essay | analysis | commentary | speech | longform',
               summary: 'string; 概括本次改动，必须非空',
               changedFields: 'string[]; 修改过的字段路径，没有则输出 []',
             },

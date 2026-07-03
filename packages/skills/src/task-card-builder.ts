@@ -4,6 +4,17 @@ export interface TaskCardBuilderInput {
   rawRequirement: string;
   userId: string;
   sessionId?: string;
+  domainContext?: TaskCardDomainContext;
+}
+
+export interface TaskCardDomainContext {
+  profileId: string;
+  label: string;
+  editions: string[];
+  themes: string[];
+  mustInclude: string[];
+  mustAvoid: string[];
+  sourcePolicies: string[];
 }
 
 export interface TaskCardBuilderOutput {
@@ -36,10 +47,12 @@ export class TaskCardBuilderSkill implements Skill<TaskCardBuilderInput, TaskCar
       'taskCard.writingGoal 必须概括用户要完成的写作目标，不能留空。',
       'style.register 和 style.tone 必须是具体的中文写作风格描述，不能留空。',
       'structure.articleType 只能使用 essay、analysis、commentary、speech、longform 这些内部枚举；structure.expectedLength 和 outlinePreference 必须使用中文。',
+      'domainContext 是用户从标准库显式选择的写作标准，优先级高于模型猜测；必须把其中的版本、主题、包含项、避免项和资料策略保留进任务卡。',
     ].join('\n');
 
     const user = JSON.stringify({
       rawRequirement,
+      domainContext: input.domainContext,
       userPreferences: context.memory,
       requiredOutputShape: {
         taskCard: {
@@ -90,11 +103,11 @@ export class TaskCardBuilderSkill implements Skill<TaskCardBuilderInput, TaskCar
     });
     const parsed = safeJsonParse<Partial<TaskCardBuilderOutput>>(response.content);
     if (!parsed?.taskCard) throw new Error(`Task card builder did not return a valid taskCard: ${response.content.slice(0, 300)}`);
-    return normalizeOutput(parsed, rawRequirement);
+    return normalizeOutput(parsed, rawRequirement, input.domainContext);
   }
 }
 
-function normalizeOutput(output: Partial<TaskCardBuilderOutput>, rawRequirement: string): TaskCardBuilderOutput {
+function normalizeOutput(output: Partial<TaskCardBuilderOutput>, rawRequirement: string, domainContext?: TaskCardDomainContext): TaskCardBuilderOutput {
   const explicit = extractExplicitTaskHints(rawRequirement);
   const now = nowIso();
   const source = output.taskCard;
@@ -109,10 +122,10 @@ function normalizeOutput(output: Partial<TaskCardBuilderOutput>, rawRequirement:
     createdAt: source.createdAt ?? now,
     updatedAt: now,
     scope: {
-      editions: nonEmptyStrings(source.scope?.editions),
+      editions: mergeStrings(domainContext?.editions, source.scope?.editions),
       chapters: nonEmptyStrings(source.scope?.chapters),
       characters: mergeStrings(explicit.characters, source.scope?.characters),
-      themes: mergeStrings(explicit.themes, source.scope?.themes),
+      themes: mergeStrings(mergeStrings(domainContext?.themes, explicit.themes), source.scope?.themes),
     },
     structure: {
       articleType: explicit.articleType === 'longform' ? 'longform' : requireArticleType(source.structure?.articleType),
@@ -127,9 +140,9 @@ function normalizeOutput(output: Partial<TaskCardBuilderOutput>, rawRequirement:
     },
     constraints: {
       citationRequired: explicit.citationRequired || (source.constraints?.citationRequired ?? false),
-      mustInclude: mergeStrings(explicit.mustInclude, source.constraints?.mustInclude),
-      mustAvoid: mergeStrings(explicit.mustAvoid, source.constraints?.mustAvoid),
-      sourcePolicy: requireText(source.constraints?.sourcePolicy, 'taskCard.constraints.sourcePolicy'),
+      mustInclude: mergeStrings(mergeStrings(domainContext?.mustInclude, explicit.mustInclude), source.constraints?.mustInclude),
+      mustAvoid: mergeStrings(mergeStrings(domainContext?.mustAvoid, explicit.mustAvoid), source.constraints?.mustAvoid),
+      sourcePolicy: mergeSourcePolicy(requireText(source.constraints?.sourcePolicy, 'taskCard.constraints.sourcePolicy'), domainContext?.sourcePolicies),
     },
     interactionMode: {
       askBeforeWriting: true,
@@ -160,6 +173,11 @@ function nonEmptyStrings(value: unknown, defaultValues: string[] = []): string[]
 
 function mergeStrings(base: string[] = [], extra: unknown): string[] {
   return [...new Set([...base, ...nonEmptyStrings(extra, [])])];
+}
+
+function mergeSourcePolicy(sourcePolicy: string, selectedPolicies: string[] = []): string {
+  const policies = [sourcePolicy, ...selectedPolicies].map((item) => item.trim()).filter(Boolean);
+  return [...new Set(policies)].join('；');
 }
 
 function isArticleType(value: unknown): value is WritingTaskCard['structure']['articleType'] {

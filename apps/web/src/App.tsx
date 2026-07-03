@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
-import { AgentEvent, ArticleArtifact, ArticleBlock, RunResponse, WritingTaskCard } from './types';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DomainProfileSelection, DomainProfileSummary, RunResponse, WritingTaskCard, WritingWorkspace } from './types';
 
 const userId = 'demo-user';
 const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']);
@@ -11,6 +11,15 @@ export function App() {
   const [sessionId, setSessionId] = useState<string>();
   const [requirement, setRequirement] = useState('写一篇关于《红楼梦》中宝黛关系的长文，半文半白，不要太学术，重点写精神相通。');
   const [article, setArticle] = useState<ArticleArtifact>();
+  const [articleSummaries, setArticleSummaries] = useState<ArticleSummary[]>([]);
+  const [workspaces, setWorkspaces] = useState<WritingWorkspace[]>([]);
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>();
+  const [newWorkspaceName, setNewWorkspaceName] = useState('');
+  const [newWorkspaceMembers, setNewWorkspaceMembers] = useState('');
+  const [workspaceModalOpen, setWorkspaceModalOpen] = useState(false);
+  const [domainProfiles, setDomainProfiles] = useState<DomainProfileSummary[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string>();
+  const [profileSelections, setProfileSelections] = useState<Record<string, string | string[]>>({});
   const [lastRun, setLastRun] = useState<RunResponse>();
   const [selectedBlockId, setSelectedBlockId] = useState<string>();
   const [patchInstruction, setPatchInstruction] = useState('这段写得更含蓄、更有红楼梦的味道，但不要改变意思。');
@@ -23,7 +32,32 @@ export function App() {
   const refreshTimer = useRef<number | undefined>(undefined);
   const activeRunId = useRef<string | undefined>(undefined);
 
-  useEffect(() => { api.createSession(userId).then((session) => setSessionId(session.id)).catch((err) => setError(String(err))); }, []);
+  async function refreshArticleSummaries(workspaceId = selectedWorkspaceId) {
+    if (!workspaceId) {
+      setArticleSummaries([]);
+      return;
+    }
+    const summaries = await api.listArticles(userId, workspaceId);
+    setArticleSummaries(summaries);
+  }
+
+  useEffect(() => {
+    void Promise.all([api.createSession(userId), api.listWorkspaces(userId), api.listDomainProfiles()])
+      .then(async ([session, workspaceList, profiles]) => {
+        setSessionId(session.id);
+        setWorkspaces(workspaceList);
+        const workspaceId = session.currentWorkspaceId ?? workspaceList[0]?.id;
+        setSelectedWorkspaceId(workspaceId);
+        if (workspaceId) setArticleSummaries(await api.listArticles(userId, workspaceId));
+        setDomainProfiles(profiles);
+        const firstProfile = profiles[0];
+        if (firstProfile) {
+          setSelectedProfileId(firstProfile.id);
+          setProfileSelections(defaultProfileSelections(firstProfile));
+        }
+      })
+      .catch((err) => setError(String(err)));
+  }, []);
   useEffect(() => {
     if (!lastRun?.run.id) return;
     const runId = lastRun.run.id;
@@ -35,17 +69,132 @@ export function App() {
   }, [lastRun?.run.id]);
 
   const selectedBlock = useMemo(() => article?.blocks.find((block) => block.id === selectedBlockId), [article, selectedBlockId]);
+  const selectedWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === selectedWorkspaceId), [selectedWorkspaceId, workspaces]);
+  const selectedProfile = useMemo(() => domainProfiles.find((profile) => profile.id === selectedProfileId), [domainProfiles, selectedProfileId]);
   const patchPreview = (lastRun?.run.state.patchResult as { patch?: { before: string; after: string; changeSummary: string[] } } | undefined)?.patch;
   const status = lastRun ? `${lastRun.run.workflowId} / ${lastRun.run.status}` : '就绪';
+  const canGenerateOutline = article?.taskCard?.status === 'confirmed';
+  const canDeleteWorkspace = Boolean(selectedWorkspace && !selectedWorkspace.isDefault && selectedWorkspace.userId === userId);
 
   function applyRunResponse(response: RunResponse) {
     setLastRun(response);
-    if (response.article) setArticle(response.article);
+    if (response.article) {
+      setArticle(response.article);
+      setSelectedWorkspaceId(response.article.workspaceId);
+      void refreshArticleSummaries(response.article.workspaceId).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    }
     if (terminalStatuses.has(response.run.status)) { setBusy(false); if (activeRunId.current === response.run.id) activeRunId.current = undefined; }
     else if (activeStatuses.has(response.run.status)) { activeRunId.current = response.run.id; scheduleRunRefresh(response.run.id, runRefreshIntervalMs); }
   }
   function scheduleRunRefresh(runId: string, delayMs = 200) { window.clearTimeout(refreshTimer.current); refreshTimer.current = window.setTimeout(() => { void api.getRun(runId).then((response) => { if (activeRunId.current && activeRunId.current !== runId) return; applyRunResponse(response); }).catch((err) => { setError(err instanceof Error ? err.message : String(err)); if (activeRunId.current === runId) scheduleRunRefresh(runId, 1000); }); }, delayMs); }
   async function execute(action: () => Promise<RunResponse>) { setBusy(true); setError(undefined); window.clearTimeout(refreshTimer.current); try { const response = await action(); activeRunId.current = response.run.id; applyRunResponse(response); return response; } catch (err) { setError(err instanceof Error ? err.message : String(err)); setBusy(false); activeRunId.current = undefined; } }
+  async function openArticle(articleId: string) {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const loaded = await api.getArticle(articleId, userId);
+      setArticle(loaded);
+      setSelectedWorkspaceId(loaded.workspaceId);
+      setLastRun(undefined);
+      setSelectedBlockId(undefined);
+      setLiveEvents([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function deleteArticle(articleId: string) {
+    const target = articleSummaries.find((item) => item.id === articleId);
+    if (!window.confirm(`删除任务「${target?.title ?? articleId}」？`)) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.deleteArticle(articleId, userId);
+      await refreshArticleSummaries();
+      if (article?.id === articleId) {
+        setArticle(undefined);
+        setLastRun(undefined);
+        setSelectedBlockId(undefined);
+        setLiveEvents([]);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  function currentDomainProfileSelection(): DomainProfileSelection | undefined {
+    return selectedProfile ? { id: selectedProfile.id, selections: profileSelections } : undefined;
+  }
+  function selectProfile(profileId: string) {
+    const profile = domainProfiles.find((item) => item.id === profileId);
+    setSelectedProfileId(profile?.id);
+    setProfileSelections(profile ? defaultProfileSelections(profile) : {});
+  }
+  function updateProfileGroup(groupId: string, value: string | string[]) {
+    setProfileSelections((current) => ({ ...current, [groupId]: value }));
+  }
+  async function selectWorkspace(workspaceId: string) {
+    setSelectedWorkspaceId(workspaceId);
+    setArticle(undefined);
+    setLastRun(undefined);
+    setSelectedBlockId(undefined);
+    setLiveEvents([]);
+    await refreshArticleSummaries(workspaceId);
+  }
+  async function createWorkspace() {
+    const name = newWorkspaceName.trim();
+    if (!name) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const workspace = await api.createWorkspace({ userId, name, memberUserIds: parseMemberUserIds(newWorkspaceMembers) });
+      const workspaceList = await api.listWorkspaces(userId);
+      setWorkspaces(workspaceList);
+      setSelectedWorkspaceId(workspace.id);
+      setNewWorkspaceName('');
+      setNewWorkspaceMembers('');
+      setWorkspaceModalOpen(false);
+      setArticle(undefined);
+      setLastRun(undefined);
+      setSelectedBlockId(undefined);
+      setLiveEvents([]);
+      setArticleSummaries([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function deleteWorkspace() {
+    if (!selectedWorkspace || !canDeleteWorkspace) return;
+    if (!window.confirm(`删除工作台「${selectedWorkspace.name}」？`)) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.deleteWorkspace(selectedWorkspace.id, userId);
+      const workspaceList = await api.listWorkspaces(userId);
+      const nextWorkspace = workspaceList.find((workspace) => workspace.isDefault) ?? workspaceList[0];
+      setWorkspaces(workspaceList);
+      setSelectedWorkspaceId(nextWorkspace?.id);
+      setArticle(undefined);
+      setLastRun(undefined);
+      setSelectedBlockId(undefined);
+      setLiveEvents([]);
+      if (nextWorkspace) await refreshArticleSummaries(nextWorkspace.id);
+      else setArticleSummaries([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  function openWorkspaceModal() {
+    setNewWorkspaceName('');
+    setNewWorkspaceMembers('');
+    setWorkspaceModalOpen(true);
+  }
   async function saveOutlineEdit() {
     if (!article || !editingOutline) return;
     setBusy(true);
@@ -54,6 +203,7 @@ export function App() {
       const updated = await api.updateOutlineItem(article.id, editingOutline.id, { title: editingOutline.title, goal: editingOutline.goal, userId });
       setArticle(updated);
       setEditingOutline(undefined);
+      await refreshArticleSummaries();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -69,6 +219,8 @@ export function App() {
       setArticle(response.article);
       setTaskCardRevisionSummary(response.summary);
       setTaskCardInstruction('');
+      if (response.article.taskCard?.status === 'confirmed') setLastRun(undefined);
+      await refreshArticleSummaries();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -82,16 +234,30 @@ export function App() {
       {error && <div className="error">{error}</div>}
       <main className="workspace">
         <aside className="panel task-panel">
+          <div className="workspace-head">
+            <h2>工作台</h2>
+            <div className="workspace-actions">
+              <button aria-label="新建工作台" className="icon-button" disabled={busy} title="新建工作台" onClick={openWorkspaceModal}>+</button>
+              <button aria-label="删除当前工作台" className="icon-button danger" disabled={busy || !canDeleteWorkspace} title={selectedWorkspace?.isDefault ? '默认工作台不可删除' : '删除当前工作台'} onClick={() => void deleteWorkspace()}>×</button>
+            </div>
+          </div>
+          <div className="workspace-controls">
+            <select value={selectedWorkspaceId ?? ''} disabled={busy || !workspaces.length} onChange={(event) => void selectWorkspace(event.target.value)}>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select>
+            {selectedWorkspace && <div className="workspace-meta">{selectedWorkspace.isDefault ? '默认工作台' : '自定义工作台'} · {selectedWorkspace.userId === userId ? '拥有者' : '协作者'} · {selectedWorkspace.memberUserIds.length} 个协作者</div>}
+          </div>
+          <h2>历史任务</h2>
+          <div className="history-list">{articleSummaries.length ? articleSummaries.map((item) => <div className={article?.id === item.id ? 'history-row active' : 'history-row'} key={item.id}><button className="history-item" disabled={busy} onClick={() => void openArticle(item.id)}><strong>{item.title}</strong><span>{taskStatusLabel(item.taskStatus)} · {item.outlineCount}纲 · {item.blockCount}节</span><span>{new Date(item.updatedAt).toLocaleString()}</span></button><button aria-label={`删除 ${item.title}`} className="history-delete" disabled={busy} title="删除任务" onClick={() => void deleteArticle(item.id)}>×</button></div>) : <div className="empty">当前工作台暂无历史任务。</div>}</div>
           <h2>任务卡</h2>
           {!article?.taskCard ? <div className="empty">尚未生成任务卡。</div> : <TaskCardView taskCard={article.taskCard} />}
           {article?.taskCard && <div className="task-card-reviser"><h3>修改任务卡</h3><textarea value={taskCardInstruction} onChange={(event) => setTaskCardInstruction(event.target.value)} placeholder="例如：字数改到 800 字，风格更自然，主题不要扩大。" /><button disabled={busy || !taskCardInstruction.trim()} onClick={() => void reviseTaskCard()}>更新任务卡</button>{taskCardRevisionSummary && <div className="revision-summary">{taskCardRevisionSummary}</div>}</div>}
           {lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-task-card-confirm' && <button disabled={busy} onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'confirm' }))}>确认任务卡</button>}
-          {article?.taskCard?.status === 'confirmed' && !article.outline.length && <button disabled={busy} onClick={() => execute(() => api.startOutline(article.id, userId, sessionId))}>生成大纲</button>}
+          {canGenerateOutline && <button disabled={busy} onClick={() => execute(() => api.startOutline(article.id, userId, sessionId))}>{article.outline.length ? '重新生成大纲' : '生成大纲'}</button>}
           {lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-outline-confirm' && <button disabled={busy} onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'confirm' }))}>确认大纲</button>}
         </aside>
         <section className="panel editor-panel">
           <h2>文章编辑区</h2>
-          <div className="input-row"><textarea value={requirement} onChange={(event) => setRequirement(event.target.value)} /><button disabled={busy || !requirement.trim()} onClick={() => execute(() => api.startTaskCard(requirement, userId, sessionId))}>生成任务卡</button></div>
+          <div className="input-row"><textarea value={requirement} onChange={(event) => setRequirement(event.target.value)} /><button disabled={busy || !requirement.trim() || !selectedWorkspaceId} onClick={() => execute(() => api.startTaskCard(requirement, userId, sessionId, selectedWorkspaceId, currentDomainProfileSelection()))}>生成任务卡</button></div>
+          {domainProfiles.length ? <DomainProfileControls profiles={domainProfiles} selectedProfileId={selectedProfileId} selections={profileSelections} onSelectProfile={selectProfile} onUpdateGroup={updateProfileGroup} /> : null}
           {article?.outline.length ? <div className="outline"><h3>大纲</h3>{article.outline.map((item) => {
             const isEditing = editingOutline?.id === item.id;
             return <div className="outline-item" key={item.id}>{isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div><strong>{item.title}</strong><p>{item.goal}</p><span>{outlineStatusLabel(item.status)}</span></div>}<div className="outline-actions">{isEditing ? <><button disabled={busy || !editingOutline.title.trim() || !editingOutline.goal.trim()} onClick={() => void saveOutlineEdit()}>保存</button><button disabled={busy} onClick={() => setEditingOutline(undefined)}>取消</button></> : <><button disabled={busy} onClick={() => setEditingOutline({ id: item.id, title: item.title, goal: item.goal })}>编辑</button><button disabled={busy} onClick={() => execute(() => api.startSection(article.id, item.id, userId, sessionId))}>生成本节</button></>}</div></div>;
@@ -106,10 +272,24 @@ export function App() {
         </aside>
       </main>
       <footer className="chatbar"><div className="patch-box"><strong>局部修改</strong><input value={patchInstruction} onChange={(event) => setPatchInstruction(event.target.value)} placeholder="选中段落后输入修改意见" /><button disabled={!article || !selectedBlockId || busy} onClick={() => article && selectedBlockId && execute(() => api.startPatch(article.id, selectedBlockId, patchInstruction, userId, sessionId))}>生成 Patch</button>{lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-patch-confirm' && <button onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'accept' }))}>应用 Patch</button>}</div>{patchPreview && <div className="patch-preview"><strong>Patch 预览</strong><div className="diff-grid"><pre>{patchPreview.before}</pre><pre>{patchPreview.after}</pre></div><ul>{patchPreview.changeSummary.map((item) => <li key={item}>{item}</li>)}</ul></div>}</footer>
+      {workspaceModalOpen && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="workspace-modal-title"><div className="modal-head"><h2 id="workspace-modal-title">新建工作台</h2><button aria-label="关闭" className="icon-button" disabled={busy} onClick={() => setWorkspaceModalOpen(false)}>×</button></div><div className="modal-body"><label>名称</label><input value={newWorkspaceName} autoFocus onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="新工作台名称" /><label>协作者</label><input value={newWorkspaceMembers} onChange={(event) => setNewWorkspaceMembers(event.target.value)} placeholder="协作者 userId，用逗号分隔" /></div><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setWorkspaceModalOpen(false)}>取消</button><button disabled={busy || !newWorkspaceName.trim()} onClick={() => void createWorkspace()}>创建</button></div></div></div>}
     </div>
   );
 }
 function ArticleBlockView(props: { block: ArticleBlock; selected: boolean; onSelect: () => void }) { return <article className={props.selected ? 'block selected' : 'block'} onClick={props.onSelect}><h3>{props.block.title}</h3><pre>{props.block.text}</pre></article>; }
+
+function DomainProfileControls(props: { profiles: DomainProfileSummary[]; selectedProfileId?: string; selections: Record<string, string | string[]>; onSelectProfile: (profileId: string) => void; onUpdateGroup: (groupId: string, value: string | string[]) => void }) {
+  const profile = props.profiles.find((item) => item.id === props.selectedProfileId);
+  return (
+    <div className="profile-controls">
+      <div className="profile-header"><strong>写作标准</strong><select value={props.selectedProfileId ?? ''} onChange={(event) => props.onSelectProfile(event.target.value)}>{props.profiles.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></div>
+      {profile?.groups.map((group) => <div className="profile-group" key={group.id}><span>{group.label}</span>{group.type === 'single' ? <select value={singleSelection(props.selections[group.id])} onChange={(event) => props.onUpdateGroup(group.id, event.target.value)}>{group.options.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select> : <div className="profile-options">{group.options.map((option) => {
+        const checked = multiSelection(props.selections[group.id]).includes(option.id);
+        return <label key={option.id}><input type="checkbox" checked={checked} onChange={(event) => props.onUpdateGroup(group.id, toggleSelection(multiSelection(props.selections[group.id]), option.id, event.target.checked))} />{option.label}</label>;
+      })}</div>}</div>)}
+    </div>
+  );
+}
 
 function TaskCardView(props: { taskCard: WritingTaskCard }) {
   const card = props.taskCard;
@@ -166,6 +346,36 @@ function outlineStatusLabel(value: string): string {
   return labels[value] ?? value;
 }
 
+function taskStatusLabel(value?: string): string {
+  const labels: Record<string, string> = { draft: '任务卡草稿', confirmed: '任务卡已确认' };
+  return value ? labels[value] ?? value : '未生成任务卡';
+}
+
 function joinList(items?: string[]): string {
   return (items ?? []).filter((item) => item.trim().length > 0).join('、');
+}
+
+function defaultProfileSelections(profile: DomainProfileSummary): Record<string, string | string[]> {
+  return Object.fromEntries(profile.groups.map((group) => {
+    const defaults = group.options.filter((option) => option.defaultSelected).map((option) => option.id);
+    if (group.type === 'single') return [group.id, defaults[0] ?? group.options[0]?.id ?? ''];
+    return [group.id, defaults];
+  }));
+}
+
+function singleSelection(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value[0] ?? '' : value ?? '';
+}
+
+function multiSelection(value: string | string[] | undefined): string[] {
+  if (Array.isArray(value)) return value;
+  return value ? [value] : [];
+}
+
+function toggleSelection(values: string[], value: string, checked: boolean): string[] {
+  return checked ? [...new Set([...values, value])] : values.filter((item) => item !== value);
+}
+
+function parseMemberUserIds(value: string): string[] {
+  return [...new Set(value.split(/[,\s，、]+/).map((item) => item.trim()).filter(Boolean))];
 }

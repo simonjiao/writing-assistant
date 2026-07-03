@@ -55,6 +55,11 @@ describe('OutlinePlannerSkill', () => {
     const user = JSON.parse(calls[0].messages.find((message) => message.role === 'user')?.content ?? '{}') as { requiredOutputShape?: { outline?: Array<{ sourceHints?: string }> } };
     expect(system).toContain('不要按原文出场顺序');
     expect(system).toContain('优先按问题、论点、对照关系、概念层次');
+    expect(system).toContain('JSON 字符串内不能直接嵌套英文双引号');
+    expect(system).toContain('必须遵守 taskCard.constraints.mustAvoid');
+    expect(system).toContain('不要把 mustAvoid 中的内容改写成章节标题、章节目标、themeTags 或主体论点');
+    expect(system).toContain('不要用“从不”“没有要求”“完全不要求”等绝对化表述');
+    expect(system).toContain('有规劝但不等于认同某种功利价值');
     expect(user.requiredOutputShape?.outline?.[0]?.sourceHints).toContain('原文顺序节点');
   });
 

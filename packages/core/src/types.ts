@@ -88,6 +88,7 @@ export interface ArticleVersion {
 export interface ArticleArtifact {
   id: string;
   userId: string;
+  workspaceId: string;
   title: string;
   taskCard?: WritingTaskCard;
   outline: OutlineItem[];
@@ -97,6 +98,18 @@ export interface ArticleArtifact {
   versions: ArticleVersion[];
   createdAt: string;
   updatedAt: string;
+  deletedAt?: string;
+}
+
+export interface WritingWorkspace {
+  id: string;
+  userId: string;
+  memberUserIds: string[];
+  name: string;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
 }
 
 export interface TextPatch {
@@ -118,6 +131,7 @@ export interface Session {
   currentArticleId?: string;
   currentBlockId?: string;
   currentRunId?: string;
+  currentWorkspaceId?: string;
   panelScope: 'article' | 'section' | 'paragraph';
   createdAt: string;
   updatedAt: string;

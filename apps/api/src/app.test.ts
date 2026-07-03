@@ -85,6 +85,7 @@ describe('api app', () => {
     const body = response.json();
     expect(body.run.status).toBe('waiting');
     expect(body.article.taskCard.topic).toContain('宝黛');
+    expect(body.article.workspaceId).toBe('wsp_default_test-user');
     await app.close();
   });
 
@@ -107,6 +108,124 @@ describe('api app', () => {
     const response = await app.inject({ method: 'POST', url: '/api/sessions', payload: { userId: 'persistent-user' } });
     expect(response.statusCode).toBe(200);
     expect(response.json().userId).toBe('persistent-user');
+    expect(response.json().currentWorkspaceId).toBe('wsp_default_persistent-user');
+    await app.close();
+  });
+
+  it('creates a default workspace and shares workspace articles with members', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const defaultResponse = await app.inject({ method: 'GET', url: '/api/workspaces?userId=owner-user' });
+    expect(defaultResponse.statusCode).toBe(200);
+    expect(defaultResponse.json()[0]).toMatchObject({ id: 'wsp_default_owner-user', isDefault: true });
+    const workspaceResponse = await app.inject({ method: 'POST', url: '/api/workspaces', payload: { userId: 'owner-user', name: '共享写作', memberUserIds: ['member-user'] } });
+    expect(workspaceResponse.statusCode).toBe(201);
+    const workspace = workspaceResponse.json();
+    const article = await container.stores.artifactStore.createArticle({ userId: 'owner-user', workspaceId: workspace.id, title: '共享任务' });
+    const memberListResponse = await app.inject({ method: 'GET', url: `/api/articles?userId=member-user&workspaceId=${workspace.id}&view=summary` });
+    expect(memberListResponse.statusCode).toBe(200);
+    expect(memberListResponse.json()).toMatchObject([{ id: article.id, title: '共享任务', workspaceId: workspace.id }]);
+    const outsiderResponse = await app.inject({ method: 'GET', url: `/api/articles?userId=other-user&workspaceId=${workspace.id}&view=summary` });
+    expect(outsiderResponse.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it('soft deletes custom workspaces by owner only', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const defaultResponse = await app.inject({ method: 'GET', url: '/api/workspaces?userId=workspace-owner' });
+    const defaultWorkspace = defaultResponse.json()[0];
+    const workspaceResponse = await app.inject({ method: 'POST', url: '/api/workspaces', payload: { userId: 'workspace-owner', name: '可删除工作台', memberUserIds: ['workspace-member'] } });
+    const workspace = workspaceResponse.json();
+    const memberDelete = await app.inject({ method: 'DELETE', url: `/api/workspaces/${workspace.id}`, payload: { userId: 'workspace-member' } });
+    expect(memberDelete.statusCode).toBe(403);
+    const defaultDelete = await app.inject({ method: 'DELETE', url: `/api/workspaces/${defaultWorkspace.id}`, payload: { userId: 'workspace-owner' } });
+    expect(defaultDelete.statusCode).toBe(400);
+    const ownerDelete = await app.inject({ method: 'DELETE', url: `/api/workspaces/${workspace.id}`, payload: { userId: 'workspace-owner' } });
+    expect(ownerDelete.statusCode).toBe(200);
+    expect(ownerDelete.json().deletedAt).toBeTruthy();
+    const listResponse = await app.inject({ method: 'GET', url: '/api/workspaces?userId=workspace-owner' });
+    expect(listResponse.json().map((item: { id: string }) => item.id)).not.toContain(workspace.id);
+    await app.close();
+  });
+
+  it('lists article summaries without full article payloads', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'summary-user', name: '摘要工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'summary-user', workspaceId: workspace.id, title: '摘要测试' });
+    article.outline = [{ id: 'sec-1', title: '标题', goal: '目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'draft' }];
+    await container.stores.artifactStore.updateArticle(article);
+    const response = await app.inject({ method: 'GET', url: `/api/articles?userId=summary-user&workspaceId=${workspace.id}&view=summary` });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body).toHaveLength(1);
+    expect(body[0]).toMatchObject({ id: article.id, title: '摘要测试', outlineCount: 1, blockCount: 0 });
+    expect(body[0].taskCard).toBeUndefined();
+    expect(body[0].outline).toBeUndefined();
+    await app.close();
+  });
+
+  it('soft deletes articles and hides them from normal lists', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'delete-user', name: '删除工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'delete-user', workspaceId: workspace.id, title: '待删除任务' });
+    const deleteResponse = await app.inject({ method: 'DELETE', url: `/api/articles/${article.id}`, payload: { userId: 'delete-user' } });
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(deleteResponse.json().deletedAt).toBeTruthy();
+    const hiddenResponse = await app.inject({ method: 'GET', url: `/api/articles/${article.id}?userId=delete-user` });
+    expect(hiddenResponse.statusCode).toBe(404);
+    const summaryResponse = await app.inject({ method: 'GET', url: `/api/articles?userId=delete-user&workspaceId=${workspace.id}&view=summary` });
+    expect(summaryResponse.json()).toHaveLength(0);
+    const deletedSummaryResponse = await app.inject({ method: 'GET', url: `/api/articles?userId=delete-user&workspaceId=${workspace.id}&view=summary&includeDeleted=true` });
+    expect(deletedSummaryResponse.json()[0].deletedAt).toBeTruthy();
+    await app.close();
+  });
+
+  it('exposes only public domain profile metadata', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const response = await app.inject({ method: 'GET', url: '/api/domain-profiles' });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body[0].id).toBe('hongloumeng-baodai');
+    expect(body[0].groups[0].options[0]).toMatchObject({ id: 'zhiyanzhai', label: '脂评本' });
+    expect(JSON.stringify(body)).not.toContain('黛玉从不要求宝玉');
+    await app.close();
+  });
+
+  it('resolves selected domain profile ids into task card constraints', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/workflows/task-card/start',
+      payload: {
+        userId: 'profile-user',
+        rawRequirement: '写一篇关于宝黛精神相通的文章。',
+        domainProfile: {
+          id: 'hongloumeng-baodai',
+          selections: {
+            edition: 'zhiyanzhai',
+            themes: ['career-economy-boundary'],
+            guardrails: ['avoid-absolute-daiyu'],
+          },
+        },
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.article.taskCard.scope.editions).toContain('脂评本');
+    expect(body.article.taskCard.scope.themes).toContain('仕途经济边界');
+    expect(body.article.taskCard.constraints.mustInclude.join('\n')).toContain('有规劝');
+    expect(body.article.taskCard.constraints.mustAvoid).toContain('黛玉从不要求宝玉');
     await app.close();
   });
 
@@ -114,7 +233,8 @@ describe('api app', () => {
     const config = testConfig();
     const container = createContainer(config);
     const app = createApp(config, container);
-    const article = await container.stores.artifactStore.createArticle({ userId: 'outline-user', title: '测试文章' });
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'outline-user', name: '大纲工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'outline-user', workspaceId: workspace.id, title: '测试文章' });
     article.outline = [{ id: 'sec-1', title: '旧标题', goal: '旧目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }];
     await container.stores.artifactStore.updateArticle(article);
     const response = await app.inject({ method: 'PATCH', url: `/api/articles/${article.id}/outline/sec-1`, payload: { title: '新标题', goal: '新目标', userId: 'outline-user' } });
@@ -145,7 +265,8 @@ describe('api app', () => {
       createdAt: now,
       updatedAt: now,
     };
-    const article = await container.stores.artifactStore.createArticle({ userId: 'task-card-user', title: taskCard.topic, taskCard });
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'task-card-user', name: '任务卡工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'task-card-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
     const response = await app.inject({ method: 'POST', url: `/api/articles/${article.id}/task-card/revise`, payload: { instruction: '主题改为新主题，目标更偏论证。', userId: 'task-card-user' } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
@@ -154,6 +275,38 @@ describe('api app', () => {
     expect(body.article.taskCard.status).toBe('draft');
     expect(body.changedFields).toContain('topic');
     expect(body.article.versions[body.article.versions.length - 1].reason).toContain('修订任务卡');
+    await app.close();
+  });
+
+  it('regenerates an outline when an article already has one', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-regen',
+      topic: '更新后的主题',
+      writingGoal: '按更新后的任务卡重新规划文章。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: [], themes: ['更新后的主题'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'outline-user', name: '重建大纲工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'outline-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    article.outline = [{ id: 'old-sec', title: '旧大纲', goal: '旧目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: ['旧主题'], status: 'confirmed' }];
+    await container.stores.artifactStore.updateArticle(article);
+    const response = await app.inject({ method: 'POST', url: '/api/workflows/outline/start', payload: { articleId: article.id, userId: 'outline-user' } });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.run.status).toBe('waiting');
+    expect(body.article.outline.map((item: { id: string }) => item.id)).not.toContain('old-sec');
+    expect(body.article.outline[0].goal).toContain('更新后的主题');
     await app.close();
   });
 

@@ -24,7 +24,42 @@ function llmReturning(content: unknown) {
   };
 }
 
+function capturingLlm(content: unknown, calls: Array<{ messages: Array<{ role: string; content: string }> }>) {
+  return {
+    async chat(request: { messages: Array<{ role: string; content: string }> }) {
+      calls.push({ messages: request.messages });
+      return { content: JSON.stringify(content) };
+    },
+    async json<T>() { return {} as T; },
+  };
+}
+
 describe('TaskCardReviserSkill', () => {
+  it('constrains articleType to the supported enum', async () => {
+    const skill = new TaskCardReviserSkill();
+    const calls: Array<{ messages: Array<{ role: string; content: string }> }> = [];
+    await skill.invoke({
+      input: { articleId: 'art_1', instruction: '字数改到 900 字。', currentTaskCard },
+      context: { memory: {} } as never,
+      llm: capturingLlm({
+        taskCard: {
+          ...currentTaskCard,
+          structure: { ...currentTaskCard.structure, expectedLength: '900字' },
+        },
+        summary: '已修改字数。',
+        changedFields: ['structure.expectedLength'],
+      }, calls),
+    });
+    const system = calls[0].messages.find((message) => message.role === 'system')?.content ?? '';
+    const user = JSON.parse(calls[0].messages.find((message) => message.role === 'user')?.content ?? '{}') as { requiredOutputShape?: { taskCard?: string } };
+    expect(system).toContain('必须把被否定的写法转入 taskCard.constraints.mustAvoid');
+    expect(system).toContain('不能改成“从不要求宝玉”或“没有要求”');
+    expect(system).toContain('有规劝但不等于认同仕途经济价值');
+    expect(system).toContain('只能是 essay、analysis、commentary、speech、longform');
+    expect(system).toContain('不要输出 shortform');
+    expect(user.requiredOutputShape?.taskCard).toContain('essay | analysis | commentary | speech | longform');
+  });
+
   it('revises the task card from a natural language instruction', async () => {
     const skill = new TaskCardReviserSkill();
     const output = await skill.invoke({

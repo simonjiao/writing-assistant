@@ -15,7 +15,7 @@ button {
   cursor: pointer;
 }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
-textarea, input {
+textarea, input, select {
   width: 100%;
   border: 1px solid #d5d0c6;
   border-radius: 10px;
@@ -55,6 +55,74 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   overflow: auto;
 }
 .panel h2 { margin: 0 0 12px; }
+.workspace-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.workspace-head h2 { margin: 0; }
+.workspace-actions { display: flex; gap: 6px; }
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #d9d1c4;
+  border-radius: 50%;
+  background: #f7f1e8;
+  color: #18202a;
+  font-size: 18px;
+  line-height: 1;
+}
+.icon-button:hover { background: #ede7dc; }
+.icon-button.danger { color: #7f1d1d; }
+.icon-button.danger:hover { background: #fee2e2; }
+.workspace-controls {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #e7e0d5;
+}
+.workspace-meta {
+  color: #6f665b;
+  font-size: 12px;
+}
+.history-list { display: grid; gap: 8px; margin-bottom: 18px; }
+.history-row {
+  position: relative;
+}
+.history-row.active { outline: 2px solid #1f2937; border-radius: 12px; }
+.history-item {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  text-align: left;
+  color: #18202a;
+  background: #f7f1e8;
+  border: 1px solid #e7e0d5;
+  padding-right: 36px;
+}
+.history-item span { font-size: 12px; color: #6f665b; }
+.history-delete {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #7f1d1d;
+  font-size: 18px;
+  line-height: 1;
+}
+.history-delete:hover { background: #fee2e2; }
 .task-card label { display: block; margin-top: 12px; color: #7c7266; font-size: 12px; }
 .task-card div { margin-top: 4px; }
 .task-card-reviser {
@@ -69,6 +137,21 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .revision-summary { color: #4d5966; font-size: 13px; }
 .empty { color: #8a8176; font-size: 14px; }
 .input-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: start; }
+.profile-controls {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #e7e0d5;
+  border-radius: 12px;
+  background: #fffaf1;
+}
+.profile-header { display: grid; grid-template-columns: auto minmax(180px, 280px); gap: 10px; align-items: center; }
+.profile-group { display: grid; grid-template-columns: 86px 1fr; gap: 10px; align-items: start; }
+.profile-group > span { color: #6f665b; font-size: 13px; padding-top: 9px; }
+.profile-options { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.profile-options label { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
+.profile-options input { width: auto; }
 .outline { margin-top: 18px; }
 .outline-item {
   display: grid;
@@ -122,3 +205,47 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .diff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
 .diff-grid pre { max-height: 220px; overflow: auto; padding: 10px; background: #f6f1e8; border-radius: 10px; }
 .event-list { display: grid; gap: 6px; margin-top: 8px; }
+.secondary-button {
+  background: #ede7dc;
+  color: #18202a;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(24, 32, 42, 0.32);
+}
+.modal {
+  width: min(440px, 100%);
+  border: 1px solid #ded8cd;
+  border-radius: 16px;
+  background: #fffdf8;
+  box-shadow: 0 24px 70px rgba(24, 32, 42, 0.22);
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e7e0d5;
+}
+.modal-head h2 { margin: 0; font-size: 18px; }
+.modal-body {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+}
+.modal-body label {
+  color: #6f665b;
+  font-size: 13px;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 16px 16px;
+}
