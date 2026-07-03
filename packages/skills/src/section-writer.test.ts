@@ -188,6 +188,33 @@ describe('SectionWriterSkill', () => {
     })).rejects.toThrow('exceeded current section length budget');
   });
 
+  it('rejects prose that uses task card avoided terms from example lists', async () => {
+    const skill = new SectionWriterSkill();
+    await expect(skill.invoke({
+      input: {
+        articleId: 'art_1',
+        section,
+        taskCard: {
+          ...taskCard,
+          constraints: {
+            ...taskCard.constraints,
+            mustAvoid: ['现代哲学词汇（如价值观、责任观）'],
+          },
+        },
+      },
+      context: context(),
+      llm: llmReturning({
+        block: {
+          text: '本段提出判断，但仍然把问题写成价值观冲突，因此没有遵守任务卡中的词汇限制。',
+          sourceRefs: ['test:k1'],
+          themeTags: ['测试主题'],
+        },
+        candidateSources: ['test:k1'],
+        summary: '已生成正文。',
+      }),
+    })).rejects.toThrow('avoided terms: 价值观');
+  });
+
   it('rejects long copied source passages', async () => {
     const skill = new SectionWriterSkill();
     await expect(skill.invoke({

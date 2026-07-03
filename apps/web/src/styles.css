@@ -217,9 +217,13 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   line-height: 1.4;
 }
 .task-card-panel {
+  position: sticky;
+  top: 70px;
+  align-self: start;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-height: calc(100vh - 84px);
 }
 .task-card-reviser {
   display: grid;
@@ -362,6 +366,53 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .section-paragraph.collapsed .paragraph-head {
   margin-bottom: 0;
 }
+.generation-progress {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #e0d8cb;
+  border-radius: 12px;
+  background: #f7f1e8;
+}
+.generation-progress.done {
+  border-color: #b7d3bf;
+  background: #f1f8f2;
+}
+.generation-progress.failed {
+  border-color: #e8b4b4;
+  background: #fff1f1;
+}
+.generation-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+.generation-progress-head strong {
+  font-size: 14px;
+}
+.generation-progress-head span {
+  color: #6f665b;
+  font-size: 12px;
+  text-align: right;
+}
+.generation-progress-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e8dfd2;
+}
+.generation-progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #4f6f52;
+  transition: width 220ms ease;
+}
+.generation-progress.failed .generation-progress-bar span {
+  background: #b91c1c;
+}
 .section-paragraph pre,
 .block pre {
   color: #2f2a22;
@@ -430,13 +481,21 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   font-size: 12px;
 }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.versions { display: grid; gap: 8px; }
+.versions {
+  display: grid;
+  gap: 8px;
+}
 .version-item {
   display: grid;
-  gap: 2px;
-  padding: 8px;
-  border-radius: 10px;
-  background: #f7f1e8;
+  gap: 4px;
+  padding: 8px 10px 8px 12px;
+  border-left: 3px solid #d8c8aa;
+  background: #fffdf8;
+}
+.version-item strong {
+  color: #2f2a22;
+  font-size: 13px;
+  line-height: 1.4;
 }
 .version-item span { font-size: 12px; color: #7c7266; }
 .chatbar {
@@ -448,7 +507,21 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .patch-preview { margin-top: 10px; border: 1px solid #e4ddd3; border-radius: 14px; padding: 12px; }
 .diff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
 .diff-grid pre { max-height: 220px; overflow: auto; padding: 10px; background: #f6f1e8; border-radius: 10px; }
-.event-list { display: grid; gap: 6px; margin-top: 8px; }
+.event-list,
+.progress-timeline { display: grid; gap: 6px; margin-top: 8px; }
+.progress-item {
+  display: grid;
+  gap: 2px;
+  padding: 7px 0 7px 10px;
+  border-left: 2px solid #d8c8aa;
+}
+.progress-item strong {
+  font-size: 13px;
+}
+.progress-item span {
+  color: #7c7266;
+  font-size: 12px;
+}
 .secondary-button {
   background: #ede7dc;
   color: #18202a;

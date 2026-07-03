@@ -53,6 +53,7 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
             '每个自然段优先给出判断句，再解释这个判断，再用少量材料作证，最后回到本节论点。',
             '如果大纲或资料带有复述倾向，先把它转化为分析问题，再写成观点驱动的正文。',
             '本次只写当前章节，不写整篇文章；必须遵守 writingBudget 的当前章节字数范围。',
+            '必须遵守 taskCard.constraints.mustAvoid；不得使用其中明示的禁用词、禁用说法，以及括号中“如/例如/比如”列出的词。',
           ].join('\n'),
         },
         {
@@ -114,6 +115,7 @@ function normalizeOutput(output: SectionWriterRawOutput, input: SectionWriterInp
   });
   const combinedText = blocks.map((block) => block.text).join('\n\n');
   validateLengthBudget(combinedText, writingBudget);
+  validateAvoidedTerms(combinedText, input.taskCard.constraints.mustAvoid);
   validateSourceUse(combinedText, knowledge);
   const block = blocks[0];
   return {
@@ -177,6 +179,14 @@ function validateLengthBudget(text: string, writingBudget: SectionWritingBudget)
   }
 }
 
+function validateAvoidedTerms(text: string, mustAvoid: string[]): void {
+  const normalizedText = normalizeForTermMatch(text);
+  const hits = extractAvoidedTerms(mustAvoid).filter((term) => normalizedText.includes(normalizeForTermMatch(term)));
+  if (hits.length) {
+    throw new Error(`Section writer used avoided terms: ${[...new Set(hits)].join('、')}.`);
+  }
+}
+
 function validateSourceUse(text: string, knowledge: KnowledgeItem[]): void {
   validateQuoteBalance(text);
   const normalizedText = normalizeForOverlap(text);
@@ -188,6 +198,35 @@ function validateSourceUse(text: string, knowledge: KnowledgeItem[]): void {
       throw new Error(`Section writer reused too much source text from ${item.sourceRef}.`);
     }
   }
+}
+
+function extractAvoidedTerms(mustAvoid: string[]): string[] {
+  return mustAvoid.flatMap((item) => {
+    const text = item.trim();
+    const quoted = [...text.matchAll(/[“"「『]([^”"」』]+)[”"」』]/g)].map((match) => match[1]);
+    const parentheticalExamples = [...text.matchAll(/[（(]([^）)]+)[）)]/g)]
+      .flatMap((match) => extractExampleList(match[1]));
+    const direct = text.includes('（') || text.includes('(') ? [] : [stripAvoidancePrefix(text)];
+    return [...direct, ...quoted, ...parentheticalExamples].map(cleanAvoidedTerm).filter((term) => term.length > 1);
+  });
+}
+
+function extractExampleList(value: string): string[] {
+  const example = value.replace(/^(?:如|例如|比如)\s*/, '');
+  if (example === value) return [];
+  return example.split(/[、,，/／;；\s]+/);
+}
+
+function stripAvoidancePrefix(value: string): string {
+  return value.replace(/^(?:不要|避免|不得|不宜|不能|禁止)(?:使用|出现|写成|写作|写)?/, '');
+}
+
+function cleanAvoidedTerm(value: string): string {
+  return value.replace(/等.*$/, '').replace(/^["“「『\s]+|["”」』\s]+$/g, '').trim();
+}
+
+function normalizeForTermMatch(value: string): string {
+  return value.replace(/\s+/g, '').toLowerCase();
 }
 
 function validateQuoteBalance(text: string): void {

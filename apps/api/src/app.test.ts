@@ -324,6 +324,38 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('records section revisions with readable section titles', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-section-log',
+      topic: '章节日志测试',
+      writingGoal: '测试章节生成日志。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: [], themes: ['章节日志'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'section-log-user', name: '章节日志工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'section-log-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    article.outline = [{ id: 'sec-readable-log', title: '可读章节标题', goal: '写出章节正文。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: ['章节日志'], status: 'confirmed' }];
+    await container.stores.artifactStore.updateArticle(article);
+    const response = await app.inject({ method: 'POST', url: '/api/workflows/section/start', payload: { articleId: article.id, sectionId: 'sec-readable-log', userId: 'section-log-user' } });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const reason = body.article.versions[body.article.versions.length - 1].reason;
+    expect(reason).toBe('生成章节正文：可读章节标题');
+    expect(reason).not.toContain('sec-readable-log');
+    await app.close();
+  });
+
   it('queries an HTTP RAG provider through the knowledge API', async () => {
     const rag = await startRagServer();
     const config = testConfig({ ragProvider: 'http', ragBaseURL: rag.baseURL });
