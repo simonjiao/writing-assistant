@@ -1,7 +1,8 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply } from 'fastify';
-import { AgentEvent, EventSubscriptionFilter, Unsubscribe } from '@wa/core';
+import { AgentEvent, EventSubscriptionFilter, newId, nowIso, Unsubscribe, WritingTaskCard } from '@wa/core';
+import type { TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
 
@@ -19,6 +20,44 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.post('/api/sessions', async (request) => { const body = request.body as { userId?: string }; return container.stores.sessionStore.createSession(body.userId ?? 'demo-user'); });
   app.get('/api/articles', async (request) => { const query = request.query as { userId?: string }; return container.stores.artifactStore.listArticles(query.userId ?? 'demo-user'); });
   app.get('/api/articles/:articleId', async (request, reply) => { const { articleId } = request.params as { articleId: string }; const article = await container.stores.artifactStore.getArticle(articleId); if (!article) return reply.code(404).send({ error: 'Article not found' }); return article; });
+  app.post('/api/articles/:articleId/task-card/revise', async (request, reply) => {
+    const { articleId } = request.params as { articleId: string };
+    const body = request.body as { instruction?: string; userId?: string; sessionId?: string };
+    const instruction = body.instruction?.trim();
+    if (!instruction) return reply.code(400).send({ error: 'Task card revision instruction is required.' });
+    const article = await container.stores.artifactStore.getArticle(articleId);
+    if (!article) return reply.code(404).send({ error: 'Article not found' });
+    if (!article.taskCard) return reply.code(400).send({ error: 'Article has no task card to revise.' });
+    const userId = body.userId ?? article.userId;
+    const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; currentTaskCard: WritingTaskCard }, TaskCardReviserOutput>(
+      'task-card-reviser',
+      { articleId: article.id, instruction, currentTaskCard: article.taskCard },
+      { userId, sessionId: body.sessionId, articleId: article.id },
+    );
+    article.taskCard = result.taskCard;
+    article.title = result.taskCard.topic;
+    const updated = await container.stores.artifactStore.updateArticle(article);
+    const reason = `修订任务卡：${result.summary.slice(0, 80)}`;
+    await container.stores.artifactStore.commitVersion(article.id, reason, 'user');
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'task-card-revised', changedFields: result.changedFields, userId }, createdAt: nowIso() });
+    return { article: await container.stores.artifactStore.getArticle(updated.id), summary: result.summary, changedFields: result.changedFields };
+  });
+  app.patch('/api/articles/:articleId/outline/:sectionId', async (request, reply) => {
+    const { articleId, sectionId } = request.params as { articleId: string; sectionId: string };
+    const body = request.body as { title?: string; goal?: string; userId?: string };
+    const title = body.title?.trim();
+    const goal = body.goal?.trim();
+    if (!title || !goal) return reply.code(400).send({ error: 'Outline title and goal are required.' });
+    const article = await container.stores.artifactStore.getArticle(articleId);
+    if (!article) return reply.code(404).send({ error: 'Article not found' });
+    const existing = article.outline.find((item) => item.id === sectionId);
+    if (!existing) return reply.code(404).send({ error: 'Outline section not found' });
+    article.outline = article.outline.map((item) => item.id === sectionId ? { ...item, title, goal } : item);
+    const updated = await container.stores.artifactStore.updateArticle(article);
+    await container.stores.artifactStore.commitVersion(article.id, `编辑大纲章节：${title}`, 'user');
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, sectionId, reason: 'outline-section-edited', userId: body.userId ?? article.userId }, createdAt: nowIso() });
+    return container.stores.artifactStore.getArticle(updated.id);
+  });
   app.post('/api/knowledge/search', async (request) => { const body = request.body as { query: string; limit?: number; themeTags?: string[] }; return container.stores.knowledgeStore.search(body.query, { limit: body.limit, themeTags: body.themeTags }); });
 
   app.post('/api/workflows/task-card/start', async (request) => { const body = request.body as { rawRequirement: string; userId?: string; sessionId?: string }; const userId = body.userId ?? 'demo-user'; const run = await container.engine.startWorkflow('task-card-workflow', { rawRequirement: body.rawRequirement, userId, sessionId: body.sessionId }, { userId, sessionId: body.sessionId }); return enrichRun(container, run.id); });

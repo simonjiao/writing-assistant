@@ -66,6 +66,11 @@ export class MockLLMProvider implements LLMProvider {
       const rawRequirement = String(payload.rawRequirement ?? '测试写作任务');
       return { content: JSON.stringify(mockTaskCard(rawRequirement)), raw: { provider: 'mock' } };
     }
+    if (request.jsonMode && system.includes('任务卡修订器')) {
+      const currentTaskCard = payload.currentTaskCard as ReturnType<typeof mockTaskCard>['taskCard'] | undefined;
+      const instruction = String(payload.instruction ?? '修订任务卡');
+      return { content: JSON.stringify(mockTaskCardRevision(currentTaskCard, instruction)), raw: { provider: 'mock' } };
+    }
     if (request.jsonMode && system.includes('大纲规划器')) {
       const taskCard = payload.taskCard as { topic?: string; scope?: { themes?: string[] } } | undefined;
       return { content: JSON.stringify(mockOutline(taskCard?.topic ?? '测试主题', taskCard?.scope?.themes ?? [])), raw: { provider: 'mock' } };
@@ -112,6 +117,28 @@ function mockTaskCard(rawRequirement: string) {
     missingQuestions: [],
     summary: 'Mock task card generated.',
     confidence: 0.7,
+  };
+}
+
+function mockTaskCardRevision(currentTaskCard: ReturnType<typeof mockTaskCard>['taskCard'] | undefined, instruction: string) {
+  const base = currentTaskCard ?? mockTaskCard('测试写作任务').taskCard;
+  const topicMatch = instruction.match(/(?:主题|题目|topic)(?:改成|改为|调整为|设为|是)[:：\s]*([^，,。.!！?？]+)/);
+  const topic = topicMatch?.[1]?.trim() || base.topic;
+  const changedFields = [
+    ...(topic === base.topic ? [] : ['topic', 'scope.themes']),
+    ...(instruction.includes('目标') ? ['writingGoal'] : []),
+  ];
+  const taskCard = {
+    ...base,
+    topic,
+    writingGoal: instruction.includes('目标') ? `${base.writingGoal} ${instruction}`.trim() : base.writingGoal,
+    scope: { ...base.scope, themes: topic === base.topic ? base.scope.themes : [topic] },
+    updatedAt: new Date().toISOString(),
+  };
+  return {
+    taskCard,
+    summary: 'Mock task card revision generated.',
+    changedFields,
   };
 }
 

@@ -14,9 +14,12 @@ export function App() {
   const [lastRun, setLastRun] = useState<RunResponse>();
   const [selectedBlockId, setSelectedBlockId] = useState<string>();
   const [patchInstruction, setPatchInstruction] = useState('这段写得更含蓄、更有红楼梦的味道，但不要改变意思。');
+  const [taskCardInstruction, setTaskCardInstruction] = useState('');
+  const [taskCardRevisionSummary, setTaskCardRevisionSummary] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [liveEvents, setLiveEvents] = useState<AgentEvent[]>([]);
+  const [editingOutline, setEditingOutline] = useState<{ id: string; title: string; goal: string }>();
   const refreshTimer = useRef<number | undefined>(undefined);
   const activeRunId = useRef<string | undefined>(undefined);
 
@@ -43,6 +46,35 @@ export function App() {
   }
   function scheduleRunRefresh(runId: string, delayMs = 200) { window.clearTimeout(refreshTimer.current); refreshTimer.current = window.setTimeout(() => { void api.getRun(runId).then((response) => { if (activeRunId.current && activeRunId.current !== runId) return; applyRunResponse(response); }).catch((err) => { setError(err instanceof Error ? err.message : String(err)); if (activeRunId.current === runId) scheduleRunRefresh(runId, 1000); }); }, delayMs); }
   async function execute(action: () => Promise<RunResponse>) { setBusy(true); setError(undefined); window.clearTimeout(refreshTimer.current); try { const response = await action(); activeRunId.current = response.run.id; applyRunResponse(response); return response; } catch (err) { setError(err instanceof Error ? err.message : String(err)); setBusy(false); activeRunId.current = undefined; } }
+  async function saveOutlineEdit() {
+    if (!article || !editingOutline) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const updated = await api.updateOutlineItem(article.id, editingOutline.id, { title: editingOutline.title, goal: editingOutline.goal, userId });
+      setArticle(updated);
+      setEditingOutline(undefined);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function reviseTaskCard() {
+    if (!article?.taskCard || !taskCardInstruction.trim()) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const response = await api.reviseTaskCard(article.id, { instruction: taskCardInstruction, userId, sessionId });
+      setArticle(response.article);
+      setTaskCardRevisionSummary(response.summary);
+      setTaskCardInstruction('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="app-shell">
@@ -52,6 +84,7 @@ export function App() {
         <aside className="panel task-panel">
           <h2>任务卡</h2>
           {!article?.taskCard ? <div className="empty">尚未生成任务卡。</div> : <TaskCardView taskCard={article.taskCard} />}
+          {article?.taskCard && <div className="task-card-reviser"><h3>修改任务卡</h3><textarea value={taskCardInstruction} onChange={(event) => setTaskCardInstruction(event.target.value)} placeholder="例如：字数改到 800 字，风格更自然，主题不要扩大。" /><button disabled={busy || !taskCardInstruction.trim()} onClick={() => void reviseTaskCard()}>更新任务卡</button>{taskCardRevisionSummary && <div className="revision-summary">{taskCardRevisionSummary}</div>}</div>}
           {lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-task-card-confirm' && <button disabled={busy} onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'confirm' }))}>确认任务卡</button>}
           {article?.taskCard?.status === 'confirmed' && !article.outline.length && <button disabled={busy} onClick={() => execute(() => api.startOutline(article.id, userId, sessionId))}>生成大纲</button>}
           {lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-outline-confirm' && <button disabled={busy} onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'confirm' }))}>确认大纲</button>}
@@ -59,7 +92,10 @@ export function App() {
         <section className="panel editor-panel">
           <h2>文章编辑区</h2>
           <div className="input-row"><textarea value={requirement} onChange={(event) => setRequirement(event.target.value)} /><button disabled={busy || !requirement.trim()} onClick={() => execute(() => api.startTaskCard(requirement, userId, sessionId))}>生成任务卡</button></div>
-          {article?.outline.length ? <div className="outline"><h3>大纲</h3>{article.outline.map((item) => <div className="outline-item" key={item.id}><div><strong>{item.title}</strong><p>{item.goal}</p><span>{outlineStatusLabel(item.status)}</span></div><button disabled={busy} onClick={() => execute(() => api.startSection(article.id, item.id, userId, sessionId))}>生成本节</button></div>)}</div> : null}
+          {article?.outline.length ? <div className="outline"><h3>大纲</h3>{article.outline.map((item) => {
+            const isEditing = editingOutline?.id === item.id;
+            return <div className="outline-item" key={item.id}>{isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div><strong>{item.title}</strong><p>{item.goal}</p><span>{outlineStatusLabel(item.status)}</span></div>}<div className="outline-actions">{isEditing ? <><button disabled={busy || !editingOutline.title.trim() || !editingOutline.goal.trim()} onClick={() => void saveOutlineEdit()}>保存</button><button disabled={busy} onClick={() => setEditingOutline(undefined)}>取消</button></> : <><button disabled={busy} onClick={() => setEditingOutline({ id: item.id, title: item.title, goal: item.goal })}>编辑</button><button disabled={busy} onClick={() => execute(() => api.startSection(article.id, item.id, userId, sessionId))}>生成本节</button></>}</div></div>;
+          })}</div> : null}
           <div className="article-blocks">{article?.blocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} onSelect={() => setSelectedBlockId(block.id)} />)}</div>
         </section>
         <aside className="panel side-panel">

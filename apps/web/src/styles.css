@@ -57,6 +57,16 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .panel h2 { margin: 0 0 12px; }
 .task-card label { display: block; margin-top: 12px; color: #7c7266; font-size: 12px; }
 .task-card div { margin-top: 4px; }
+.task-card-reviser {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #e7e0d5;
+}
+.task-card-reviser h3 { margin: 0; font-size: 15px; }
+.task-card-reviser textarea { min-height: 96px; }
+.revision-summary { color: #4d5966; font-size: 13px; }
 .empty { color: #8a8176; font-size: 14px; }
 .input-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: start; }
 .outline { margin-top: 18px; }
@@ -71,6 +81,9 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 }
 .outline-item p { margin: 6px 0; color: #4d5966; }
 .outline-item span { color: #7c7266; font-size: 12px; }
+.outline-actions { display: flex; flex-direction: column; gap: 8px; min-width: 86px; }
+.outline-edit { display: grid; gap: 8px; }
+.outline-edit textarea { min-height: 110px; }
 .article-blocks { margin-top: 16px; display: grid; gap: 12px; }
 .block {
   border: 1px solid #e0d8cb;

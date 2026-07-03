@@ -16,8 +16,8 @@
     "dev": "npm run build --workspace @wa/core && npm run build --workspace @wa/skills && npm run dev --workspace @wa/api",
     "predev:web": "node scripts/check-node-version.cjs",
     "dev:web": "npm run dev --workspace @wa/web",
-    "pretest": "node scripts/check-node-version.cjs",
-    "test": "vitest run packages/core/src/workflow.test.ts packages/skills/src/task-card-builder.test.ts packages/skills/src/outline-planner.test.ts packages/skills/src/section-writer.test.ts apps/api/src/app.test.ts",
+    "pretest": "node scripts/check-node-version.cjs && npm run build --workspace @wa/core && npm run build --workspace @wa/skills",
+    "test": "vitest run packages/core/src/workflow.test.ts packages/skills/src/task-card-builder.test.ts packages/skills/src/task-card-reviser.test.ts packages/skills/src/outline-planner.test.ts packages/skills/src/section-writer.test.ts apps/api/src/app.test.ts",
     "lint": "npm run lint --workspaces --if-present",
     "format": "prettier --write \"**/*.{ts,tsx,md,json,css}\"",
     "clean": "rimraf apps/*/dist apps/*/dist-ts packages/*/dist .data apps/*/.data"
