@@ -42,10 +42,13 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .workspace {
   flex: 1;
   display: grid;
-  grid-template-columns: 280px minmax(420px, 1fr) 300px;
+  grid-template-columns: 280px 320px minmax(460px, 1fr);
   gap: 14px;
   padding: 14px;
   min-height: 0;
+}
+.workspace.nav-collapsed {
+  grid-template-columns: 18px 320px minmax(542px, 1fr);
 }
 .panel {
   background: #fffdf8;
@@ -55,6 +58,49 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   overflow: auto;
 }
 .panel h2 { margin: 0 0 12px; }
+.navigation-panel {
+  position: relative;
+  overflow: visible;
+}
+.navigation-panel.collapsed {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.navigation-panel.collapsed[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+.column-collapse-handle {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #e4ddd3;
+  border-radius: 999px;
+  background: rgba(255, 253, 248, 0.78);
+  color: #8a8176;
+  font-size: 12px;
+  line-height: 1;
+}
+.column-collapse-handle:hover {
+  border-color: #d9d1c4;
+  background: #f7f1e8;
+  color: #18202a;
+}
+.navigation-panel.collapsed .column-collapse-handle {
+  pointer-events: none;
+}
+.navigation-panel.collapsed .column-collapse-handle {
+  width: 18px;
+  height: 44px;
+  margin: 28px 0 0;
+  border-radius: 999px;
+}
 .workspace-head {
   display: flex;
   align-items: center;
@@ -81,11 +127,17 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .icon-button.danger { color: #7f1d1d; }
 .icon-button.danger:hover { background: #fee2e2; }
 .workspace-controls {
+  position: relative;
   display: grid;
   gap: 8px;
   margin-bottom: 18px;
-  padding-bottom: 14px;
+  padding-bottom: 12px;
   border-bottom: 1px solid #e7e0d5;
+}
+.workspace-controls .column-collapse-handle {
+  position: absolute;
+  right: -15px;
+  bottom: -16px;
 }
 .workspace-meta {
   color: #6f665b;
@@ -123,8 +175,52 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   line-height: 1;
 }
 .history-delete:hover { background: #fee2e2; }
-.task-card label { display: block; margin-top: 12px; color: #7c7266; font-size: 12px; }
-.task-card div { margin-top: 4px; }
+.task-card {
+  display: grid;
+  gap: 10px;
+}
+.task-card-field,
+.task-card-section {
+  display: grid;
+  gap: 5px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #eee6da;
+}
+.task-card-field.compact {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+.task-card-label {
+  color: #7c7266;
+  font-size: 12px;
+}
+.task-card-value {
+  color: #18202a;
+  line-height: 1.45;
+}
+.task-card-list {
+  display: grid;
+  gap: 4px;
+}
+.task-card-subtitle {
+  color: #4d5966;
+  font-size: 13px;
+  font-weight: 600;
+}
+.task-card-list ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+}
+.task-card-list li {
+  line-height: 1.4;
+}
+.task-card-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
 .task-card-reviser {
   display: grid;
   gap: 8px;
@@ -168,6 +264,28 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .outline-edit { display: grid; gap: 8px; }
 .outline-edit textarea { min-height: 110px; }
 .article-blocks { margin-top: 16px; display: grid; gap: 12px; }
+.editor-support {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+.support-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e7e0d5;
+  border-radius: 12px;
+  background: #fffaf1;
+}
+.support-card h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+.support-card h4 {
+  margin: 12px 0 6px;
+  color: #6f665b;
+  font-size: 13px;
+}
 .block {
   border: 1px solid #e0d8cb;
   background: #fffaf1;
@@ -248,4 +366,16 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   justify-content: flex-end;
   gap: 8px;
   padding: 0 16px 16px;
+}
+
+@media (max-width: 1180px) {
+  .workspace {
+    grid-template-columns: 260px minmax(280px, 320px) minmax(420px, 1fr);
+  }
+  .workspace.nav-collapsed {
+    grid-template-columns: 18px minmax(280px, 320px) minmax(442px, 1fr);
+  }
+  .editor-support {
+    grid-template-columns: 1fr;
+  }
 }

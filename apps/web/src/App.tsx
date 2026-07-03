@@ -17,6 +17,7 @@ export function App() {
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [newWorkspaceMembers, setNewWorkspaceMembers] = useState('');
   const [workspaceModalOpen, setWorkspaceModalOpen] = useState(false);
+  const [navigationCollapsed, setNavigationCollapsed] = useState(false);
   const [domainProfiles, setDomainProfiles] = useState<DomainProfileSummary[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>();
   const [profileSelections, setProfileSelections] = useState<Record<string, string | string[]>>({});
@@ -232,21 +233,26 @@ export function App() {
     <div className="app-shell">
       <header className="topbar"><div><strong>Writing Assistant</strong><span className="muted">Workflow · RAG · Queue · SSE/WebSocket</span></div><div className="status">{busy ? `执行中：${status}` : status}</div></header>
       {error && <div className="error">{error}</div>}
-      <main className="workspace">
-        <aside className="panel task-panel">
-          <div className="workspace-head">
-            <h2>工作台</h2>
-            <div className="workspace-actions">
-              <button aria-label="新建工作台" className="icon-button" disabled={busy} title="新建工作台" onClick={openWorkspaceModal}>+</button>
-              <button aria-label="删除当前工作台" className="icon-button danger" disabled={busy || !canDeleteWorkspace} title={selectedWorkspace?.isDefault ? '默认工作台不可删除' : '删除当前工作台'} onClick={() => void deleteWorkspace()}>×</button>
+      <main className={navigationCollapsed ? 'workspace nav-collapsed' : 'workspace'}>
+        <aside className={navigationCollapsed ? 'panel navigation-panel collapsed' : 'panel navigation-panel'} role={navigationCollapsed ? 'button' : undefined} tabIndex={navigationCollapsed && !busy ? 0 : undefined} aria-label={navigationCollapsed ? '展开左栏' : undefined} aria-disabled={navigationCollapsed && busy ? true : undefined} onClick={navigationCollapsed && !busy ? () => setNavigationCollapsed(false) : undefined} onKeyDown={navigationCollapsed ? (event) => { if (!busy && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setNavigationCollapsed(false); } } : undefined}>
+          {navigationCollapsed ? <span className="column-collapse-handle" aria-hidden="true">{'>'}</span> : <>
+            <div className="workspace-head">
+              <h2>工作台</h2>
+              <div className="workspace-actions">
+                <button aria-label="新建工作台" className="icon-button" disabled={busy} title="新建工作台" onClick={openWorkspaceModal}>+</button>
+                <button aria-label="删除当前工作台" className="icon-button danger" disabled={busy || !canDeleteWorkspace} title={selectedWorkspace?.isDefault ? '默认工作台不可删除' : '删除当前工作台'} onClick={() => void deleteWorkspace()}>×</button>
+              </div>
             </div>
-          </div>
-          <div className="workspace-controls">
-            <select value={selectedWorkspaceId ?? ''} disabled={busy || !workspaces.length} onChange={(event) => void selectWorkspace(event.target.value)}>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select>
-            {selectedWorkspace && <div className="workspace-meta">{selectedWorkspace.isDefault ? '默认工作台' : '自定义工作台'} · {selectedWorkspace.userId === userId ? '拥有者' : '协作者'} · {selectedWorkspace.memberUserIds.length} 个协作者</div>}
-          </div>
-          <h2>历史任务</h2>
-          <div className="history-list">{articleSummaries.length ? articleSummaries.map((item) => <div className={article?.id === item.id ? 'history-row active' : 'history-row'} key={item.id}><button className="history-item" disabled={busy} onClick={() => void openArticle(item.id)}><strong>{item.title}</strong><span>{taskStatusLabel(item.taskStatus)} · {item.outlineCount}纲 · {item.blockCount}节</span><span>{new Date(item.updatedAt).toLocaleString()}</span></button><button aria-label={`删除 ${item.title}`} className="history-delete" disabled={busy} title="删除任务" onClick={() => void deleteArticle(item.id)}>×</button></div>) : <div className="empty">当前工作台暂无历史任务。</div>}</div>
+            <div className="workspace-controls">
+              <select value={selectedWorkspaceId ?? ''} disabled={busy || !workspaces.length} onChange={(event) => void selectWorkspace(event.target.value)}>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select>
+              {selectedWorkspace && <div className="workspace-meta">{selectedWorkspace.isDefault ? '默认工作台' : '自定义工作台'} · {selectedWorkspace.userId === userId ? '拥有者' : '协作者'} · {selectedWorkspace.memberUserIds.length} 个协作者</div>}
+              <button aria-label="收起左栏" className="column-collapse-handle" disabled={busy} title="收起左栏" onClick={() => setNavigationCollapsed(true)}>&lt;</button>
+            </div>
+            <h2>历史任务</h2>
+            <div className="history-list">{articleSummaries.length ? articleSummaries.map((item) => <div className={article?.id === item.id ? 'history-row active' : 'history-row'} key={item.id}><button className="history-item" disabled={busy} onClick={() => void openArticle(item.id)}><strong>{item.title}</strong><span>{taskStatusLabel(item.taskStatus)} · {item.outlineCount}纲 · {item.blockCount}节</span><span>{new Date(item.updatedAt).toLocaleString()}</span></button><button aria-label={`删除 ${item.title}`} className="history-delete" disabled={busy} title="删除任务" onClick={() => void deleteArticle(item.id)}>×</button></div>) : <div className="empty">当前工作台暂无历史任务。</div>}</div>
+          </>}
+        </aside>
+        <aside className="panel task-card-panel">
           <h2>任务卡</h2>
           {!article?.taskCard ? <div className="empty">尚未生成任务卡。</div> : <TaskCardView taskCard={article.taskCard} />}
           {article?.taskCard && <div className="task-card-reviser"><h3>修改任务卡</h3><textarea value={taskCardInstruction} onChange={(event) => setTaskCardInstruction(event.target.value)} placeholder="例如：字数改到 800 字，风格更自然，主题不要扩大。" /><button disabled={busy || !taskCardInstruction.trim()} onClick={() => void reviseTaskCard()}>更新任务卡</button>{taskCardRevisionSummary && <div className="revision-summary">{taskCardRevisionSummary}</div>}</div>}
@@ -263,13 +269,12 @@ export function App() {
             return <div className="outline-item" key={item.id}>{isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div><strong>{item.title}</strong><p>{item.goal}</p><span>{outlineStatusLabel(item.status)}</span></div>}<div className="outline-actions">{isEditing ? <><button disabled={busy || !editingOutline.title.trim() || !editingOutline.goal.trim()} onClick={() => void saveOutlineEdit()}>保存</button><button disabled={busy} onClick={() => setEditingOutline(undefined)}>取消</button></> : <><button disabled={busy} onClick={() => setEditingOutline({ id: item.id, title: item.title, goal: item.goal })}>编辑</button><button disabled={busy} onClick={() => execute(() => api.startSection(article.id, item.id, userId, sessionId))}>生成本节</button></>}</div></div>;
           })}</div> : null}
           <div className="article-blocks">{article?.blocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} onSelect={() => setSelectedBlockId(block.id)} />)}</div>
+          <div className="editor-support">
+            <section className="support-card"><h3>知识 / 引用 / 标签</h3>{selectedBlock ? <div><p className="mono">{selectedBlock.id}</p><h4>引用来源</h4>{selectedBlock.sourceRefs.length ? selectedBlock.sourceRefs.map((ref) => <span className="tag" key={ref}>{ref}</span>) : <div className="empty">暂无引用绑定</div>}<h4>主题标签</h4>{selectedBlock.themeTags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div> : <div className="empty">选择一个段落后显示对应来源和标签。</div>}</section>
+            <section className="support-card"><h3>版本</h3><div className="versions">{article?.versions.slice().reverse().slice(0, 6).map((version) => <div key={version.id} className="version-item"><strong>{version.reason}</strong><span>{new Date(version.createdAt).toLocaleString()}</span></div>)}</div></section>
+            <section className="support-card"><h3>实时事件</h3><div className="event-list">{liveEvents.slice().reverse().slice(0, 10).map((event) => <div key={event.id} className="event-item"><strong>{event.type}</strong><span>{new Date(event.createdAt).toLocaleTimeString()}</span></div>)}</div></section>
+          </div>
         </section>
-        <aside className="panel side-panel">
-          <h2>知识 / 引用 / 标签</h2>
-          {selectedBlock ? <div><h3>当前段落</h3><p className="mono">{selectedBlock.id}</p><h3>引用来源</h3>{selectedBlock.sourceRefs.length ? selectedBlock.sourceRefs.map((ref) => <span className="tag" key={ref}>{ref}</span>) : <div className="empty">暂无引用绑定</div>}<h3>主题标签</h3>{selectedBlock.themeTags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div> : <div className="empty">选择一个段落后显示对应来源和标签。</div>}
-          <h3>版本</h3><div className="versions">{article?.versions.slice().reverse().slice(0, 6).map((version) => <div key={version.id} className="version-item"><strong>{version.reason}</strong><span>{new Date(version.createdAt).toLocaleString()}</span></div>)}</div>
-          <h3>实时事件</h3><div className="event-list">{liveEvents.slice().reverse().slice(0, 10).map((event) => <div key={event.id} className="event-item"><strong>{event.type}</strong><span>{new Date(event.createdAt).toLocaleTimeString()}</span></div>)}</div>
-        </aside>
       </main>
       <footer className="chatbar"><div className="patch-box"><strong>局部修改</strong><input value={patchInstruction} onChange={(event) => setPatchInstruction(event.target.value)} placeholder="选中段落后输入修改意见" /><button disabled={!article || !selectedBlockId || busy} onClick={() => article && selectedBlockId && execute(() => api.startPatch(article.id, selectedBlockId, patchInstruction, userId, sessionId))}>生成 Patch</button>{lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-patch-confirm' && <button onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'accept' }))}>应用 Patch</button>}</div>{patchPreview && <div className="patch-preview"><strong>Patch 预览</strong><div className="diff-grid"><pre>{patchPreview.before}</pre><pre>{patchPreview.after}</pre></div><ul>{patchPreview.changeSummary.map((item) => <li key={item}>{item}</li>)}</ul></div>}</footer>
       {workspaceModalOpen && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="workspace-modal-title"><div className="modal-head"><h2 id="workspace-modal-title">新建工作台</h2><button aria-label="关闭" className="icon-button" disabled={busy} onClick={() => setWorkspaceModalOpen(false)}>×</button></div><div className="modal-body"><label>名称</label><input value={newWorkspaceName} autoFocus onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="新工作台名称" /><label>协作者</label><input value={newWorkspaceMembers} onChange={(event) => setNewWorkspaceMembers(event.target.value)} placeholder="协作者 userId，用逗号分隔" /></div><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setWorkspaceModalOpen(false)}>取消</button><button disabled={busy || !newWorkspaceName.trim()} onClick={() => void createWorkspace()}>创建</button></div></div></div>}
@@ -295,15 +300,32 @@ function TaskCardView(props: { taskCard: WritingTaskCard }) {
   const card = props.taskCard;
   return (
     <div className="task-card">
-      <label>主题</label><div>{card.topic}</div>
-      <label>目标</label><div>{card.writingGoal}</div>
-      <label>读者</label><div>{card.audience}</div>
-      <label>范围</label><div>{displayScope(card)}</div>
-      <label>结构</label><div>{displayStructure(card)}</div>
-      <label>风格</label><div>{displayStyle(card)}</div>
-      <label>约束</label><div>{displayConstraints(card)}</div>
+      <TaskCardField label="主题" value={card.topic} />
+      <TaskCardField label="目标" value={card.writingGoal} />
+      <TaskCardField label="读者" value={card.audience} />
+      <TaskCardField label="范围" value={displayScope(card)} />
+      <TaskCardField label="结构" value={displayStructure(card)} />
+      <TaskCardField label="风格" value={displayStyle(card)} />
+      <div className="task-card-section">
+        <div className="task-card-label">约束</div>
+        <TaskCardList title="必须包含" items={card.constraints.mustInclude} />
+        <TaskCardList title="避免" items={card.constraints.mustAvoid} />
+        <TaskCardField label="引用" value={card.constraints.citationRequired ? '需要可追溯引用' : '不强制引用'} compact />
+        <TaskCardField label="来源策略" value={card.constraints.sourcePolicy} compact />
+      </div>
     </div>
   );
+}
+
+function TaskCardField(props: { label: string; value?: string; compact?: boolean }) {
+  if (!props.value?.trim()) return null;
+  return <div className={props.compact ? 'task-card-field compact' : 'task-card-field'}><div className="task-card-label">{props.label}</div><div className="task-card-value">{props.value}</div></div>;
+}
+
+function TaskCardList(props: { title: string; items: string[] }) {
+  const items = props.items.filter((item) => item.trim());
+  if (!items.length) return null;
+  return <div className="task-card-list"><div className="task-card-subtitle">{props.title}</div><ul>{items.map((item) => <li key={item}>{item}</li>)}</ul></div>;
 }
 
 function displayScope(card: WritingTaskCard): string {
@@ -322,18 +344,6 @@ function displayStructure(card: WritingTaskCard): string {
 
 function displayStyle(card: WritingTaskCard): string {
   return [card.style.register, card.style.tone, card.style.characterVoice].filter((item) => item?.trim()).join('；');
-}
-
-function displayConstraints(card: WritingTaskCard): string {
-  const include = joinList(card.constraints.mustInclude);
-  const avoid = joinList(card.constraints.mustAvoid);
-  const citation = card.constraints.citationRequired ? '需要可追溯引用' : '';
-  return [
-    include ? `要包含：${include}` : '',
-    avoid ? `避免：${avoid}` : '',
-    citation,
-    card.constraints.sourcePolicy,
-  ].filter(Boolean).join('；');
 }
 
 function articleTypeLabel(value: string): string {
