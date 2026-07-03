@@ -216,6 +216,35 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .task-card-list li {
   line-height: 1.4;
 }
+.task-card-standard-section {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #d8dde6;
+  border-radius: 10px;
+  background: #f7f9fc;
+}
+.task-card-standard-head {
+  color: #18202a;
+  font-size: 14px;
+  font-weight: 700;
+}
+.task-card-standard-era {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+.task-card-standard-era span {
+  color: #7c7266;
+  font-size: 12px;
+}
+.task-card-standard-era strong {
+  color: #18202a;
+  font-size: 13px;
+}
 .task-card-panel {
   position: sticky;
   top: 70px;
@@ -237,6 +266,60 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .revision-summary { color: #4d5966; font-size: 13px; }
 .empty { color: #8a8176; font-size: 14px; }
 .input-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: start; }
+.writing-standard-controls {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #d8dde6;
+  border-radius: 12px;
+  background: #f7f9fc;
+}
+.rule-count {
+  justify-self: end;
+  color: #596474;
+  font-size: 12px;
+}
+.writing-standard-label {
+  color: #596474;
+  font-size: 13px;
+  font-weight: 600;
+}
+.language-era-segmented {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.language-era-option {
+  display: grid;
+  gap: 4px;
+  align-items: center;
+  text-align: left;
+  padding: 10px;
+  border: 1px solid #d8dde6;
+  border-radius: 10px;
+  background: #fffdf8;
+  color: #18202a;
+}
+.language-era-option.active {
+  border-color: #9ca3af;
+  background: #eef2f7;
+}
+.language-era-option strong {
+  font-size: 13px;
+}
+.language-era-option small {
+  color: #596474;
+  line-height: 1.35;
+}
+.extra-forbidden-terms {
+  display: grid;
+  gap: 6px;
+}
+.extra-forbidden-terms span {
+  color: #596474;
+  font-size: 13px;
+}
 .profile-controls {
   display: grid;
   gap: 10px;

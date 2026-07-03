@@ -54,6 +54,8 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
             '每个自然段优先给出判断句，再解释这个判断，再用少量材料作证，最后回到本节论点。',
             '如果大纲或资料带有复述倾向，先把它转化为分析问题，再写成观点驱动的正文。',
             '本次只写当前章节，不写整篇文章；必须遵守 writingBudget 的当前章节字数范围。',
+            'taskCard.topRules.writingStandards 是顶部写作规则，优先级高于普通风格偏好、资料口吻和大纲措辞。',
+            '如有 taskCard.topRules.replacementHints，必须优先采用 prefer 中的替代表达，不要使用 avoid 中的词。',
             '必须遵守 taskCard.constraints.mustAvoid；不得使用其中明示的禁用词、禁用说法，以及括号中“如/例如/比如”列出的词。',
             '如果 mustAvoid 指向某类词汇、术语或写法，必须避开任务卡中对应的词表、例词和搭配。',
           ].join('\n'),

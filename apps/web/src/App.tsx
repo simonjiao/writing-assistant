@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
-import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RunResponse, WorkflowRun, WritingTaskCard, WritingWorkspace } from './types';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RunResponse, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
 
 const userId = 'demo-user';
 const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']);
@@ -24,6 +24,9 @@ export function App() {
   const [domainProfileRecommendations, setDomainProfileRecommendations] = useState<DomainProfileRecommendation[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>();
   const [profileSelections, setProfileSelections] = useState<Record<string, string | string[]>>({});
+  const [writingStandard, setWritingStandard] = useState<WritingStandardSummary>();
+  const [selectedLanguageEra, setSelectedLanguageEra] = useState('');
+  const [extraForbiddenTerms, setExtraForbiddenTerms] = useState('');
   const [lastRun, setLastRun] = useState<RunResponse>();
   const [selectedBlockId, setSelectedBlockId] = useState<string>();
   const [patchInstruction, setPatchInstruction] = useState('这段写得更含蓄、更有红楼梦的味道，但不要改变意思。');
@@ -51,8 +54,8 @@ export function App() {
   }
 
   useEffect(() => {
-    void Promise.all([api.createSession(userId), api.listWorkspaces(userId), api.listDomainProfiles()])
-      .then(async ([session, workspaceList, profiles]) => {
+    void Promise.all([api.createSession(userId), api.listWorkspaces(userId), api.listDomainProfiles(), api.listWritingStandards()])
+      .then(async ([session, workspaceList, profiles, standards]) => {
         setSessionId(session.id);
         setWorkspaces(workspaceList);
         const workspaceId = session.currentWorkspaceId ?? workspaceList[0]?.id;
@@ -64,6 +67,8 @@ export function App() {
           if (firstArticleId) setArticle(await api.getArticle(firstArticleId, userId));
         }
         setDomainProfiles(profiles);
+        setWritingStandard(standards);
+        setSelectedLanguageEra(standards.defaultOptionId);
       })
       .catch((err) => setError(String(err)));
   }, []);
@@ -184,6 +189,10 @@ export function App() {
   }
   function updateProfileGroup(groupId: string, value: string | string[]) {
     setProfileSelections((current) => ({ ...current, [groupId]: value }));
+  }
+  function currentWritingStandardSelection(): WritingStandardSelection | undefined {
+    if (!writingStandard || !selectedLanguageEra) return undefined;
+    return { languageEra: selectedLanguageEra, extraForbiddenTerms: parseForbiddenTerms(extraForbiddenTerms) };
   }
   function toggleOutlineCollapsed(outlineId: string) {
     setCollapsedOutlineIds((current) => toggleId(current, outlineId));
@@ -339,7 +348,8 @@ export function App() {
         </aside>
         <section className="panel editor-panel">
           <h2>文章编辑区</h2>
-          <div className="input-row"><textarea value={requirement} onChange={(event) => setRequirement(event.target.value)} /><button disabled={busy || !requirement.trim() || !selectedWorkspaceId} onClick={() => execute(() => api.startTaskCard(requirement, userId, sessionId, selectedWorkspaceId, currentDomainProfileSelection()))}>生成任务卡</button></div>
+          <div className="input-row"><textarea value={requirement} onChange={(event) => setRequirement(event.target.value)} /><button disabled={busy || !requirement.trim() || !selectedWorkspaceId} onClick={() => execute(() => api.startTaskCard(requirement, userId, sessionId, selectedWorkspaceId, currentDomainProfileSelection(), currentWritingStandardSelection()))}>生成任务卡</button></div>
+          {writingStandard ? <WritingStandardControls standard={writingStandard} selectedLanguageEra={selectedLanguageEra} extraForbiddenTerms={extraForbiddenTerms} onSelectLanguageEra={setSelectedLanguageEra} onChangeExtraForbiddenTerms={setExtraForbiddenTerms} /> : null}
           {domainProfiles.length ? <DomainProfileControls profiles={domainProfiles} recommendations={domainProfileRecommendations} selectedProfileId={selectedProfileId} selections={profileSelections} onSelectProfile={selectProfile} onUpdateGroup={updateProfileGroup} /> : null}
           {article?.outline.length ? <div className="outline"><h3>大纲</h3>{article.outline.map((item) => {
             const isEditing = editingOutline?.id === item.id;
@@ -417,6 +427,22 @@ function ProgressTimeline(props: { events: AgentEvent[]; run?: WorkflowRun }) {
   );
 }
 
+function WritingStandardControls(props: { standard: WritingStandardSummary; selectedLanguageEra: string; extraForbiddenTerms: string; onSelectLanguageEra: (languageEra: string) => void; onChangeExtraForbiddenTerms: (value: string) => void }) {
+  return (
+    <div className="writing-standard-controls">
+      <div className="profile-header"><strong>写作标准</strong><span className="rule-count">已应用</span></div>
+      <div className="writing-standard-label">{props.standard.label}</div>
+      <div className="language-era-segmented" role="radiogroup" aria-label={props.standard.label}>
+        {props.standard.options.map((option) => {
+          const selected = props.selectedLanguageEra === option.id;
+          return <button type="button" role="radio" aria-checked={selected} className={selected ? 'language-era-option active' : 'language-era-option'} key={option.id} onClick={() => props.onSelectLanguageEra(option.id)}><strong>{option.label}</strong><small>{option.description}</small></button>;
+        })}
+      </div>
+      <label className="extra-forbidden-terms"><span>追加禁用词</span><input value={props.extraForbiddenTerms} onChange={(event) => props.onChangeExtraForbiddenTerms(event.target.value)} placeholder="例如：维度、机制、结构性" /></label>
+    </div>
+  );
+}
+
 function DomainProfileControls(props: { profiles: DomainProfileSummary[]; recommendations: DomainProfileRecommendation[]; selectedProfileId?: string; selections: Record<string, string | string[]>; onSelectProfile: (profileId: string) => void; onUpdateGroup: (groupId: string, value: string | string[]) => void }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const profile = props.profiles.find((item) => item.id === props.selectedProfileId);
@@ -428,8 +454,8 @@ function DomainProfileControls(props: { profiles: DomainProfileSummary[]; recomm
   }
   return (
     <div className="profile-controls">
-      <div className="profile-header"><strong>写作标准</strong><div className="profile-summary">{profile ? <span className="profile-pill active">{profile.label}</span> : recommendation ? <button type="button" className="profile-recommendation" onClick={() => chooseProfile(recommendation.id)}>推荐：{recommendation.label}</button> : <span className="profile-pill">未应用</span>}<button type="button" className="secondary-button compact" onClick={() => setPickerOpen((current) => !current)}>{pickerOpen ? '收起' : '更换'}</button></div></div>
-      {showPicker ? <select className="profile-select" value={props.selectedProfileId ?? ''} onChange={(event) => chooseProfile(event.target.value)}><option value="">不使用写作标准</option>{props.profiles.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select> : null}
+      <div className="profile-header"><strong>题材标准</strong><div className="profile-summary">{profile ? <span className="profile-pill active">{profile.label}</span> : recommendation ? <button type="button" className="profile-recommendation" onClick={() => chooseProfile(recommendation.id)}>推荐：{recommendation.label}</button> : <span className="profile-pill">未应用</span>}<button type="button" className="secondary-button compact" onClick={() => setPickerOpen((current) => !current)}>{pickerOpen ? '收起' : '更换'}</button></div></div>
+      {showPicker ? <select className="profile-select" value={props.selectedProfileId ?? ''} onChange={(event) => chooseProfile(event.target.value)}><option value="">不使用题材标准</option>{props.profiles.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select> : null}
       {profile?.groups.map((group) => <div className="profile-group" key={group.id}><span>{group.label}</span>{group.type === 'single' ? <select value={singleSelection(props.selections[group.id])} onChange={(event) => props.onUpdateGroup(group.id, event.target.value)}>{group.options.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select> : <div className="profile-options">{group.options.map((option) => {
         const checked = multiSelection(props.selections[group.id]).includes(option.id);
         return <label key={option.id}><input type="checkbox" checked={checked} onChange={(event) => props.onUpdateGroup(group.id, toggleSelection(multiSelection(props.selections[group.id]), option.id, event.target.checked))} />{option.label}</label>;
@@ -444,6 +470,7 @@ function TaskCardView(props: { taskCard: WritingTaskCard }) {
     <div className="task-card">
       <TaskCardField label="主题" value={card.topic} />
       <TaskCardField label="目标" value={card.writingGoal} />
+      <WritingStandardTaskCardView taskCard={card} />
       <TaskCardField label="读者" value={card.audience} />
       <TaskCardField label="范围" value={displayScope(card)} />
       <TaskCardField label="结构" value={displayStructure(card)} />
@@ -468,6 +495,26 @@ function TaskCardList(props: { title: string; items: string[] }) {
   const items = props.items.filter((item) => item.trim());
   if (!items.length) return null;
   return <div className="task-card-list"><div className="task-card-subtitle">{props.title}</div><ul>{items.map((item) => <li key={item}>{item}</li>)}</ul></div>;
+}
+
+function WritingStandardTaskCardView(props: { taskCard: WritingTaskCard }) {
+  const rules = props.taskCard.topRules?.writingStandards ?? [];
+  const hints = props.taskCard.topRules?.replacementHints ?? [];
+  if (!props.taskCard.topRules?.languageEra && !rules.length && !hints.length) return null;
+  return (
+    <div className="task-card-standard-section">
+      <div className="task-card-standard-head">写作标准</div>
+      {props.taskCard.topRules?.languageEra ? <div className="task-card-standard-era"><span>语言时代感</span><strong>{props.taskCard.topRules.languageEra}</strong></div> : null}
+      <TaskCardList title="规则" items={rules} />
+      <ReplacementHintList items={hints} />
+    </div>
+  );
+}
+
+function ReplacementHintList(props: { items: Array<{ avoid: string; prefer: string }> }) {
+  const items = props.items.filter((item) => item.avoid.trim() && item.prefer.trim());
+  if (!items.length) return null;
+  return <div className="task-card-list"><div className="task-card-subtitle">替代表</div><ul>{items.map((item) => <li key={item.avoid}>{item.avoid} → {item.prefer}</li>)}</ul></div>;
 }
 
 function displayScope(card: WritingTaskCard): string {
@@ -663,4 +710,8 @@ function toggleId(values: string[], value: string): string[] {
 
 function parseMemberUserIds(value: string): string[] {
   return [...new Set(value.split(/[,\s，、]+/).map((item) => item.trim()).filter(Boolean))];
+}
+
+function parseForbiddenTerms(value: string): string[] {
+  return [...new Set(value.split(/[,\s，、/／;；]+/).map((item) => item.trim()).filter(Boolean))];
 }

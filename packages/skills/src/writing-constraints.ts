@@ -20,8 +20,12 @@ export function extractExplicitAvoidances(rawText: string): string[] {
     const value = cleanPhrase(match[1]);
     if (value) values.push(value);
   }
-  values.push(...configuredRules.filter((rule) => isRuleAvoidanceRequest(rawText, rule)).map((rule) => rule.description));
+  values.push(...extractConfiguredAvoidanceRules(rawText));
   return uniqueStrings(values);
+}
+
+export function extractConfiguredAvoidanceRules(rawText: string): string[] {
+  return configuredRules.filter((rule) => isRuleAvoidanceRequest(rawText, rule)).map((rule) => rule.description);
 }
 
 export function findAvoidedTermsInText(text: string, mustAvoid: string[]): string[] {

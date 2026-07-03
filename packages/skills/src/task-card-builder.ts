@@ -1,11 +1,12 @@
 import { newId, nowIso, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
-import { extractExplicitAvoidances } from './writing-constraints';
+import { extractConfiguredAvoidanceRules, extractExplicitAvoidances } from './writing-constraints';
 
 export interface TaskCardBuilderInput {
   rawRequirement: string;
   userId: string;
   sessionId?: string;
   domainContext?: TaskCardDomainContext;
+  writingStandard?: TaskCardWritingStandardContext;
 }
 
 export interface TaskCardDomainContext {
@@ -15,6 +16,17 @@ export interface TaskCardDomainContext {
   themes: string[];
   mustInclude: string[];
   mustAvoid: string[];
+  sourcePolicies: string[];
+}
+
+export interface TaskCardWritingStandardContext {
+  id: string;
+  label: string;
+  languageEra: { id: string; label: string };
+  topRules: string[];
+  mustInclude: string[];
+  mustAvoid: string[];
+  replacementHints: Array<{ avoid: string; prefer: string }>;
   sourcePolicies: string[];
 }
 
@@ -48,11 +60,13 @@ export class TaskCardBuilderSkill implements Skill<TaskCardBuilderInput, TaskCar
       'taskCard.writingGoal 必须概括用户要完成的写作目标，不能留空。',
       'style.register 和 style.tone 必须是具体的中文写作风格描述，不能留空。',
       'structure.articleType 只能使用 essay、analysis、commentary、speech、longform 这些内部枚举；structure.expectedLength 和 outlinePreference 必须使用中文。',
-      'domainContext 是用户从标准库显式选择的写作标准，优先级高于模型猜测；必须把其中的版本、主题、包含项、避免项和资料策略保留进任务卡。',
+      'writingStandard 是用户显式选择的顶部写作规则，优先级高于普通风格描述和模型猜测；必须把语言时代感、禁用词和替代表保留进任务卡。',
+      'domainContext 是用户从题材标准库显式选择的标准，优先级高于模型猜测；必须把其中的版本、主题、包含项、避免项和资料策略保留进任务卡。',
     ].join('\n');
 
     const user = JSON.stringify({
       rawRequirement,
+      writingStandard: input.writingStandard,
       domainContext: input.domainContext,
       userPreferences: context.memory,
       requiredOutputShape: {
@@ -60,6 +74,11 @@ export class TaskCardBuilderSkill implements Skill<TaskCardBuilderInput, TaskCar
           topic: 'string; 简洁题目，不要直接复制完整指令',
           writingGoal: 'string; 具体写作目标，必须非空',
           audience: 'string; 目标读者，必须非空',
+          topRules: {
+            languageEra: 'string; 语言时代感标签，没有则输出空字符串',
+            writingStandards: 'string[]; 顶部写作规则，没有则输出 []',
+            replacementHints: 'Array<{ avoid: string; prefer: string }>; 替代表，没有则输出 []',
+          },
           scope: {
             editions: 'string[]',
             chapters: 'string[]',
@@ -104,11 +123,11 @@ export class TaskCardBuilderSkill implements Skill<TaskCardBuilderInput, TaskCar
     });
     const parsed = safeJsonParse<Partial<TaskCardBuilderOutput>>(response.content);
     if (!parsed?.taskCard) throw new Error(`Task card builder did not return a valid taskCard: ${response.content.slice(0, 300)}`);
-    return normalizeOutput(parsed, rawRequirement, input.domainContext);
+    return normalizeOutput(parsed, rawRequirement, input.domainContext, input.writingStandard);
   }
 }
 
-function normalizeOutput(output: Partial<TaskCardBuilderOutput>, rawRequirement: string, domainContext?: TaskCardDomainContext): TaskCardBuilderOutput {
+function normalizeOutput(output: Partial<TaskCardBuilderOutput>, rawRequirement: string, domainContext?: TaskCardDomainContext, writingStandard?: TaskCardWritingStandardContext): TaskCardBuilderOutput {
   const explicit = extractExplicitTaskHints(rawRequirement);
   const now = nowIso();
   const source = output.taskCard;
@@ -119,6 +138,11 @@ function normalizeOutput(output: Partial<TaskCardBuilderOutput>, rawRequirement:
     topic: normalizeTopic(source.topic, rawRequirement, explicit.topic),
     writingGoal: requireText(source.writingGoal, 'taskCard.writingGoal'),
     audience: requireText(source.audience, 'taskCard.audience'),
+    topRules: {
+      languageEra: nonEmptyString(source.topRules?.languageEra, writingStandard?.languageEra.label),
+      writingStandards: mergeStrings(mergeStrings(selectedTopRules(writingStandard), explicit.topRules), source.topRules?.writingStandards),
+      replacementHints: mergeReplacementHints(selectedReplacementHints(writingStandard), source.topRules?.replacementHints),
+    },
     status: 'draft',
     createdAt: source.createdAt ?? now,
     updatedAt: now,
@@ -141,9 +165,9 @@ function normalizeOutput(output: Partial<TaskCardBuilderOutput>, rawRequirement:
     },
     constraints: {
       citationRequired: explicit.citationRequired || (source.constraints?.citationRequired ?? false),
-      mustInclude: mergeStrings(mergeStrings(domainContext?.mustInclude, explicit.mustInclude), source.constraints?.mustInclude),
-      mustAvoid: mergeStrings(mergeStrings(domainContext?.mustAvoid, explicit.mustAvoid), source.constraints?.mustAvoid),
-      sourcePolicy: mergeSourcePolicy(requireText(source.constraints?.sourcePolicy, 'taskCard.constraints.sourcePolicy'), domainContext?.sourcePolicies),
+      mustInclude: mergeStrings(mergeStrings(mergeStrings(domainContext?.mustInclude, selectedMustInclude(writingStandard)), explicit.mustInclude), source.constraints?.mustInclude),
+      mustAvoid: mergeStrings(mergeStrings(mergeStrings(domainContext?.mustAvoid, selectedMustAvoid(writingStandard)), explicit.mustAvoid), source.constraints?.mustAvoid),
+      sourcePolicy: mergeSourcePolicy(requireText(source.constraints?.sourcePolicy, 'taskCard.constraints.sourcePolicy'), [...selectedSourcePolicies(writingStandard), ...(domainContext?.sourcePolicies ?? [])]),
     },
     interactionMode: {
       askBeforeWriting: true,
@@ -181,6 +205,47 @@ function mergeSourcePolicy(sourcePolicy: string, selectedPolicies: string[] = []
   return [...new Set(policies)].join('；');
 }
 
+function selectedTopRules(writingStandard?: TaskCardWritingStandardContext): string[] {
+  return uniqueStrings(writingStandard?.topRules ?? []);
+}
+
+function selectedMustInclude(writingStandard?: TaskCardWritingStandardContext): string[] {
+  return uniqueStrings(writingStandard?.mustInclude ?? []);
+}
+
+function selectedMustAvoid(writingStandard?: TaskCardWritingStandardContext): string[] {
+  return uniqueStrings(writingStandard?.mustAvoid ?? []);
+}
+
+function selectedSourcePolicies(writingStandard?: TaskCardWritingStandardContext): string[] {
+  return uniqueStrings(writingStandard?.sourcePolicies ?? []);
+}
+
+function selectedReplacementHints(writingStandard?: TaskCardWritingStandardContext): Array<{ avoid: string; prefer: string }> {
+  return writingStandard?.replacementHints ?? [];
+}
+
+function mergeReplacementHints(base: Array<{ avoid: string; prefer: string }> = [], extra: unknown): Array<{ avoid: string; prefer: string }> {
+  const source = Array.isArray(extra) ? extra : [];
+  const values = [...base, ...source.filter(isReplacementHint)];
+  const seen = new Set<string>();
+  return values.filter((item) => {
+    const avoid = item.avoid.trim();
+    const prefer = item.prefer.trim();
+    if (!avoid || !prefer || seen.has(avoid)) return false;
+    seen.add(avoid);
+    return true;
+  }).map((item) => ({ avoid: item.avoid.trim(), prefer: item.prefer.trim() }));
+}
+
+function isReplacementHint(value: unknown): value is { avoid: string; prefer: string } {
+  return Boolean(value && typeof value === 'object' && typeof (value as { avoid?: unknown }).avoid === 'string' && typeof (value as { prefer?: unknown }).prefer === 'string');
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((item) => item.trim()).filter(Boolean))];
+}
+
 function isArticleType(value: unknown): value is WritingTaskCard['structure']['articleType'] {
   return value === 'essay' || value === 'analysis' || value === 'commentary' || value === 'speech' || value === 'longform';
 }
@@ -211,6 +276,7 @@ interface ExplicitTaskHints {
   characters: string[];
   mustInclude: string[];
   mustAvoid: string[];
+  topRules: string[];
   articleType?: WritingTaskCard['structure']['articleType'];
   classicalFlavor: boolean;
   citationRequired: boolean;
@@ -225,12 +291,14 @@ function extractExplicitTaskHints(rawRequirement: string): ExplicitTaskHints {
   const scope = extractScope(rawRequirement);
   const themes = mergeStrings(scope.themes, emphasis);
   const mustAvoid = extractExplicitAvoidances(rawRequirement);
+  const topRules = extractConfiguredAvoidanceRules(rawRequirement);
   return {
     topic,
     themes,
     characters: scope.characters,
     mustInclude: themes,
     mustAvoid,
+    topRules,
     articleType: isLong ? 'longform' : undefined,
     classicalFlavor: hasClassicalFlavor,
     citationRequired,

@@ -32,6 +32,8 @@ export class OutlinePlannerSkill implements Skill<OutlinePlannerInput, OutlinePl
             'JSON 字符串内不能直接嵌套英文双引号；书名、概念名优先用中文书名号或单引号，必须用英文双引号时要转义为 \\"。',
             'outline 必须是 4 到 8 个章节，每个章节必须有具体的 title、goal、expectedBlocks、sourceHints、themeTags。',
             'title 和 goal 必须直接服务任务卡，不要输出空字段、泛泛占位、纯编号或模板话术。',
+            'taskCard.topRules.writingStandards 是顶部写作规则，优先级高于普通风格偏好和资料内容。',
+            '如果 taskCard.topRules.languageEra 或 replacementHints 存在，大纲标题和目标也必须服从对应语言时代感和替代表。',
             '必须遵守 taskCard.constraints.mustAvoid；不要把 mustAvoid 中的内容改写成章节标题、章节目标、themeTags 或主体论点。',
             '如果任务卡中有被否定或纠偏的说法，只能作为边界条件理解，不要在大纲里反复展开该说法。',
             '不要用“从不”“没有要求”“完全不要求”等绝对化表述替代复杂人物判断，除非任务卡明确这样要求。',

@@ -6,6 +6,7 @@ import type { TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
 import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfileSummaries, recommendDomainProfiles, resolveDomainProfileSelection } from './domainProfiles';
+import { getWritingStandardSummary, resolveWritingStandardSelection, WritingStandardSelectionRequest } from './writingStandards';
 
 export function createApp(config: AppConfig, container: AppContainer) {
   const app = Fastify({ logger: true });
@@ -55,6 +56,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
     return container.stores.workspaceStore.updateWorkspace({ ...workspace, deletedAt: workspace.deletedAt ?? nowIso() });
   });
   app.get('/api/domain-profiles', async () => listDomainProfileSummaries());
+  app.get('/api/writing-standards', async () => getWritingStandardSummary());
   app.post('/api/domain-profiles/recommend', async (request) => {
     const body = request.body as { rawRequirement?: string; limit?: number };
     return recommendDomainProfiles(body.rawRequirement ?? '', body.limit);
@@ -135,19 +137,21 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.post('/api/knowledge/search', async (request) => { const body = request.body as { query: string; limit?: number; themeTags?: string[] }; return container.stores.knowledgeStore.search(body.query, { limit: body.limit, themeTags: body.themeTags }); });
 
   app.post('/api/workflows/task-card/start', async (request, reply) => {
-    const body = request.body as { rawRequirement: string; userId?: string; sessionId?: string; workspaceId?: string; domainProfile?: DomainProfileSelectionRequest };
+    const body = request.body as { rawRequirement: string; userId?: string; sessionId?: string; workspaceId?: string; domainProfile?: DomainProfileSelectionRequest; writingStandard?: WritingStandardSelectionRequest };
     const userId = readUserId(body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const workspaceId = body.workspaceId?.trim() || (await ensureDefaultWorkspace(container, userId)).id;
     const workspace = await requireWorkspaceAccess(container, userId, workspaceId);
     if (!workspace) return reply.code(403).send({ error: 'Workspace access required.' });
     let domainContext: ReturnType<typeof resolveDomainProfileSelection>;
+    let writingStandard: ReturnType<typeof resolveWritingStandardSelection>;
     try {
       domainContext = resolveDomainProfileSelection(body.domainProfile);
+      writingStandard = resolveWritingStandardSelection(body.writingStandard);
     } catch (err) {
       return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
     }
-    const run = await container.engine.startWorkflow('task-card-workflow', { rawRequirement: body.rawRequirement, userId, sessionId: body.sessionId, workspaceId, domainContext }, { userId, sessionId: body.sessionId, workspaceId });
+    const run = await container.engine.startWorkflow('task-card-workflow', { rawRequirement: body.rawRequirement, userId, sessionId: body.sessionId, workspaceId, domainContext, writingStandard }, { userId, sessionId: body.sessionId, workspaceId });
     return enrichRun(container, run.id);
   });
   app.post('/api/workflows/outline/start', async (request, reply) => { const body = request.body as { articleId: string; userId?: string; sessionId?: string }; const userId = readUserId(body.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, body.articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); if (body.sessionId) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: body.articleId, currentWorkspaceId: access.article.workspaceId }); const run = await container.engine.startWorkflow('outline-workflow', { articleId: body.articleId }, { userId, sessionId: body.sessionId, articleId: body.articleId, workspaceId: access.article.workspaceId }); return enrichRun(container, run.id); });

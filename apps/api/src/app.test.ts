@@ -200,6 +200,21 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('exposes only public writing standard metadata', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const response = await app.inject({ method: 'GET', url: '/api/writing-standards' });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body).toMatchObject({ id: 'language-era', label: '语言时代感', defaultOptionId: 'natural-traditional' });
+    expect(body.options.map((item: { id: string }) => item.id)).toEqual(['natural-traditional', 'modern-analysis', 'academic-commentary']);
+    expect(JSON.stringify(body)).not.toContain('mustAvoid');
+    expect(JSON.stringify(body)).not.toContain('replacementHints');
+    expect(JSON.stringify(body)).not.toContain('sourcePolicies');
+    await app.close();
+  });
+
   it('recommends matching domain profiles from a writing requirement', async () => {
     const config = testConfig();
     const container = createContainer(config);
@@ -238,6 +253,29 @@ describe('api app', () => {
     expect(body.article.taskCard.scope.themes).toContain('仕途经济边界');
     expect(body.article.taskCard.constraints.mustInclude.join('\n')).toContain('有规劝');
     expect(body.article.taskCard.constraints.mustAvoid).toContain('黛玉从不要求宝玉');
+    await app.close();
+  });
+
+  it('resolves language era writing standards into top task rules', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/workflows/task-card/start',
+      payload: {
+        userId: 'standard-user',
+        rawRequirement: '写一篇关于宝黛关系的文章。',
+        writingStandard: { languageEra: 'natural-traditional', extraForbiddenTerms: ['俗套词'] },
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.article.taskCard.topRules.languageEra).toBe('自然传统');
+    expect(body.article.taskCard.topRules.writingStandards.join('\n')).toContain('语言时代感选择“自然传统”');
+    expect(body.article.taskCard.topRules.replacementHints[0]).toMatchObject({ avoid: '价值观' });
+    expect(body.article.taskCard.constraints.mustAvoid.join('\n')).toContain('价值观');
+    expect(body.article.taskCard.constraints.mustAvoid).toContain('俗套词');
     await app.close();
   });
 

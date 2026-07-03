@@ -38,6 +38,7 @@ export interface WritingTaskCard {
   topic: string;
   writingGoal: string;
   audience: string;
+  topRules?: { languageEra?: string; writingStandards: string[]; replacementHints?: Array<{ avoid: string; prefer: string }> };
   scope: { editions?: string[]; chapters?: string[]; characters?: string[]; themes?: string[] };
   structure: { articleType: ArticleType; expectedLength: string; outlinePreference?: string };
   style: { register: string; tone: string; classicalFlavor: boolean; characterVoice?: string };

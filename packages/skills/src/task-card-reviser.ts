@@ -1,5 +1,5 @@
 import { nowIso, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
-import { extractExplicitAvoidances } from './writing-constraints';
+import { extractConfiguredAvoidanceRules, extractExplicitAvoidances } from './writing-constraints';
 
 export interface TaskCardReviserInput {
   articleId: string;
@@ -40,6 +40,7 @@ export class TaskCardReviserSkill implements Skill<TaskCardReviserInput, TaskCar
             '不要只返回局部 patch；不要省略未修改字段；不要输出 Markdown。',
             '没有被用户要求修改的字段应保持原意。',
             '如果用户是在纠正错误观点，例如“不是”“并非”“不要写成”“不能说成”，必须把被否定的写法转入 taskCard.constraints.mustAvoid，并从 topic、writingGoal、scope.themes、constraints.mustInclude 中移除相冲突的表达。',
+            '如果用户提出写作标准或词汇风格边界，必须把它保留进 taskCard.topRules，并同步到 constraints.mustAvoid 或 sourcePolicy。',
             '纠偏时不要把一个错误极端改写成另一个绝对化极端；例如“不是反对仕途经济”不能改成“从不要求宝玉”或“没有要求”。',
             '遇到复杂限定时，应在 writingGoal 或 constraints.mustInclude 中保留正向边界，例如“有规劝但不等于认同仕途经济价值”。',
             '所有面向用户展示的字段必须是自然语言；内部枚举只允许用于 structure.articleType。',
@@ -78,6 +79,11 @@ function normalizeOutput(output: Partial<TaskCardReviserOutput>, current: Writin
     topic: requireText(source.topic, 'taskCard.topic'),
     writingGoal: requireText(source.writingGoal, 'taskCard.writingGoal'),
     audience: requireText(source.audience, 'taskCard.audience'),
+    topRules: {
+      languageEra: typeof source.topRules?.languageEra === 'string' && source.topRules.languageEra.trim() ? source.topRules.languageEra.trim() : current.topRules?.languageEra,
+      writingStandards: mergeStrings(mergeStrings(current.topRules?.writingStandards, source.topRules?.writingStandards), extractConfiguredAvoidanceRules(instruction)),
+      replacementHints: mergeReplacementHints(current.topRules?.replacementHints, source.topRules?.replacementHints),
+    },
     status: current.status,
     createdAt: current.createdAt,
     updatedAt: nowIso(),
@@ -118,6 +124,23 @@ function normalizeOutput(output: Partial<TaskCardReviserOutput>, current: Writin
 
 function mergeStrings(base: string[] = [], extra: string[] = []): string[] {
   return [...new Set([...base, ...extra])];
+}
+
+function mergeReplacementHints(base: Array<{ avoid: string; prefer: string }> = [], extra: unknown): Array<{ avoid: string; prefer: string }> {
+  const source = Array.isArray(extra) ? extra : [];
+  const values = [...base, ...source.filter(isReplacementHint)];
+  const seen = new Set<string>();
+  return values.filter((item) => {
+    const avoid = item.avoid.trim();
+    const prefer = item.prefer.trim();
+    if (!avoid || !prefer || seen.has(avoid)) return false;
+    seen.add(avoid);
+    return true;
+  }).map((item) => ({ avoid: item.avoid.trim(), prefer: item.prefer.trim() }));
+}
+
+function isReplacementHint(value: unknown): value is { avoid: string; prefer: string } {
+  return Boolean(value && typeof value === 'object' && typeof (value as { avoid?: unknown }).avoid === 'string' && typeof (value as { prefer?: unknown }).prefer === 'string');
 }
 
 function requireText(value: unknown, field: string): string {
