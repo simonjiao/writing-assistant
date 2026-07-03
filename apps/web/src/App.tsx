@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RunResponse, TaskCardFollowUpPrompt, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
 
@@ -33,7 +33,6 @@ export function App() {
   const [lastRun, setLastRun] = useState<RunResponse>();
   const [selectedBlockId, setSelectedBlockId] = useState<string>();
   const [patchInstruction, setPatchInstruction] = useState('这段写得更含蓄、更有红楼梦的味道，但不要改变意思。');
-  const [taskCardRevisionSummary, setTaskCardRevisionSummary] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [liveEvents, setLiveEvents] = useState<AgentEvent[]>([]);
@@ -120,9 +119,13 @@ export function App() {
   const patchPreview = (lastRun?.run.state.patchResult as { patch?: { before: string; after: string; changeSummary: string[] } } | undefined)?.patch;
   const status = lastRun ? runStatusLabel(lastRun.run, liveEvents) : '就绪';
   const canGenerateOutline = visibleArticle?.taskCard?.status === 'confirmed';
+  const taskCardConfirmed = visibleArticle?.taskCard?.status === 'confirmed';
+  const taskCardDraft = visibleArticle?.taskCard?.status === 'draft';
+  const taskCardConfirmationRunId = lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-task-card-confirm' ? lastRun.run.id : undefined;
   const canDeleteWorkspace = Boolean(selectedWorkspace && !selectedWorkspace.isDefault && selectedWorkspace.userId === userId);
   const canSubmitTaskCardMessage = Boolean(activeTaskCardMessage.trim() && (taskCardDialogTarget === 'current' || selectedWorkspaceId));
   const taskCardFollowUpPrompts = useMemo(() => visibleArticle?.taskCard?.status === 'draft' ? taskCardPrompts(visibleArticle.taskCard) : [], [visibleArticle?.taskCard]);
+  const hasWritingBlocks = Boolean(visibleArticle?.blocks.length);
 
   function applyRunResponse(response: RunResponse) {
     setLastRun(response);
@@ -131,7 +134,6 @@ export function App() {
     if (response.article) {
       setArticle(response.article);
       setSelectedWorkspaceId(response.article.workspaceId);
-      setTaskCardRevisionSummary(undefined);
       void refreshArticleSummaries(response.article.workspaceId).catch((err) => setError(err instanceof Error ? err.message : String(err)));
     }
     if (response.run.workflowId === 'section-writing-workflow') {
@@ -167,7 +169,6 @@ export function App() {
       setSelectedBlockId(undefined);
       setLiveEvents([]);
       setProgressVisible(false);
-      setTaskCardRevisionSummary(undefined);
       setCurrentTaskMessage('');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -189,7 +190,6 @@ export function App() {
         setSelectedBlockId(undefined);
         setLiveEvents([]);
         setProgressVisible(false);
-        setTaskCardRevisionSummary(undefined);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -264,7 +264,6 @@ export function App() {
       setSelectedBlockId(undefined);
       setLiveEvents([]);
       setProgressVisible(false);
-      setTaskCardRevisionSummary(undefined);
       setArticleSummaries([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -288,7 +287,6 @@ export function App() {
       setSelectedBlockId(undefined);
       setLiveEvents([]);
       setProgressVisible(false);
-      setTaskCardRevisionSummary(undefined);
       if (nextWorkspace) await refreshArticleSummaries(nextWorkspace.id);
       else setArticleSummaries([]);
     } catch (err) {
@@ -331,6 +329,12 @@ export function App() {
     }
     await reviseTaskCard(message);
   }
+  function submitTaskCardMessageWithKeyboard(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.nativeEvent.isComposing || busy || !canSubmitTaskCardMessage) return;
+    event.preventDefault();
+    void submitTaskCardMessage();
+  }
   function chooseTaskCardPromptOption(prompt: TaskCardFollowUpPrompt, option: string) {
     setCurrentTaskMessage((current) => appendPromptAnswer(current, prompt.question, option));
   }
@@ -341,7 +345,6 @@ export function App() {
     try {
       const response = await api.reviseTaskCard(article.id, { instruction, userId, sessionId });
       setArticle(response.article);
-      setTaskCardRevisionSummary(response.summary);
       setCurrentTaskMessage('');
       if (response.article.taskCard?.status === 'confirmed') setLastRun(undefined);
       await refreshArticleSummaries();
@@ -356,7 +359,7 @@ export function App() {
     <div className="app-shell">
       <header className="topbar"><div><strong>Writing Assistant</strong><span className="muted">任务卡 · 大纲 · 正文 · 局部修改</span></div><div className="status">{busy ? `执行中：${status}` : status}</div></header>
       {error && <div className="error">{error}</div>}
-      <main className={navigationCollapsed ? 'workspace nav-collapsed' : 'workspace'}>
+      <main className={['workspace', navigationCollapsed ? 'nav-collapsed' : '', taskCardConfirmed ? '' : 'task-card-column-hidden'].filter(Boolean).join(' ')}>
         <aside className={navigationCollapsed ? 'panel navigation-panel collapsed' : 'panel navigation-panel'} role={navigationCollapsed ? 'button' : undefined} tabIndex={navigationCollapsed && !busy ? 0 : undefined} aria-label={navigationCollapsed ? '展开左栏' : undefined} aria-disabled={navigationCollapsed && busy ? true : undefined} onClick={navigationCollapsed && !busy ? () => updateNavigationCollapsed(false) : undefined} onKeyDown={navigationCollapsed ? (event) => { if (!busy && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); updateNavigationCollapsed(false); } } : undefined}>
           {navigationCollapsed ? <span className="column-collapse-handle" aria-hidden="true">{'>'}</span> : <>
             <div className="workspace-head">
@@ -375,21 +378,15 @@ export function App() {
             <div className="history-list">{articleSummaries.length ? articleSummaries.map((item) => <div className={visibleArticle?.id === item.id ? 'history-row active' : 'history-row'} key={item.id}><button className="history-item" disabled={busy} onClick={() => void openArticle(item.id)}><strong>{item.title}</strong><span>{taskStatusLabel(item.taskStatus)} · {item.outlineCount}纲 · {item.blockCount}节</span><span>{new Date(item.updatedAt).toLocaleString()}</span></button><button aria-label={`删除 ${item.title}`} className="history-delete" disabled={busy} title="删除任务" onClick={() => void deleteArticle(item.id)}>×</button></div>) : <div className="empty">当前工作台暂无历史任务。</div>}</div>
           </>}
         </aside>
-        <aside className="panel task-card-panel">
+        {taskCardConfirmed ? <aside className="panel task-card-panel">
           <h2>任务卡</h2>
-          {!visibleArticle?.taskCard ? <div className="empty">尚未生成任务卡。</div> : <TaskCardView taskCard={visibleArticle.taskCard} />}
-          {visibleArticle && lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-task-card-confirm' && <button disabled={busy} onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'confirm' }))}>确认任务卡</button>}
+          {visibleArticle.taskCard ? <TaskCardView taskCard={visibleArticle.taskCard} /> : null}
           {visibleArticle && canGenerateOutline && <button disabled={busy} onClick={() => execute(() => api.startOutline(visibleArticle.id, userId, sessionId))}>{visibleArticle.outline.length ? '重新生成大纲' : '生成大纲'}</button>}
           {visibleArticle && lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-outline-confirm' && <button disabled={busy} onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'confirm' }))}>确认大纲</button>}
-        </aside>
+        </aside> : null}
         <section className="panel editor-panel">
           <div className="editor-scroll-content">
-            <h2>任务卡工作区</h2>
-            <div className="task-composer">
-            <div className="task-composer-head"><h3>任务设置</h3><span>创建新任务卡时应用</span></div>
-            {writingStandard ? <WritingStandardControls standard={writingStandard} selectedLanguageEra={selectedLanguageEra} onSelectLanguageEra={setSelectedLanguageEra} /> : null}
-            {domainProfiles.length ? <DomainProfileControls profiles={domainProfiles} recommendations={domainProfileRecommendations} selectedProfileId={selectedProfileId} selections={profileSelections} onSelectProfile={selectProfile} onUpdateGroup={updateProfileGroup} /> : null}
-          </div>
+          {taskCardDraft && visibleArticle?.taskCard ? <section className="draft-task-card-main"><div className="draft-task-card-head"><h2>任务卡草稿</h2>{taskCardConfirmationRunId ? <button disabled={busy} onClick={() => execute(() => api.resume(taskCardConfirmationRunId, { decision: 'confirm' }))}>确认任务卡</button> : null}</div><TaskCardView taskCard={visibleArticle.taskCard} /></section> : null}
           {visibleArticle?.outline.length ? <div className="outline"><h3>大纲</h3>{visibleArticle.outline.map((item) => {
             const isEditing = editingOutline?.id === item.id;
             const sectionBlocks = visibleArticle.blocks.filter((block) => block.sectionId === item.id);
@@ -405,7 +402,7 @@ export function App() {
           })}</div> : null}
           <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => setSelectedBlockId(block.id)} onToggleCollapse={() => toggleBlockCollapsed(block.id)} />)}</div>
           <div className="editor-support">
-            <section className="support-card"><h3>知识 / 引用 / 标签</h3>{selectedBlock ? <div><p className="mono">{selectedBlock.id}</p><h4>引用来源</h4>{selectedBlock.sourceRefs.length ? selectedBlock.sourceRefs.map((ref) => <span className="tag" key={ref}>{ref}</span>) : <div className="empty">暂无引用绑定</div>}<h4>主题标签</h4>{selectedBlock.themeTags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div> : <div className="empty">选择一个段落后显示对应来源和标签。</div>}</section>
+            {hasWritingBlocks ? <section className="support-card"><h3>知识 / 引用 / 标签</h3>{selectedBlock ? <div><p className="mono">{selectedBlock.id}</p><h4>引用来源</h4>{selectedBlock.sourceRefs.length ? selectedBlock.sourceRefs.map((ref) => <span className="tag" key={ref}>{ref}</span>) : <div className="empty">暂无引用绑定</div>}<h4>主题标签</h4>{selectedBlock.themeTags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div> : <div className="empty">选择一个段落后显示对应来源和标签。</div>}</section> : null}
             <section className="support-card"><h3>修订日志</h3><RevisionLogView article={visibleArticle} /></section>
             {visibleArticle && progressVisible ? <section className="support-card"><h3>执行进度</h3><ProgressTimeline events={liveEvents} run={lastRun?.run} /></section> : null}
           </div>
@@ -414,16 +411,16 @@ export function App() {
             {article?.taskCard ? <div className="task-dialog-toolbar">
               <div className="task-target-toggle" role="radiogroup" aria-label="任务卡目标">
               <button type="button" role="radio" aria-checked={taskCardDialogTarget === 'current'} className={taskCardDialogTarget === 'current' ? 'active' : ''} disabled={busy} onClick={() => { setTaskCardTarget('current'); setSelectedBlockId(undefined); }}>{taskCardDialogTarget === 'new' ? '前一个任务' : '当前任务'}</button>
-              <button type="button" role="radio" aria-checked={taskCardDialogTarget === 'new'} className={taskCardDialogTarget === 'new' ? 'active' : ''} disabled={busy} onClick={() => { setTaskCardTarget('new'); setSelectedBlockId(undefined); setLastRun(undefined); setLiveEvents([]); setProgressVisible(false); setTaskCardRevisionSummary(undefined); }}>新任务</button>
+              <button type="button" role="radio" aria-checked={taskCardDialogTarget === 'new'} className={taskCardDialogTarget === 'new' ? 'active' : ''} disabled={busy} onClick={() => { setTaskCardTarget('new'); setSelectedBlockId(undefined); setLastRun(undefined); setLiveEvents([]); setProgressVisible(false); }}>新任务</button>
               </div>
               <span>{taskCardDialogTarget === 'new' ? '尚未创建' : article.taskCard.topic}</span>
             </div> : null}
             {taskCardDialogTarget === 'current' && taskCardFollowUpPrompts.length ? <TaskCardGuidance prompts={taskCardFollowUpPrompts} onChooseOption={chooseTaskCardPromptOption} /> : null}
+            {taskCardDialogTarget === 'new' ? <NewTaskGuidance writingStandard={writingStandard} selectedLanguageEra={selectedLanguageEra} onSelectLanguageEra={setSelectedLanguageEra} domainProfiles={domainProfiles} recommendations={domainProfileRecommendations} selectedProfileId={selectedProfileId} selections={profileSelections} onSelectProfile={selectProfile} onUpdateGroup={updateProfileGroup} /> : null}
             <div className="task-dialog-input-row">
-              <textarea value={activeTaskCardMessage} onChange={(event) => setActiveTaskCardMessage(event.target.value)} placeholder={taskCardPlaceholder(taskCardDialogTarget, taskCardFollowUpPrompts)} />
-              <button className="send-button" aria-label="发送" title="发送" disabled={busy || !canSubmitTaskCardMessage} onClick={() => void submitTaskCardMessage()}>↑</button>
+              <textarea value={activeTaskCardMessage} onChange={(event) => setActiveTaskCardMessage(event.target.value)} onKeyDown={submitTaskCardMessageWithKeyboard} placeholder={taskCardPlaceholder(taskCardDialogTarget, taskCardFollowUpPrompts)} />
+              <button className={busy ? 'send-button processing' : 'send-button'} aria-label={busy ? '处理中' : '发送'} aria-busy={busy ? true : undefined} title={busy ? '处理中' : '发送'} disabled={busy || !canSubmitTaskCardMessage} onClick={() => void submitTaskCardMessage()}>↑</button>
             </div>
-            {taskCardDialogTarget === 'current' && taskCardRevisionSummary ? <div className="revision-summary">{taskCardRevisionSummary}</div> : null}
           </div>
         </section>
       </main>
@@ -457,6 +454,27 @@ function TaskCardGuidance(props: { prompts: TaskCardFollowUpPrompt[]; onChooseOp
         <div className="task-guidance-question">{prompt.question}</div>
         {prompt.options.length ? <div className="task-guidance-options">{prompt.options.map((option) => <button type="button" className="task-guidance-option" key={option} onClick={() => props.onChooseOption(prompt, option)}>{option}</button>)}</div> : null}
       </div>)}
+    </div>
+  );
+}
+
+function NewTaskGuidance(props: {
+  writingStandard?: WritingStandardSummary;
+  selectedLanguageEra: string;
+  onSelectLanguageEra: (languageEra: string) => void;
+  domainProfiles: DomainProfileSummary[];
+  recommendations: DomainProfileRecommendation[];
+  selectedProfileId?: string;
+  selections: Record<string, string | string[]>;
+  onSelectProfile: (profileId: string) => void;
+  onUpdateGroup: (groupId: string, value: string | string[]) => void;
+}) {
+  if (!props.writingStandard && !props.domainProfiles.length) return null;
+  return (
+    <div className="task-guidance task-settings-guidance">
+      <div className="task-guidance-head"><strong>待确认项</strong><span>新任务设置</span></div>
+      {props.writingStandard ? <div className="task-guidance-item"><WritingStandardControls standard={props.writingStandard} selectedLanguageEra={props.selectedLanguageEra} onSelectLanguageEra={props.onSelectLanguageEra} /></div> : null}
+      {props.domainProfiles.length ? <div className="task-guidance-item"><DomainProfileControls profiles={props.domainProfiles} recommendations={props.recommendations} selectedProfileId={props.selectedProfileId} selections={props.selections} onSelectProfile={props.onSelectProfile} onUpdateGroup={props.onUpdateGroup} /></div> : null}
     </div>
   );
 }
@@ -755,10 +773,9 @@ function appendPromptAnswer(current: string, question: string, answer: string): 
   return current.trim() ? `${current.trim()}\n${line}` : line;
 }
 
-function taskCardPlaceholder(target: TaskCardTarget, prompts: TaskCardFollowUpPrompt[]): string {
+function taskCardPlaceholder(target: TaskCardTarget, _prompts: TaskCardFollowUpPrompt[]): string {
   if (target === 'new') return '输入写作需求，创建新的任务卡。';
-  if (prompts.length) return '选择上方选项，或直接补充任务卡信息。';
-  return '输入对当前任务卡的修改意见。';
+  return '对当前任务的修改意见';
 }
 
 function singleSelection(value: string | string[] | undefined): string {
