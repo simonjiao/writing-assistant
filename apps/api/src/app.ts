@@ -132,6 +132,28 @@ export function createApp(config: AppConfig, container: AppContainer) {
     await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: access.article.id, blockId: comment.blockId, commentId: comment.id, reason: 'article-comment-replied', userId }, createdAt: nowIso() });
     return withWritingStandardSummary(updated);
   });
+  app.delete('/api/articles/:articleId/comments/:commentId/replies/:replyId', async (request, reply) => {
+    const { articleId, commentId, replyId } = request.params as { articleId: string; commentId: string; replyId: string };
+    const body = (request.body ?? {}) as { userId?: string };
+    const userId = readUserId(body.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const access = await requireArticleAccess(container, userId, articleId);
+    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
+    const comments = access.article.comments ?? [];
+    const comment = comments.find((item) => item.id === commentId);
+    if (!comment) return reply.code(404).send({ error: 'Article comment not found.' });
+    const replies = comment.replies ?? [];
+    const targetReply = replies.find((item) => item.id === replyId);
+    if (!targetReply) return reply.code(404).send({ error: 'Article comment reply not found.' });
+    comment.replies = replies.filter((item) => item.id !== replyId);
+    if (targetReply.role === 'assistant' && comment.response?.trim() === targetReply.content.trim()) {
+      comment.response = undefined;
+    }
+    reconcileCommentAfterReplyDeletion(comment);
+    const updated = await container.stores.artifactStore.updateArticle(access.article);
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: access.article.id, blockId: comment.blockId, commentId: comment.id, replyId: targetReply.id, reason: 'article-comment-reply-deleted', userId }, createdAt: nowIso() });
+    return withWritingStandardSummary(updated);
+  });
   app.post('/api/articles/:articleId/comments/process', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
     const body = (request.body ?? {}) as { userId?: string; sessionId?: string; commentIds?: string[] };
@@ -895,6 +917,40 @@ function appendCommentReply(comment: ArticleComment, role: 'user' | 'assistant' 
   const last = replies[replies.length - 1];
   comment.replies = last?.role === role && last.content === text ? replies : [...replies, { id: newId('crp'), role, content: text, createdAt }];
   comment.updatedAt = createdAt;
+}
+
+function reconcileCommentAfterReplyDeletion(comment: ArticleComment): void {
+  const now = nowIso();
+  const replies = comment.replies ?? [];
+  const latestReply = replies[replies.length - 1];
+  if (latestReply?.role === 'user') {
+    comment.status = 'open';
+    comment.resolutionKind = undefined;
+    comment.updatedAt = now;
+    return;
+  }
+  if (comment.response?.trim()) {
+    if (comment.replacementText?.trim() || comment.resolvedAt) {
+      comment.status = 'resolved';
+      comment.resolutionKind = comment.replacementText?.trim() ? 'revision' : 'explanation';
+      comment.resolvedAt = comment.resolvedAt ?? now;
+    } else {
+      comment.status = 'needs_input';
+      comment.resolutionKind = 'question';
+    }
+    comment.updatedAt = now;
+    return;
+  }
+  if (comment.replacementText?.trim()) {
+    comment.status = 'resolved';
+    comment.resolutionKind = 'revision';
+    comment.resolvedAt = comment.resolvedAt ?? now;
+  } else {
+    comment.status = 'open';
+    comment.resolutionKind = undefined;
+    comment.resolvedAt = undefined;
+  }
+  comment.updatedAt = now;
 }
 
 function legacyResponseReply(comment: ArticleComment): NonNullable<ArticleComment['replies']> {

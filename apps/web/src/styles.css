@@ -997,12 +997,35 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .article-comment-head {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 8px;
   color: #6f665b;
   font-size: 12px;
 }
+.article-comment-head div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
 .article-comment-head strong {
   color: #2f3742;
+}
+.comment-delete-button {
+  width: 22px;
+  height: 22px;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: #9b8f82;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+}
+.comment-delete-button:hover:not(:disabled) {
+  border-color: #efc8c0;
+  background: #fff1ee;
+  color: #8f2416;
 }
 .article-comment p {
   margin: 0;
@@ -1025,6 +1048,12 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 }
 .comment-reply.role-user {
   background: #edf3f9;
+}
+.comment-reply-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 .comment-reply span {
   color: #6f665b;

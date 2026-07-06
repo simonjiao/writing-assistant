@@ -203,6 +203,73 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('deletes a single article comment reply and restores prior handled state', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'delete-reply-user', name: '删除回复工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'delete-reply-user', workspaceId: workspace.id, title: '删除回复测试' });
+    article.blocks = [{
+      id: 'blk-delete-reply-1',
+      type: 'paragraph',
+      sectionId: 'outline-1',
+      title: '正文',
+      text: '这一段需要保留批注，但删除其中一条回复。',
+      sourceRefs: [],
+      themeTags: [],
+      status: 'draft',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    }];
+    await container.stores.artifactStore.updateArticle(article);
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/comments`,
+      payload: { userId: 'delete-reply-user', blockId: 'blk-delete-reply-1', selectedText: '删除其中一条回复', comment: '这条批注先解释。' },
+    });
+    const commentId = created.json().comments[0].id;
+    const stored = await container.stores.artifactStore.getArticle(article.id);
+    const comment = stored?.comments?.[0];
+    expect(comment).toBeDefined();
+    const handledAt = nowIso();
+    Object.assign(comment!, {
+      status: 'resolved',
+      resolutionKind: 'explanation',
+      response: '已经解释过这条批注。',
+      replies: [{ id: 'crp-existing-answer', role: 'assistant', content: '已经解释过这条批注。', createdAt: handledAt }],
+      resolvedAt: handledAt,
+      updatedAt: handledAt,
+    });
+    await container.stores.artifactStore.updateArticle(stored!);
+    const replied = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/comments/${commentId}/replies`,
+      payload: { userId: 'delete-reply-user', content: '这条新回复还没处理，想删掉。' },
+    });
+    expect(replied.statusCode).toBe(200);
+    const replyId = replied.json().comments[0].replies.at(-1).id;
+    expect(replied.json().comments[0].status).toBe('open');
+
+    const deleted = await app.inject({
+      method: 'DELETE',
+      url: `/api/articles/${article.id}/comments/${commentId}/replies/${replyId}`,
+      payload: { userId: 'delete-reply-user' },
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json().comments[0].status).toBe('resolved');
+    expect(deleted.json().comments[0].resolutionKind).toBe('explanation');
+    expect(deleted.json().comments[0].response).toBe('已经解释过这条批注。');
+    expect(deleted.json().comments[0].replies).toEqual([{ id: 'crp-existing-answer', role: 'assistant', content: '已经解释过这条批注。', createdAt: handledAt }]);
+    expect(deleted.json().blocks[0].text).toBe('这一段需要保留批注，但删除其中一条回复。');
+    const missing = await app.inject({
+      method: 'DELETE',
+      url: `/api/articles/${article.id}/comments/${commentId}/replies/${replyId}`,
+      payload: { userId: 'delete-reply-user' },
+    });
+    expect(missing.statusCode).toBe(404);
+    await app.close();
+  });
+
   it('runs workflows through the local async queue', async () => {
     const config = testConfig({ workflowExecutionMode: 'async' });
     const container = createContainer(config);
