@@ -115,6 +115,23 @@ export function createApp(config: AppConfig, container: AppContainer) {
     await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: access.article.id, blockId, commentId: comment.id, reason: 'article-comment-created', userId }, createdAt: nowIso() });
     return withWritingStandardSummary(updated);
   });
+  app.post('/api/articles/:articleId/comments/:commentId/replies', async (request, reply) => {
+    const { articleId, commentId } = request.params as { articleId: string; commentId: string };
+    const body = (request.body ?? {}) as { userId?: string; content?: string };
+    const userId = readUserId(body.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const access = await requireArticleAccess(container, userId, articleId);
+    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
+    const content = body.content?.trim();
+    if (!content) return reply.code(400).send({ error: 'content is required.' });
+    const comment = (access.article.comments ?? []).find((item) => item.id === commentId);
+    if (!comment) return reply.code(404).send({ error: 'Article comment not found.' });
+    appendCommentReply(comment, 'user', content);
+    updateComment(comment, { status: 'open', resolutionKind: undefined, resolvedAt: undefined });
+    const updated = await container.stores.artifactStore.updateArticle(access.article);
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: access.article.id, blockId: comment.blockId, commentId: comment.id, reason: 'article-comment-replied', userId }, createdAt: nowIso() });
+    return withWritingStandardSummary(updated);
+  });
   app.post('/api/articles/:articleId/comments/process', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
     const body = (request.body ?? {}) as { userId?: string; sessionId?: string; commentIds?: string[] };
@@ -867,6 +884,22 @@ function updateComment(comment: ArticleComment, patch: Partial<ArticleComment>):
     updatedAt: now,
     resolvedAt: patch.status === 'resolved' ? now : comment.resolvedAt,
   });
+  if (typeof patch.response === 'string' && patch.response.trim()) appendCommentReply(comment, 'assistant', patch.response, now);
+}
+
+function appendCommentReply(comment: ArticleComment, role: 'user' | 'assistant' | 'system', content: string, createdAt = nowIso()): void {
+  const text = content.trim();
+  if (!text) return;
+  const existingReplies = comment.replies ?? [];
+  const replies = existingReplies.length ? existingReplies : legacyResponseReply(comment);
+  const last = replies[replies.length - 1];
+  comment.replies = last?.role === role && last.content === text ? replies : [...replies, { id: newId('crp'), role, content: text, createdAt }];
+  comment.updatedAt = createdAt;
+}
+
+function legacyResponseReply(comment: ArticleComment): NonNullable<ArticleComment['replies']> {
+  const response = comment.response?.trim();
+  return response ? [{ id: newId('crp'), role: 'assistant', content: response, createdAt: comment.resolvedAt ?? comment.updatedAt }] : [];
 }
 
 function locateCommentSelection(text: string, comment: ArticleComment): { start: number; end: number } | undefined {

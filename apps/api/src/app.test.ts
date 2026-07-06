@@ -162,7 +162,44 @@ describe('api app', () => {
     expect(body.article.comments[0].status).toBe('resolved');
     expect(body.article.comments[0].resolutionKind).toBe('revision');
     expect(body.article.comments[0].response).toContain('前80回');
+    expect(body.article.comments[0].replies.at(-1)).toMatchObject({ role: 'assistant' });
     expect(body.article.blocks[0].text).not.toContain('触柱而亡');
+    await app.close();
+  });
+
+  it('adds user replies to article comments and reopens them for processing', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'reply-user', name: '批注回复工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'reply-user', workspaceId: workspace.id, title: '回复测试' });
+    article.blocks = [{
+      id: 'blk-reply-1',
+      type: 'paragraph',
+      sectionId: 'outline-1',
+      title: '正文',
+      text: '这一段需要继续讨论。',
+      sourceRefs: [],
+      themeTags: [],
+      status: 'draft',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    }];
+    await container.stores.artifactStore.updateArticle(article);
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/comments`,
+      payload: { userId: 'reply-user', blockId: 'blk-reply-1', selectedText: '这一段需要继续讨论。', comment: '先解释一下。' },
+    });
+    const commentId = created.json().comments[0].id;
+    const replied = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/comments/${commentId}/replies`,
+      payload: { userId: 'reply-user', content: '补充：这里其实是想改得更清楚。' },
+    });
+    expect(replied.statusCode).toBe(200);
+    expect(replied.json().comments[0].status).toBe('open');
+    expect(replied.json().comments[0].replies).toMatchObject([{ role: 'user', content: '补充：这里其实是想改得更清楚。' }]);
     await app.close();
   });
 

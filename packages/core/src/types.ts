@@ -93,6 +93,13 @@ export interface ThemeTag { id: string; label: string; scope: 'article' | 'secti
 export type ArticleCommentStatus = 'open' | 'resolved' | 'needs_input';
 export type ArticleCommentResolutionKind = 'revision' | 'explanation' | 'question';
 
+export interface ArticleCommentReply {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  createdAt: string;
+}
+
 export interface ArticleComment {
   id: string;
   articleId: string;
@@ -105,6 +112,7 @@ export interface ArticleComment {
   resolutionKind?: ArticleCommentResolutionKind;
   response?: string;
   replacementText?: string;
+  replies?: ArticleCommentReply[];
   createdAt: string;
   updatedAt: string;
   resolvedAt?: string;

@@ -24,6 +24,7 @@ export const api = {
   getRun(runId: string) { return request<RunResponse>(`/api/runs/${runId}`); },
   getArticle(articleId: string, userId?: string) { const query = userId ? `?userId=${encodeURIComponent(userId)}` : ''; return request<ArticleArtifact>(`/api/articles/${articleId}${query}`); },
   createArticleComment(articleId: string, input: { userId?: string; blockId: string; selectedText: string; comment: string }) { return request<ArticleArtifact>(`/api/articles/${articleId}/comments`, { method: 'POST', body: JSON.stringify(input) }); },
+  addArticleCommentReply(articleId: string, commentId: string, input: { userId?: string; content: string }) { return request<ArticleArtifact>(`/api/articles/${articleId}/comments/${commentId}/replies`, { method: 'POST', body: JSON.stringify(input) }); },
   processArticleComments(articleId: string, input: { userId?: string; sessionId?: string; commentIds?: string[] }) { return request<ArticleCommentProcessResponse>(`/api/articles/${articleId}/comments/process`, { method: 'POST', body: JSON.stringify(input) }); },
   listDialogueProposals(articleId: string, userId: string) { return request<RevisionProposal[]>(`/api/articles/${articleId}/dialogue/proposals?userId=${encodeURIComponent(userId)}`); },
   listDialogueMessages(articleId: string, userId: string, limit = 24) { return request<DialogueMessage[]>(`/api/articles/${articleId}/dialogue/messages?userId=${encodeURIComponent(userId)}&limit=${limit}`); },

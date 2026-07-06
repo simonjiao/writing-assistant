@@ -42,6 +42,7 @@ export function App() {
   const [selectedBlockId, setSelectedBlockId] = useState<string>();
   const [patchInstruction, setPatchInstruction] = useState('这段写得更含蓄、更有红楼梦的味道，但不要改变意思。');
   const [commentDraft, setCommentDraft] = useState<CommentDraft>();
+  const [commentReplyDrafts, setCommentReplyDrafts] = useState<Record<string, string>>({});
   const [commentProcessingSummary, setCommentProcessingSummary] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -164,6 +165,7 @@ export function App() {
     setDialogueMessages([]);
     setDialogueBriefStatus(undefined);
     setCommentDraft(undefined);
+    setCommentReplyDrafts({});
     setCommentProcessingSummary(undefined);
     setProposalDirty(false);
     setOutlineRegenerationWarningOpen(false);
@@ -319,6 +321,31 @@ export function App() {
       const updated = await api.createArticleComment(visibleArticle.id, { userId, blockId: commentDraft.blockId, selectedText: commentDraft.selectedText, comment: commentDraft.comment });
       setArticle(updated);
       setCommentDraft(undefined);
+      await refreshArticleSummaries(updated.workspaceId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  function updateCommentReplyDraft(commentId: string, content: string) {
+    setCommentReplyDrafts((current) => ({ ...current, [commentId]: content }));
+  }
+  async function submitArticleCommentReply(commentId: string) {
+    if (!visibleArticle) return;
+    const content = commentReplyDrafts[commentId]?.trim();
+    if (!content) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const updated = await api.addArticleCommentReply(visibleArticle.id, commentId, { userId, content });
+      setArticle(updated);
+      setCommentReplyDrafts((current) => {
+        const next = { ...current };
+        delete next[commentId];
+        return next;
+      });
+      setCommentProcessingSummary(undefined);
       await refreshArticleSummaries(updated.workspaceId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -757,11 +784,11 @@ export function App() {
                 {isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div className="outline-main"><div className="outline-heading"><button type="button" className="collapse-button" aria-label={outlineCollapsed ? `展开 ${item.title}` : `折叠 ${item.title}`} title={outlineCollapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); setSelectedOutlineId(item.id); toggleOutlineCollapsed(item.id); }}>{outlineCollapsed ? '>' : 'v'}</button><div className="outline-title"><strong>{item.title}</strong><span className="outline-meta">{roleLabel ? <span className="outline-role">{roleLabel}</span> : null}{item.keySection ? <span className="outline-key">关键</span> : null}<span>{outlineStatusLabel(item.status)}{sectionBlocks.length ? ` · ${sectionBlocks.length} 段正文` : ''}</span></span></div></div>{outlineCollapsed ? null : <><p>{item.goal}</p>{specialHandling.length ? <ul className="outline-special">{specialHandling.map((handling) => <li key={handling}>{handling}</li>)}</ul> : null}</>}</div>}
                 <OutlineActionBar isEditing={isEditing} requestBusy={busy} writeBusy={writeBusy} canSave={Boolean(editingOutline?.title.trim() && editingOutline.goal.trim())} hasSectionBlocks={Boolean(sectionBlocks.length)} onSave={() => void saveOutlineEdit()} onCancel={() => setEditingOutline(undefined)} onEdit={() => { setSelectedOutlineId(item.id); setEditingOutline({ id: item.id, title: item.title, goal: item.goal }); }} onGenerate={() => void startSectionGeneration(item.id)} />
                 {!outlineCollapsed && progressVisible && sectionGeneration?.sectionId === item.id ? <GenerationProgressView progress={sectionGeneration} events={liveEvents} /> : null}
-                {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} comments={visibleComments} commentDraft={commentDraft} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={(blockId) => { setSelectedBlockId(blockId); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleBlockCollapse={toggleBlockCollapsed} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} busy={busy} /> : null}
+                {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} comments={visibleComments} commentDraft={commentDraft} commentReplyDrafts={commentReplyDrafts} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={(blockId) => { setSelectedBlockId(blockId); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleBlockCollapse={toggleBlockCollapsed} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} onUpdateCommentReplyDraft={updateCommentReplyDraft} onSubmitCommentReply={(commentId) => void submitArticleCommentReply(commentId)} busy={busy} /> : null}
               </div>
             );
           })}</div> : null}
-          <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} comments={visibleComments} commentDraft={commentDraft} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} busy={busy} />)}</div>
+          <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} comments={visibleComments} commentDraft={commentDraft} commentReplyDrafts={commentReplyDrafts} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} onUpdateCommentReplyDraft={updateCommentReplyDraft} onSubmitCommentReply={(commentId) => void submitArticleCommentReply(commentId)} busy={busy} />)}</div>
           {!outlineGenerated ? <div className="editor-support">
             {visibleArticle ? <CommentReviewCard comments={visibleComments} processingSummary={commentProcessingSummary} busy={writeBusy} onProcess={() => void processArticleComments()} /> : null}
             {visibleArticle ? <DialogueBriefCard status={dialogueBriefStatus} /> : null}
@@ -804,12 +831,12 @@ export function App() {
     </div>
   );
 }
-function ArticleBlockView(props: { block: ArticleBlock; comments: ArticleComment[]; commentDraft?: CommentDraft; selected: boolean; collapsed: boolean; onSelect: () => void; onToggleCollapse: () => void; onCaptureSelection: (block: ArticleBlock) => void; onUpdateCommentDraft: (comment: string) => void; onSubmitComment: () => void; onCancelComment: () => void; busy: boolean }) {
+function ArticleBlockView(props: { block: ArticleBlock; comments: ArticleComment[]; commentDraft?: CommentDraft; commentReplyDrafts: Record<string, string>; selected: boolean; collapsed: boolean; onSelect: () => void; onToggleCollapse: () => void; onCaptureSelection: (block: ArticleBlock) => void; onUpdateCommentDraft: (comment: string) => void; onSubmitComment: () => void; onCancelComment: () => void; onUpdateCommentReplyDraft: (commentId: string, content: string) => void; onSubmitCommentReply: (commentId: string) => void; busy: boolean }) {
   const comments = commentsForBlock(props.comments, props.block.id);
-  return <article className={['block', props.selected ? 'selected' : '', props.collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} onClick={props.onSelect}><div className="block-head"><button type="button" className="collapse-button" aria-label={props.collapsed ? `展开 ${props.block.title}` : `折叠 ${props.block.title}`} title={props.collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleCollapse(); }}>{props.collapsed ? '>' : 'v'}</button><h3>{props.block.title}</h3><span>{props.block.text.length} 字</span></div>{props.collapsed ? null : <><pre onMouseUp={(event) => { event.stopPropagation(); props.onCaptureSelection(props.block); }}>{props.block.text}</pre><BlockCommentComposer blockId={props.block.id} draft={props.commentDraft} busy={props.busy} onChange={props.onUpdateCommentDraft} onSubmit={props.onSubmitComment} onCancel={props.onCancelComment} /><BlockCommentsView comments={comments} /></>}</article>;
+  return <article className={['block', props.selected ? 'selected' : '', props.collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} onClick={props.onSelect}><div className="block-head"><button type="button" className="collapse-button" aria-label={props.collapsed ? `展开 ${props.block.title}` : `折叠 ${props.block.title}`} title={props.collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleCollapse(); }}>{props.collapsed ? '>' : 'v'}</button><h3>{props.block.title}</h3><span>{props.block.text.length} 字</span></div>{props.collapsed ? null : <><pre onMouseUp={(event) => { event.stopPropagation(); props.onCaptureSelection(props.block); }}>{props.block.text}</pre><BlockCommentComposer blockId={props.block.id} draft={props.commentDraft} busy={props.busy} onChange={props.onUpdateCommentDraft} onSubmit={props.onSubmitComment} onCancel={props.onCancelComment} /><BlockCommentsView comments={comments} replyDrafts={props.commentReplyDrafts} busy={props.busy} onUpdateReply={props.onUpdateCommentReplyDraft} onSubmitReply={props.onSubmitCommentReply} /></>}</article>;
 }
 
-function SectionBlocksView(props: { blocks: ArticleBlock[]; comments: ArticleComment[]; commentDraft?: CommentDraft; selectedBlockId?: string; collapsedBlockIds: string[]; onSelectBlock: (blockId: string) => void; onToggleBlockCollapse: (blockId: string) => void; onCaptureSelection: (block: ArticleBlock) => void; onUpdateCommentDraft: (comment: string) => void; onSubmitComment: () => void; onCancelComment: () => void; busy: boolean }) {
+function SectionBlocksView(props: { blocks: ArticleBlock[]; comments: ArticleComment[]; commentDraft?: CommentDraft; commentReplyDrafts: Record<string, string>; selectedBlockId?: string; collapsedBlockIds: string[]; onSelectBlock: (blockId: string) => void; onToggleBlockCollapse: (blockId: string) => void; onCaptureSelection: (block: ArticleBlock) => void; onUpdateCommentDraft: (comment: string) => void; onSubmitComment: () => void; onCancelComment: () => void; onUpdateCommentReplyDraft: (commentId: string, content: string) => void; onSubmitCommentReply: (commentId: string) => void; busy: boolean }) {
   const totalLength = props.blocks.reduce((sum, block) => sum + block.text.length, 0);
   return (
     <div className="section-blocks">
@@ -817,7 +844,7 @@ function SectionBlocksView(props: { blocks: ArticleBlock[]; comments: ArticleCom
       {props.blocks.map((block, index) => {
         const collapsed = props.collapsedBlockIds.includes(block.id);
         const comments = commentsForBlock(props.comments, block.id);
-        return <article className={['section-paragraph', props.selectedBlockId === block.id ? 'selected' : '', collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} key={block.id} onClick={() => props.onSelectBlock(block.id)}><div className="paragraph-head"><button type="button" className="collapse-button" aria-label={collapsed ? `展开第 ${index + 1} 段` : `折叠第 ${index + 1} 段`} title={collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleBlockCollapse(block.id); }}>{collapsed ? '>' : 'v'}</button><span>第 {index + 1} 段</span><span>{block.text.length} 字</span></div>{collapsed ? null : <><pre onMouseUp={(event) => { event.stopPropagation(); props.onCaptureSelection(block); }}>{block.text}</pre><BlockCommentComposer blockId={block.id} draft={props.commentDraft} busy={props.busy} onChange={props.onUpdateCommentDraft} onSubmit={props.onSubmitComment} onCancel={props.onCancelComment} /><BlockCommentsView comments={comments} /></>}</article>;
+        return <article className={['section-paragraph', props.selectedBlockId === block.id ? 'selected' : '', collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} key={block.id} onClick={() => props.onSelectBlock(block.id)}><div className="paragraph-head"><button type="button" className="collapse-button" aria-label={collapsed ? `展开第 ${index + 1} 段` : `折叠第 ${index + 1} 段`} title={collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleBlockCollapse(block.id); }}>{collapsed ? '>' : 'v'}</button><span>第 {index + 1} 段</span><span>{block.text.length} 字</span></div>{collapsed ? null : <><pre onMouseUp={(event) => { event.stopPropagation(); props.onCaptureSelection(block); }}>{block.text}</pre><BlockCommentComposer blockId={block.id} draft={props.commentDraft} busy={props.busy} onChange={props.onUpdateCommentDraft} onSubmit={props.onSubmitComment} onCancel={props.onCancelComment} /><BlockCommentsView comments={comments} replyDrafts={props.commentReplyDrafts} busy={props.busy} onUpdateReply={props.onUpdateCommentReplyDraft} onSubmitReply={props.onSubmitCommentReply} /></>}</article>;
       })}
     </div>
   );
@@ -837,22 +864,27 @@ function BlockCommentComposer(props: { blockId: string; draft?: CommentDraft; bu
   );
 }
 
-function BlockCommentsView(props: { comments: ArticleComment[] }) {
+function BlockCommentsView(props: { comments: ArticleComment[]; replyDrafts: Record<string, string>; busy: boolean; onUpdateReply: (commentId: string, content: string) => void; onSubmitReply: (commentId: string) => void }) {
   if (!props.comments.length) return null;
   return (
     <div className="block-comments" onClick={(event) => event.stopPropagation()}>
-      {props.comments.map((comment) => <ArticleCommentItem key={comment.id} comment={comment} />)}
+      {props.comments.map((comment) => <ArticleCommentItem key={comment.id} comment={comment} replyDraft={props.replyDrafts[comment.id] ?? ''} busy={props.busy} onChangeReply={(content) => props.onUpdateReply(comment.id, content)} onSubmitReply={() => props.onSubmitReply(comment.id)} />)}
     </div>
   );
 }
 
-function ArticleCommentItem(props: { comment: ArticleComment }) {
+function ArticleCommentItem(props: { comment: ArticleComment; replyDraft: string; busy: boolean; onChangeReply: (content: string) => void; onSubmitReply: () => void }) {
+  const replies = commentReplies(props.comment);
   return (
     <div className={`article-comment status-${props.comment.status}`}>
       <div className="article-comment-head"><strong>{commentStatusLabel(props.comment.status)}</strong><span>{commentResolutionLabel(props.comment.resolutionKind)}</span></div>
       <p className="commented-text">{summarizeText(props.comment.selectedText, 96)}</p>
       <p>{props.comment.comment}</p>
-      {props.comment.response ? <p className="comment-response">{props.comment.response}</p> : null}
+      {replies.length ? <div className="comment-replies">{replies.map((reply) => <div className={`comment-reply role-${reply.role}`} key={reply.id}><span>{commentReplyRoleLabel(reply.role)}</span><p>{reply.content}</p></div>)}</div> : null}
+      <div className="comment-reply-composer">
+        <input value={props.replyDraft} onChange={(event) => props.onChangeReply(event.target.value)} placeholder="回复这条批注" />
+        <button className="secondary-button compact" disabled={props.busy || !props.replyDraft.trim()} onClick={props.onSubmitReply}>回复</button>
+      </div>
     </div>
   );
 }
@@ -885,6 +917,17 @@ function CommentMiniList(props: { title: string; comments: ArticleComment[] }) {
 
 function commentsForBlock(comments: ArticleComment[], blockId: string): ArticleComment[] {
   return comments.filter((comment) => comment.blockId === blockId).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+function commentReplies(comment: ArticleComment): NonNullable<ArticleComment['replies']> {
+  if (comment.replies?.length) return comment.replies;
+  return comment.response?.trim() ? [{ id: `${comment.id}-legacy-response`, role: 'assistant', content: comment.response.trim(), createdAt: comment.resolvedAt ?? comment.updatedAt }] : [];
+}
+
+function commentReplyRoleLabel(role: NonNullable<ArticleComment['replies']>[number]['role']): string {
+  if (role === 'assistant') return '助手';
+  if (role === 'system') return '系统';
+  return '你';
 }
 
 function commentsForExistingBlocks(article?: ArticleArtifact): ArticleComment[] {
