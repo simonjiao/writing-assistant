@@ -45,7 +45,7 @@ export class DialogueCoordinatorSkill implements Skill<DialogueCoordinatorInput,
     const response = await llm.chat({
       jsonMode: true,
       temperature: 0.1,
-      maxTokens: 900,
+      maxTokens: 1600,
       messages: [
         {
           role: 'system',
@@ -59,6 +59,7 @@ export class DialogueCoordinatorSkill implements Skill<DialogueCoordinatorInput,
             '如果 pendingProposal 存在，说明用户明确要求刷新当前方案；需要输出一个吸收 conversation 和 pendingProposal 的新 proposal。',
             'operation 必须服从当前 context：task-card 使用 revise-task-card；outline 使用 revise-outline；outline-item 使用 revise-outline-item；block 使用 patch-block。',
             '不要把解释类输入包装成修改方案。用户明确确认前，任何 proposal 都只是计划。',
+            'message 和 summary 要短；operation.instruction 只写可执行修订要求，不展开成长篇说明。',
           ].join('\n'),
         },
         {

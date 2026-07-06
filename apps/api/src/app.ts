@@ -227,22 +227,30 @@ export function createApp(config: AppConfig, container: AppContainer) {
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id });
       return { mode: 'answer', message: assistantMessage, messages: await listDialogueMessages(container, access.article.id, userId) };
     }
-    const result = await container.runtime.invokeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
-      'dialogue-coordinator',
-      {
-        articleId: access.article.id,
-        message,
-        skipKnowledge: true,
-        conversation: conversation.map((item) => ({ role: item.role, content: item.content, proposalId: item.proposalId, createdAt: item.createdAt })),
-        pendingProposal: pendingProposal ? proposalForDialogue(pendingProposal) : undefined,
-        context: context.value.context,
-        taskCard: access.article.taskCard,
-        outline: access.article.outline,
-        selectedOutlineItem: context.value.selectedOutlineItem,
-        selectedBlock: context.value.selectedBlock,
-      },
-      { userId, sessionId: body.sessionId, articleId: access.article.id },
-    );
+    let result: DialogueCoordinatorOutput;
+    try {
+      result = await container.runtime.invokeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
+        'dialogue-coordinator',
+        {
+          articleId: access.article.id,
+          message,
+          skipKnowledge: true,
+          conversation: conversation.map((item) => ({ role: item.role, content: item.content, proposalId: item.proposalId, createdAt: item.createdAt })),
+          pendingProposal: pendingProposal ? proposalForDialogue(pendingProposal) : undefined,
+          context: context.value.context,
+          taskCard: access.article.taskCard,
+          outline: access.article.outline,
+          selectedOutlineItem: context.value.selectedOutlineItem,
+          selectedBlock: context.value.selectedBlock,
+        },
+        { userId, sessionId: body.sessionId, articleId: access.article.id },
+      );
+    } catch (error) {
+      if (!isDialogueCoordinatorJsonFailure(error)) throw error;
+      const assistantMessage = '这次修改范围较大，方案没有生成成功。请把要改的大纲项、要新增的情节或要删除的部分拆成更明确的一两条再发。';
+      await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id });
+      return { mode: 'clarify', message: assistantMessage, messages: await listDialogueMessages(container, access.article.id, userId) };
+    }
     if (result.mode !== 'proposal') {
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: result.message, proposalId: pendingProposal?.id });
       return { mode: result.mode, message: result.message, messages: await listDialogueMessages(container, access.article.id, userId) };
@@ -553,6 +561,10 @@ function isProposalRefreshRequest(message: string): boolean {
 
 function isModificationIntent(message: string): boolean {
   return /(改|修改|调整|删|删除|加|添加|新增|重写|扩写|压缩|不要|避免|改成|改为|换成|补充|合并|拆分|包含|纳入|加入|写进|放进|体现|保留|漏掉|遗漏|参考|使用|采用|沿用|突出|强调|弱化|去掉|移除)/.test(message);
+}
+
+function isDialogueCoordinatorJsonFailure(error: unknown): boolean {
+  return error instanceof Error && /Dialogue coordinator did not return valid JSON/.test(error.message);
 }
 
 async function applyRevisionProposal(container: AppContainer, proposalId: string, userId: string, sessionId?: string) {

@@ -681,6 +681,48 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('returns a readable dialogue response when proposal JSON is truncated', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
+    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+      if (skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator did not return valid JSON: {"mode":"proposal","operations":[{"type":"revise-outline"');
+      return originalInvokeSkill(skillId as never, input as never, meta as never);
+    }) as typeof container.runtime.invokeSkill;
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-dialogue-json-failure',
+      topic: '对话截断测试',
+      writingGoal: '测试方案 JSON 截断时的响应。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: [], themes: ['对话截断'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-json-failure-user', name: '对话截断工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-json-failure-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-json-failure-user', message: '大纲补充一个关键情节。', context: { kind: 'outline' } },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.mode).toBe('clarify');
+    expect(body.message).toContain('方案没有生成成功');
+    expect(await container.stores.revisionProposalStore.listPendingProposals(article.id, 'dialogue-json-failure-user')).toHaveLength(0);
+    expect(body.messages.map((message: { role: string }) => message.role)).toEqual(['user', 'assistant']);
+    await app.close();
+  });
+
   it('records section revisions with readable section titles', async () => {
     const config = testConfig();
     const container = createContainer(config);

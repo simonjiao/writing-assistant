@@ -682,7 +682,7 @@ export function App() {
           })}</div> : null}
           <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} />)}</div>
           {!outlineGenerated ? <div className="editor-support">
-            {hasWritingBlocks ? <KnowledgeTagsCard selectedBlock={selectedBlock} /> : null}
+            {visibleArticle ? <KnowledgeTagsCard selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
             <RevisionLogCard article={visibleArticle} />
             {visibleArticle && progressVisible ? <section className="support-card"><h3>执行进度</h3><ProgressTimeline events={liveEvents} run={lastRun?.run} /></section> : null}
           </div> : null}
@@ -707,7 +707,7 @@ export function App() {
               <button aria-label="收起辅助列" className="right-column-collapse-handle" disabled={busy} title="收起辅助列" onClick={() => updateSupportColumnCollapsed(true)}>&gt;</button>
             </div>
             <div className="right-support-content">
-              {hasWritingBlocks ? <KnowledgeTagsCard selectedBlock={selectedBlock} /> : null}
+              {visibleArticle ? <KnowledgeTagsCard selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
               <RevisionLogCard article={visibleArticle} />
             </div>
           </>}
@@ -935,7 +935,7 @@ function RevisionLogView(props: { article?: ArticleArtifact }) {
   );
 }
 
-function KnowledgeTagsCard(props: { selectedBlock?: ArticleBlock }) {
+function KnowledgeTagsCard(props: { selectedBlock?: ArticleBlock; hasWritingBlocks: boolean }) {
   return (
     <section className="support-card">
       <h3>知识 / 引用 / 标签</h3>
@@ -945,7 +945,7 @@ function KnowledgeTagsCard(props: { selectedBlock?: ArticleBlock }) {
         {props.selectedBlock.sourceRefs.length ? props.selectedBlock.sourceRefs.map((ref) => <span className="tag" key={ref}>{ref}</span>) : <div className="empty">暂无引用绑定</div>}
         <h4>主题标签</h4>
         {props.selectedBlock.themeTags.length ? props.selectedBlock.themeTags.map((tag) => <span className="tag" key={tag}>{tag}</span>) : <div className="empty">暂无主题标签。</div>}
-      </div> : <div className="empty">选择一个段落后显示对应来源和标签。</div>}
+      </div> : <div className="empty">{props.hasWritingBlocks ? '选择一个段落后显示对应来源和标签。' : '生成正文后显示段落来源和标签。'}</div>}
     </section>
   );
 }
