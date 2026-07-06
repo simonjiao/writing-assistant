@@ -195,6 +195,7 @@ export function App() {
   const taskCardFollowUpPrompts = useMemo(() => visibleArticle?.taskCard?.status === 'draft' ? taskCardPrompts(visibleArticle.taskCard) : [], [visibleArticle?.taskCard]);
   const hasWritingBlocks = Boolean(visibleArticle?.blocks.length);
   const outlineGenerated = Boolean(visibleArticle?.outline.length);
+  const visibleComments = useMemo(() => commentsForExistingBlocks(visibleArticle), [visibleArticle]);
   const dialogContext = useMemo(() => buildDialogContext(taskCardDialogTarget, visibleArticle, outlineWholeSelected, selectedOutline, selectedBlock), [taskCardDialogTarget, visibleArticle, outlineWholeSelected, selectedOutline, selectedBlock]);
   const activeDialogueProposal = dialogueResponse?.proposal?.status === 'pending' ? dialogueResponse.proposal : pendingProposals[0];
   const workflowActive = Boolean(lastRun && activeStatuses.has(lastRun.run.status));
@@ -327,10 +328,15 @@ export function App() {
   }
   async function processArticleComments() {
     if (!visibleArticle) return;
+    const commentIds = visibleComments.filter((comment) => comment.status === 'open').map((comment) => comment.id);
+    if (!commentIds.length) {
+      setCommentProcessingSummary('没有可处理批注。');
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
-      const response = await api.processArticleComments(visibleArticle.id, { userId, sessionId });
+      const response = await api.processArticleComments(visibleArticle.id, { userId, sessionId, commentIds });
       setArticle(response.article);
       const revised = response.results.filter((item) => item.action === 'revise' && item.changed).length;
       const explained = response.results.filter((item) => item.action === 'explain').length;
@@ -751,13 +757,13 @@ export function App() {
                 {isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div className="outline-main"><div className="outline-heading"><button type="button" className="collapse-button" aria-label={outlineCollapsed ? `展开 ${item.title}` : `折叠 ${item.title}`} title={outlineCollapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); setSelectedOutlineId(item.id); toggleOutlineCollapsed(item.id); }}>{outlineCollapsed ? '>' : 'v'}</button><div className="outline-title"><strong>{item.title}</strong><span className="outline-meta">{roleLabel ? <span className="outline-role">{roleLabel}</span> : null}{item.keySection ? <span className="outline-key">关键</span> : null}<span>{outlineStatusLabel(item.status)}{sectionBlocks.length ? ` · ${sectionBlocks.length} 段正文` : ''}</span></span></div></div>{outlineCollapsed ? null : <><p>{item.goal}</p>{specialHandling.length ? <ul className="outline-special">{specialHandling.map((handling) => <li key={handling}>{handling}</li>)}</ul> : null}</>}</div>}
                 <OutlineActionBar isEditing={isEditing} requestBusy={busy} writeBusy={writeBusy} canSave={Boolean(editingOutline?.title.trim() && editingOutline.goal.trim())} hasSectionBlocks={Boolean(sectionBlocks.length)} onSave={() => void saveOutlineEdit()} onCancel={() => setEditingOutline(undefined)} onEdit={() => { setSelectedOutlineId(item.id); setEditingOutline({ id: item.id, title: item.title, goal: item.goal }); }} onGenerate={() => void startSectionGeneration(item.id)} />
                 {!outlineCollapsed && progressVisible && sectionGeneration?.sectionId === item.id ? <GenerationProgressView progress={sectionGeneration} events={liveEvents} /> : null}
-                {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} comments={visibleArticle.comments ?? []} commentDraft={commentDraft} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={(blockId) => { setSelectedBlockId(blockId); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleBlockCollapse={toggleBlockCollapsed} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} busy={busy} /> : null}
+                {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} comments={visibleComments} commentDraft={commentDraft} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={(blockId) => { setSelectedBlockId(blockId); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleBlockCollapse={toggleBlockCollapsed} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} busy={busy} /> : null}
               </div>
             );
           })}</div> : null}
-          <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} comments={visibleArticle?.comments ?? []} commentDraft={commentDraft} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} busy={busy} />)}</div>
+          <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} comments={visibleComments} commentDraft={commentDraft} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} busy={busy} />)}</div>
           {!outlineGenerated ? <div className="editor-support">
-            {visibleArticle ? <CommentReviewCard article={visibleArticle} processingSummary={commentProcessingSummary} busy={writeBusy} onProcess={() => void processArticleComments()} /> : null}
+            {visibleArticle ? <CommentReviewCard comments={visibleComments} processingSummary={commentProcessingSummary} busy={writeBusy} onProcess={() => void processArticleComments()} /> : null}
             {visibleArticle ? <DialogueBriefCard status={dialogueBriefStatus} /> : null}
             {visibleArticle ? <KnowledgeTagsCard article={visibleArticle} selectedOutline={selectedOutline} outlineWholeSelected={outlineWholeSelected} selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
             <RevisionLogCard article={visibleArticle} />
@@ -784,7 +790,7 @@ export function App() {
               <button aria-label="收起辅助列" className="right-column-collapse-handle" disabled={busy} title="收起辅助列" onClick={() => updateSupportColumnCollapsed(true)}>&gt;</button>
             </div>
             <div className="right-support-content">
-              {visibleArticle ? <CommentReviewCard article={visibleArticle} processingSummary={commentProcessingSummary} busy={writeBusy} onProcess={() => void processArticleComments()} /> : null}
+              {visibleArticle ? <CommentReviewCard comments={visibleComments} processingSummary={commentProcessingSummary} busy={writeBusy} onProcess={() => void processArticleComments()} /> : null}
               {visibleArticle ? <DialogueBriefCard status={dialogueBriefStatus} /> : null}
               {visibleArticle ? <KnowledgeTagsCard article={visibleArticle} selectedOutline={selectedOutline} outlineWholeSelected={outlineWholeSelected} selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
               <RevisionLogCard article={visibleArticle} />
@@ -794,7 +800,7 @@ export function App() {
       </main>
       {visibleArticle && selectedBlockId ? <footer className="chatbar"><div className="patch-box"><strong>局部修改</strong><input value={patchInstruction} onChange={(event) => setPatchInstruction(event.target.value)} placeholder="输入对选中段落的修改意见" /><button disabled={writeBusy} onClick={() => execute(() => api.startPatch(visibleArticle.id, selectedBlockId, patchInstruction, userId, sessionId))}>生成 Patch</button>{lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-patch-confirm' && <button disabled={writeBusy} onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'accept' }))}>应用 Patch</button>}</div>{patchPreview && <div className="patch-preview"><strong>Patch 预览</strong><div className="diff-grid"><pre>{patchPreview.before}</pre><pre>{patchPreview.after}</pre></div><ul>{patchPreview.changeSummary.map((item) => <li key={item}>{item}</li>)}</ul></div>}</footer> : null}
       {workspaceModalOpen && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="workspace-modal-title"><div className="modal-head"><h2 id="workspace-modal-title">新建工作台</h2><button aria-label="关闭" className="icon-button" disabled={busy} onClick={() => setWorkspaceModalOpen(false)}>×</button></div><div className="modal-body"><label>名称</label><input value={newWorkspaceName} autoFocus onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="新工作台名称" /><label>协作者</label><input value={newWorkspaceMembers} onChange={(event) => setNewWorkspaceMembers(event.target.value)} placeholder="协作者 userId，用逗号分隔" /></div><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setWorkspaceModalOpen(false)}>取消</button><button disabled={busy || !newWorkspaceName.trim()} onClick={() => void createWorkspace()}>创建</button></div></div></div>}
-      {outlineRegenerationWarningOpen && visibleArticle ? <div className="modal-backdrop" role="presentation"><div className="modal warning-modal" role="dialog" aria-modal="true" aria-labelledby="outline-regeneration-title"><div className="modal-head"><h2 id="outline-regeneration-title">重新生成大纲？</h2><button aria-label="关闭" className="icon-button" disabled={busy} onClick={() => setOutlineRegenerationWarningOpen(false)}>×</button></div><div className="modal-body"><p className="modal-warning-text">重新生成会替换当前 {visibleArticle.outline.length} 个大纲项，并清空已经生成的 {visibleArticle.blocks.length} 段正文。这个操作适合在任务卡发生较大变化、现有大纲已经不适用时使用。</p><p className="modal-secondary-text">如果只是调整某一节或少量内容，建议选中大纲项后通过对话提出修改意见。</p></div><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setOutlineRegenerationWarningOpen(false)}>取消</button><button className="danger-button" disabled={writeBusy} onClick={() => void applyOutlineRegeneration()}>确认重新生成</button></div></div></div> : null}
+      {outlineRegenerationWarningOpen && visibleArticle ? <div className="modal-backdrop" role="presentation"><div className="modal warning-modal" role="dialog" aria-modal="true" aria-labelledby="outline-regeneration-title"><div className="modal-head"><h2 id="outline-regeneration-title">重新生成大纲？</h2><button aria-label="关闭" className="icon-button" disabled={busy} onClick={() => setOutlineRegenerationWarningOpen(false)}>×</button></div><div className="modal-body"><p className="modal-warning-text">重新生成会替换当前 {visibleArticle.outline.length} 个大纲项，并清空已经生成的 {visibleArticle.blocks.length} 段正文。旧正文批注会保留在后台历史里，但不会继续显示在当前正文批注区。</p><p className="modal-secondary-text">如果只是调整某一节或少量内容，建议选中大纲项后通过对话提出修改意见。</p></div><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setOutlineRegenerationWarningOpen(false)}>取消</button><button className="danger-button" disabled={writeBusy} onClick={() => void applyOutlineRegeneration()}>确认重新生成</button></div></div></div> : null}
     </div>
   );
 }
@@ -851,8 +857,8 @@ function ArticleCommentItem(props: { comment: ArticleComment }) {
   );
 }
 
-function CommentReviewCard(props: { article: ArticleArtifact; processingSummary?: string; busy: boolean; onProcess: () => void }) {
-  const comments = props.article.comments ?? [];
+function CommentReviewCard(props: { comments: ArticleComment[]; processingSummary?: string; busy: boolean; onProcess: () => void }) {
+  const comments = props.comments;
   const open = comments.filter((comment) => comment.status === 'open');
   const needsInput = comments.filter((comment) => comment.status === 'needs_input');
   const recentResolved = comments.filter((comment) => comment.status === 'resolved').slice(-3).reverse();
@@ -879,6 +885,11 @@ function CommentMiniList(props: { title: string; comments: ArticleComment[] }) {
 
 function commentsForBlock(comments: ArticleComment[], blockId: string): ArticleComment[] {
   return comments.filter((comment) => comment.blockId === blockId).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+function commentsForExistingBlocks(article?: ArticleArtifact): ArticleComment[] {
+  const blockIds = new Set(article?.blocks.map((block) => block.id) ?? []);
+  return (article?.comments ?? []).filter((comment) => blockIds.has(comment.blockId));
 }
 
 function commentStatusLabel(status: ArticleComment['status']): string {

@@ -295,6 +295,65 @@ describe('SectionWriterSkill', () => {
     })).rejects.toThrow('without sourceRefs');
   });
 
+  it('repairs source-backed prose by adding sourceRefs from knowledge', async () => {
+    const skill = new SectionWriterSkill();
+    const calls: Array<{ messages: Array<{ role: string; content: string }>; maxTokens?: number }> = [];
+    const output = await skill.invoke({
+      input: { articleId: 'art_1', section, taskCard },
+      context: context(),
+      llm: sequentialCapturingLlm([
+        {
+          block: {
+            text: '脂批点出此处另有深意，本段据此展开分析，但没有绑定任何来源。',
+            sourceRefs: [],
+            themeTags: ['测试主题'],
+          },
+          summary: '已生成正文。',
+        },
+        {
+          blocks: [{
+            text: '脂批点出此处另有深意，本段据此展开分析，并回到章节自身的论点。',
+            sourceRefs: ['test:k1'],
+            themeTags: ['测试主题'],
+          }],
+          summary: '已修复来源绑定。',
+        },
+      ], calls),
+    });
+    expect(output.block.sourceRefs).toEqual(['test:k1']);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].messages.find((message) => message.role === 'system')?.content).toContain('来源绑定修订器');
+  });
+
+  it('repairs optional-citation prose by removing unsupported source signals', async () => {
+    const skill = new SectionWriterSkill();
+    const relaxedTaskCard: WritingTaskCard = { ...taskCard, constraints: { ...taskCard.constraints, citationRequired: false } };
+    const output = await skill.invoke({
+      input: { articleId: 'art_1', section, taskCard: relaxedTaskCard },
+      context: { knowledge: [], compactSummary: '', article: { outline: articleOutline, blocks: [] } } as never,
+      llm: sequentialCapturingLlm([
+        {
+          block: {
+            text: '脂批点出此处另有深意，本段据此展开分析，但没有绑定任何来源。',
+            sourceRefs: [],
+            themeTags: ['测试主题'],
+          },
+          summary: '已生成正文。',
+        },
+        {
+          blocks: [{
+            text: '这一节先从人物的自尊与处境入手，说明她的强硬不是孤立性格，而是被压迫处境逼出的自我维护。',
+            sourceRefs: [],
+            themeTags: ['测试主题'],
+          }],
+          summary: '已去除无来源支撑的来源性表述。',
+        },
+      ], []),
+    });
+    expect(output.block.sourceRefs).toEqual([]);
+    expect(output.block.text).not.toContain('脂批');
+  });
+
   it('uses top-level candidateSources when source-backed prose needs refs', async () => {
     const skill = new SectionWriterSkill();
     const output = await skill.invoke({

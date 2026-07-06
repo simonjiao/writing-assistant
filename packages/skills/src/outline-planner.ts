@@ -44,6 +44,7 @@ export class OutlinePlannerSkill implements Skill<OutlinePlannerInput, OutlinePl
             '如果 taskCard.topRules.languageEra 或 replacementHints 存在，大纲标题和目标也必须服从对应语言时代感和替代表。',
             '必须遵守 taskCard.constraints.mustAvoid；不要把 mustAvoid 中的内容改写成章节标题、章节目标、themeTags 或主体论点。',
             '必须遵守 taskCard.constraints.sourcePolicy；来源策略是硬约束，不允许把被排除来源中的情节或文本写成大纲依据。',
+            '不要在大纲标题、目标、specialHandling、sourceHints 或 themeTags 中复述来源禁令、禁用词表或任务卡规则本身；这些规则由任务卡统一约束，大纲只写论证安排和材料线索。',
             '如果任务卡中有被否定或纠偏的说法，只能作为边界条件理解，不要在大纲里反复展开该说法。',
             '不要用“从不”“没有要求”“完全不要求”等绝对化表述替代复杂人物判断，除非任务卡明确这样要求。',
             '对人物立场要保留张力：可以写“有规劝但不等于认同某种功利价值”，不要写成单向口号。',
@@ -104,6 +105,8 @@ function normalizeOutline(output: OutlinePlannerOutput, taskCard: WritingTaskCar
     outline.map((item) => [item.title, item.goal, item.rhetoricalRole, item.keySection ? 'keySection' : '', ...(item.specialHandling ?? []), ...item.sourceHints, ...item.themeTags].join('\n')).join('\n\n'),
     taskCard,
     knowledge,
+    [],
+    { allowSourceBoundaryMentions: true },
   );
   return { outline, summary: requireText(output.summary, 'summary') };
 }

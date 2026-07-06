@@ -14,9 +14,16 @@
         "type": "single",
         "options": [
           {
+            "id": "unspecified-edition",
+            "label": "不限定版本",
+            "defaultSelected": true,
+            "apply": {
+              "sourcePolicies": ["用户未区分版本时，可使用通行本材料；如主动讨论版本差异，再说明依据。"]
+            }
+          },
+          {
             "id": "zhiyanzhai",
             "label": "脂评本",
-            "defaultSelected": true,
             "apply": {
               "editions": ["脂评本"],
               "sourcePolicies": ["以脂评本前八十回为主要依据，后四十回内容默认不作为论据。"],

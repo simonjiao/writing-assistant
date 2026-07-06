@@ -2,6 +2,7 @@ import { KnowledgeItem, WritingTaskCard } from '@wa/core';
 
 const HOU40_CANONICAL_AVOID = '不得引用《红楼梦》后40回（程高本续书）的情节或任何文本';
 const HOU40_CANONICAL_SOURCE_POLICY = '仅以《红楼梦》前80回和脂批为依据，不引用后40回（程高本续书）的情节或任何文本。';
+const SUBJECTIVE_PROSE_CANONICAL_AVOID = '避免大段主观评论和抒情性语句';
 
 export interface TaskCardPolicyNormalization {
   taskCard: WritingTaskCard;
@@ -34,10 +35,16 @@ export function filterKnowledgeByTaskCardPolicy(items: KnowledgeItem[], taskCard
   return items.filter((item) => !mentionsHou40(knowledgeText(item)));
 }
 
-export function validateGeneratedTextAgainstTaskCardPolicy(text: string, taskCard: WritingTaskCard, sourceItems: KnowledgeItem[] = [], sourceRefs: string[] = []): void {
+export function validateGeneratedTextAgainstTaskCardPolicy(
+  text: string,
+  taskCard: WritingTaskCard,
+  sourceItems: KnowledgeItem[] = [],
+  sourceRefs: string[] = [],
+  options: { allowSourceBoundaryMentions?: boolean } = {},
+): void {
   const boundary = sourceBoundaryFromTaskCard(taskCard);
   if (!boundary.forbidHou40) return;
-  if (mentionsHou40(text)) {
+  if (findHou40PolicyViolations(text, options.allowSourceBoundaryMentions).length) {
     throw new Error('Generated text violates source policy: references the later 40 chapters or Cheng-Gao sequel.');
   }
   const sourceByRef = new Map(sourceItems.map((item) => [item.sourceRef, item]));
@@ -60,13 +67,18 @@ export function sourceBoundaryFromTaskCard(taskCard: WritingTaskCard, triggerTex
 }
 
 function normalizeMustAvoid(values: string[], forbidHou40: boolean): string[] {
-  const normalized = values.map((item) => {
-    const value = item.trim();
-    if (forbidHou40 && mentionsHou40(value)) return HOU40_CANONICAL_AVOID;
-    return value;
-  });
+  const normalized = values.flatMap((item) => normalizeMustAvoidItem(item, forbidHou40));
   if (forbidHou40) normalized.push(HOU40_CANONICAL_AVOID);
   return uniqueStrings(normalized);
+}
+
+function normalizeMustAvoidItem(rawValue: string, forbidHou40: boolean): string[] {
+  const value = rawValue.trim();
+  if (!value) return [];
+  const normalized: string[] = [];
+  if (mentionsSubjectiveProseAvoidance(value)) normalized.push(SUBJECTIVE_PROSE_CANONICAL_AVOID);
+  if (forbidHou40 && mentionsHou40(value)) normalized.push(HOU40_CANONICAL_AVOID);
+  return normalized.length ? normalized : [value];
 }
 
 function normalizeSourcePolicy(value: string, forbidHou40: boolean): string {
@@ -102,6 +114,21 @@ function isPositiveHou40Instruction(value: string): boolean {
   return /引用|使用|采用|依据|参考|参照|纳入|包含|写入|涉及|可|允许|需要|必须|应当/.test(value);
 }
 
+function findHou40PolicyViolations(text: string, allowSourceBoundaryMentions = false): string[] {
+  if (!mentionsHou40(text)) return [];
+  if (!allowSourceBoundaryMentions) return [text];
+  return text
+    .split(/[\n\r]+|(?<=[。；;])/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item) => mentionsHou40(item) && !isHou40BoundaryInstruction(item));
+}
+
+function isHou40BoundaryInstruction(value: string): boolean {
+  if (!mentionsHou40(value)) return false;
+  return forbidsHou40(value) || hasClosedPre80Policy(value);
+}
+
 function forbidsHou40(value: string): boolean {
   const text = normalizeForPolicy(value);
   if (!mentionsHou40(text)) return false;
@@ -118,7 +145,12 @@ function hasClosedPre80Policy(value: string): boolean {
 
 function mentionsHou40(value: string): boolean {
   const text = normalizeForPolicy(value);
-  return /后(?:40|四十)回|後(?:40|四十)回|程高|续书|續書/.test(text);
+  return /后(?:40|四十)回|後(?:40|四十)回|(?:第)?(?:40|四十)回(?:后|後|以后|以後|之后|之後)|程高|续书|續書/.test(text);
+}
+
+function mentionsSubjectiveProseAvoidance(value: string): boolean {
+  const text = normalizeForPolicy(value);
+  return /大段/.test(text) && /(主观|評論|评论|抒情|空泛)/.test(text);
 }
 
 function knowledgeText(item: KnowledgeItem): string {

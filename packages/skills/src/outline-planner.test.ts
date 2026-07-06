@@ -121,4 +121,60 @@ describe('OutlinePlannerSkill', () => {
       }),
     })).rejects.toThrow('at least one middle section');
   });
+
+  it('allows later forty chapter material when the task card does not set a closed source boundary', async () => {
+    const skill = new OutlinePlannerSkill();
+    const output = await skill.invoke({
+      input: { articleId: 'art_1', taskCard },
+      context: { memory: {}, knowledge: [] } as never,
+      llm: llmReturning({
+        outline: completeOutline.map((item, index) => index === 1 ? { ...item, goal: '比较通行本后四十回中的承接方式。' } : item),
+        summary: '已生成不限定版本的大纲。',
+      }),
+    });
+
+    expect(output.outline[1].goal).toContain('后四十回');
+  });
+
+  it('does not reject source boundary instructions in outline planning notes', async () => {
+    const skill = new OutlinePlannerSkill();
+    const closedTaskCard: WritingTaskCard = {
+      ...taskCard,
+      constraints: {
+        ...taskCard.constraints,
+        mustAvoid: ['不得引用《红楼梦》后40回（程高本续书）的情节或任何文本'],
+        sourcePolicy: '仅以《红楼梦》前80回和脂批为依据，不引用后40回（程高本续书）的情节或任何文本。',
+      },
+    };
+    const output = await skill.invoke({
+      input: { articleId: 'art_1', taskCard: closedTaskCard },
+      context: { memory: {}, knowledge: [] } as never,
+      llm: llmReturning({
+        outline: completeOutline.map((item, index) => index === 0 ? { ...item, specialHandling: ['开头先提出核心问题，不铺陈背景。', '不得引用《红楼梦》后40回（程高本续书）的情节或任何文本。'] } : item),
+        summary: '已生成前80回边界下的大纲。',
+      }),
+    });
+
+    expect(output.outline[0].specialHandling.join('\n')).toContain('不得引用');
+  });
+
+  it('rejects later forty chapter material when the task card sets a closed source boundary', async () => {
+    const skill = new OutlinePlannerSkill();
+    const closedTaskCard: WritingTaskCard = {
+      ...taskCard,
+      constraints: {
+        ...taskCard.constraints,
+        sourcePolicy: '仅以《红楼梦》前80回和脂批为依据，不引用后40回（程高本续书）的情节或任何文本。',
+      },
+    };
+
+    await expect(skill.invoke({
+      input: { articleId: 'art_1', taskCard: closedTaskCard },
+      context: { memory: {}, knowledge: [] } as never,
+      llm: llmReturning({
+        outline: completeOutline.map((item, index) => index === 1 ? { ...item, goal: '依据程高本续书中的人物结局展开分析。' } : item),
+        summary: '已生成错误大纲。',
+      }),
+    })).rejects.toThrow('violates source policy');
+  });
 });

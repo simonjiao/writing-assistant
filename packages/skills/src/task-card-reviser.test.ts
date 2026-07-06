@@ -107,7 +107,12 @@ describe('TaskCardReviserSkill', () => {
       constraints: {
         ...currentTaskCard.constraints,
         mustInclude: ['引用《红楼梦》后40回（程高本续书）的情节或任何文本', '介绍司棋'],
-        mustAvoid: ['引用《红楼梦》后40回（程高本续书）的情节或任何文本', '不得引用《红楼梦》后40回（程高本续书）的情节或任何文本'],
+        mustAvoid: [
+          '引用《红楼梦》后40回（程高本续书）的情节或任何文本',
+          '不得引用《红楼梦》后40回（程高本续书）的情节或任何文本',
+          '大段主观评论和抒情性语句',
+          '避免大段抒情和第40回后内容',
+        ],
         sourcePolicy: '允许引用《红楼梦》前80回原文和脂批，正文以原创分析为主，可适当改写批语内容。',
       },
     };
@@ -128,6 +133,8 @@ describe('TaskCardReviserSkill', () => {
     });
     expect(output.taskCard.constraints.mustInclude).toEqual(['介绍司棋']);
     expect(output.taskCard.constraints.mustAvoid.filter((item) => item.includes('后40回'))).toEqual(['不得引用《红楼梦》后40回（程高本续书）的情节或任何文本']);
+    expect(output.taskCard.constraints.mustAvoid.filter((item) => /抒情|主观评论/.test(item))).toEqual(['避免大段主观评论和抒情性语句']);
+    expect(output.taskCard.constraints.mustAvoid).not.toContain('避免大段抒情和第40回后内容');
     expect(output.taskCard.constraints.sourcePolicy).toContain('不引用后40回');
   });
 

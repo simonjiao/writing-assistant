@@ -278,7 +278,8 @@ describe('api app', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body[0].id).toBe('hongloumeng-baodai');
-    expect(body[0].groups[0].options[0]).toMatchObject({ id: 'zhiyanzhai', label: '脂评本' });
+    expect(body[0].groups[0].options[0]).toMatchObject({ id: 'unspecified-edition', label: '不限定版本', defaultSelected: true });
+    expect(body[0].groups[0].options[1]).toMatchObject({ id: 'zhiyanzhai', label: '脂评本' });
     expect(JSON.stringify(body)).not.toContain('黛玉从不要求宝玉');
     await app.close();
   });
