@@ -140,6 +140,20 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 }
 .workspace-head h2 { margin: 0; }
 .workspace-actions { display: flex; gap: 6px; }
+.task-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.task-list-head h2 {
+  margin: 0;
+}
+.task-create-button {
+  width: 30px;
+  height: 30px;
+}
 .icon-button {
   display: grid;
   place-items: center;
@@ -288,17 +302,6 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   box-shadow: 0 -10px 22px rgba(24, 32, 42, 0.08);
   z-index: 2;
 }
-.task-dialog-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.task-dialog-toolbar span {
-  color: #6f665b;
-  font-size: 12px;
-  text-align: right;
-}
 .dialog-context {
   display: grid;
   gap: 3px;
@@ -328,28 +331,6 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 }
 .dialog-context.context-outline {
   border-color: #d8c8aa;
-}
-.task-target-toggle {
-  justify-self: start;
-  display: inline-grid;
-  grid-template-columns: repeat(2, auto);
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid #d8dde6;
-  border-radius: 999px;
-  background: #fffdf8;
-}
-.task-target-toggle button {
-  min-height: 28px;
-  padding: 5px 10px;
-  border-radius: 999px;
-  background: transparent;
-  color: #4d5966;
-  font-size: 13px;
-}
-.task-target-toggle button.active {
-  background: #1f2937;
-  color: #fffdf8;
 }
 .task-dialog-input-row {
   display: grid;

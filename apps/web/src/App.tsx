@@ -177,6 +177,7 @@ export function App() {
       setSelectedWorkspaceId(loaded.workspaceId);
       setLastRun(undefined);
       setSelectedBlockId(undefined);
+      setSelectedOutlineId(undefined);
       setLiveEvents([]);
       setProgressVisible(false);
       setCurrentTaskMessage('');
@@ -198,6 +199,7 @@ export function App() {
         setArticle(undefined);
         setLastRun(undefined);
         setSelectedBlockId(undefined);
+        setSelectedOutlineId(undefined);
         setLiveEvents([]);
         setProgressVisible(false);
       }
@@ -227,6 +229,16 @@ export function App() {
   }
   function toggleBlockCollapsed(blockId: string) {
     setCollapsedBlockIds((current) => toggleId(current, blockId));
+  }
+  function openNewTaskPage() {
+    setTaskCardTarget('new');
+    setSelectedBlockId(undefined);
+    setSelectedOutlineId(undefined);
+    setEditingOutline(undefined);
+    setNewTaskMessage('');
+    setLastRun(undefined);
+    setLiveEvents([]);
+    setProgressVisible(false);
   }
   async function startSectionGeneration(sectionId: string) {
     if (!article) return;
@@ -261,6 +273,7 @@ export function App() {
     setArticle(undefined);
     setLastRun(undefined);
     setSelectedBlockId(undefined);
+    setSelectedOutlineId(undefined);
     setLiveEvents([]);
     setProgressVisible(false);
     await refreshArticleSummaries(workspaceId);
@@ -281,6 +294,7 @@ export function App() {
       setArticle(undefined);
       setLastRun(undefined);
       setSelectedBlockId(undefined);
+      setSelectedOutlineId(undefined);
       setLiveEvents([]);
       setProgressVisible(false);
       setArticleSummaries([]);
@@ -304,6 +318,7 @@ export function App() {
       setArticle(undefined);
       setLastRun(undefined);
       setSelectedBlockId(undefined);
+      setSelectedOutlineId(undefined);
       setLiveEvents([]);
       setProgressVisible(false);
       if (nextWorkspace) await refreshArticleSummaries(nextWorkspace.id);
@@ -436,8 +451,11 @@ export function App() {
               {selectedWorkspace && <div className="workspace-meta">{selectedWorkspace.isDefault ? '默认工作台' : '自定义工作台'} · {selectedWorkspace.userId === userId ? '拥有者' : '协作者'} · {selectedWorkspace.memberUserIds.length} 个协作者</div>}
               <button aria-label="收起左栏" className="column-collapse-handle" disabled={busy} title="收起左栏" onClick={() => updateNavigationCollapsed(true)}>&lt;</button>
             </div>
-            <h2>历史任务</h2>
-            <div className="history-list">{articleSummaries.length ? articleSummaries.map((item) => <div className={visibleArticle?.id === item.id ? 'history-row active' : 'history-row'} key={item.id}><button className="history-item" disabled={busy} onClick={() => void openArticle(item.id)}><strong>{item.title}</strong><span>{taskStatusLabel(item.taskStatus)} · {item.outlineCount}纲 · {item.blockCount}节</span><span>{new Date(item.updatedAt).toLocaleString()}</span></button><button aria-label={`删除 ${item.title}`} className="history-delete" disabled={busy} title="删除任务" onClick={() => void deleteArticle(item.id)}>×</button></div>) : <div className="empty">当前工作台暂无历史任务。</div>}</div>
+            <div className="task-list-head">
+              <h2>任务</h2>
+              <button aria-label="创建新任务" className="icon-button task-create-button" disabled={busy || !selectedWorkspaceId} title="创建新任务" onClick={openNewTaskPage}>+</button>
+            </div>
+            <div className="history-list">{articleSummaries.length ? articleSummaries.map((item) => <div className={visibleArticle?.id === item.id ? 'history-row active' : 'history-row'} key={item.id}><button className="history-item" disabled={busy} onClick={() => void openArticle(item.id)}><strong>{item.title}</strong><span>{taskStatusLabel(item.taskStatus)} · {item.outlineCount}纲 · {item.blockCount}节</span><span>{new Date(item.updatedAt).toLocaleString()}</span></button><button aria-label={`删除 ${item.title}`} className="history-delete" disabled={busy} title="删除任务" onClick={() => void deleteArticle(item.id)}>×</button></div>) : <div className="empty">当前工作台暂无任务。</div>}</div>
           </>}
         </aside>
         {taskCardConfirmed ? <aside className={dialogContext.kind === 'task-card' ? 'panel task-card-panel selected' : 'panel task-card-panel'} onClick={() => { setTaskCardTarget('current'); setSelectedBlockId(undefined); setSelectedOutlineId(undefined); }}>
@@ -472,13 +490,6 @@ export function App() {
           {outlineGenerated && visibleArticle && progressVisible ? <div className="editor-progress-support"><section className="support-card"><h3>执行进度</h3><ProgressTimeline events={liveEvents} run={lastRun?.run} /></section></div> : null}
           </div>
           <div className="task-dialog-panel">
-            {article?.taskCard ? <div className="task-dialog-toolbar">
-              <div className="task-target-toggle" role="radiogroup" aria-label="任务卡目标">
-              <button type="button" role="radio" aria-checked={taskCardDialogTarget === 'current'} className={taskCardDialogTarget === 'current' ? 'active' : ''} disabled={busy} onClick={() => { setTaskCardTarget('current'); setSelectedBlockId(undefined); setSelectedOutlineId(undefined); }}>{taskCardDialogTarget === 'new' ? '前一个任务' : '当前任务'}</button>
-              <button type="button" role="radio" aria-checked={taskCardDialogTarget === 'new'} className={taskCardDialogTarget === 'new' ? 'active' : ''} disabled={busy} onClick={() => { setTaskCardTarget('new'); setSelectedBlockId(undefined); setSelectedOutlineId(undefined); setLastRun(undefined); setLiveEvents([]); setProgressVisible(false); }}>新任务</button>
-              </div>
-              <span>{dialogContext.title}</span>
-            </div> : null}
             {taskCardDialogTarget === 'current' && taskCardFollowUpPrompts.length ? <TaskCardGuidance prompts={taskCardFollowUpPrompts} onChooseOption={chooseTaskCardPromptOption} /> : null}
             {taskCardDialogTarget === 'new' ? <NewTaskGuidance writingStandard={writingStandard} selectedLanguageEra={selectedLanguageEra} onSelectLanguageEra={setSelectedLanguageEra} domainProfiles={domainProfiles} recommendations={domainProfileRecommendations} selectedProfileId={selectedProfileId} selections={profileSelections} onSelectProfile={selectProfile} onUpdateGroup={updateProfileGroup} /> : null}
             <DialogContextView context={dialogContext} />
