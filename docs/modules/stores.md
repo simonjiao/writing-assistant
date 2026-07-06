@@ -15,7 +15,7 @@
 
 ### sqlite
 
-SQLite 是当前版本唯一的持久化 Store。它使用 `DATA_DIR/writing-assistant.sqlite`，并通过统一的 `json_records` 表按 namespace 保存不同类型的 JSON 对象。
+SQLite 是当前版本唯一的持久化 Store。它使用 `DATA_DIR/writing-assistant.sqlite`，并通过统一的 `json_records` 表按 namespace 保存不同类型的 JSON 对象。相对 `DATA_DIR` 会按项目根目录解析，和 API 启动时的当前工作目录无关。
 
 ```bash
 DATA_DIR=.data

@@ -1,6 +1,9 @@
-import { ArticleArtifact, DialogueBrief, DialogueBriefConflict, DialogueBriefItem, DialogueContextKind, DialogueMessage, KnowledgeItem, newId, nowIso } from '@wa/core';
+import { ArticleArtifact, DialogueBrief, DialogueBriefConflict, DialogueBriefItem, DialogueBriefUpdateJob, DialogueContextKind, DialogueMessage, KnowledgeItem, newId, nowIso } from '@wa/core';
 import { DialogueBriefUpdaterInput, DialogueBriefUpdaterOutput } from '@wa/skills';
 import type { AppContainer } from './bootstrap';
+
+const maxBriefUpdateAttempts = 3;
+const maxBriefJobRunningMs = 60_000;
 
 export async function getOrCreateDialogueBrief(container: AppContainer, articleId: string, userId: string): Promise<DialogueBrief> {
   const existing = await container.stores.dialogueBriefStore.getBrief(articleId, userId);
@@ -28,23 +31,119 @@ export async function updateDialogueBriefForUserMessage(input: {
   message: DialogueMessage;
   context: { kind: DialogueContextKind; title: string };
 }): Promise<DialogueBrief> {
-  const currentBrief = await getOrCreateDialogueBrief(input.container, input.article.id, input.userId);
+  const job = await input.container.stores.dialogueBriefUpdateJobStore.createJob({
+    articleId: input.article.id,
+    userId: input.userId,
+    messageId: input.message.id,
+    messageContent: input.message.content,
+    contextKind: input.context.kind,
+    contextTitle: input.context.title,
+  });
+  const processed = await processDialogueBriefUpdateJob(input.container, job.id, input.sessionId);
+  if (processed?.status === 'failed') throw new Error(processed.error ?? 'Dialogue brief update failed.');
+  return getOrCreateDialogueBrief(input.container, input.article.id, input.userId);
+}
+
+export async function enqueueDialogueBriefUpdate(input: {
+  container: AppContainer;
+  article: ArticleArtifact;
+  userId: string;
+  sessionId?: string;
+  message: DialogueMessage;
+  context: { kind: DialogueContextKind; title: string };
+}): Promise<DialogueBriefUpdateJob> {
+  const job = await input.container.stores.dialogueBriefUpdateJobStore.createJob({
+    articleId: input.article.id,
+    userId: input.userId,
+    messageId: input.message.id,
+    messageContent: input.message.content,
+    contextKind: input.context.kind,
+    contextTitle: input.context.title,
+  });
+  void processDialogueBriefUpdateJob(input.container, job.id, input.sessionId).catch(() => undefined);
+  return job;
+}
+
+export async function ensureDialogueBriefSettled(container: AppContainer, articleId: string, userId: string): Promise<void> {
+  const maxWaitMs = 15000;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < maxWaitMs) {
+    const failed = await container.stores.dialogueBriefUpdateJobStore.listJobs(articleId, userId, { statuses: ['failed'] });
+    const exhausted = failed.find((job) => job.attempts >= maxBriefUpdateAttempts);
+    if (exhausted) throw new Error(`Dialogue brief update failed: ${exhausted.error ?? exhausted.id}`);
+    if (failed.length) {
+      for (const job of failed) await processDialogueBriefUpdateJob(container, job.id);
+      continue;
+    }
+
+    const pending = await container.stores.dialogueBriefUpdateJobStore.listJobs(articleId, userId, { statuses: ['pending'] });
+    if (pending.length) {
+      for (const job of pending) await processDialogueBriefUpdateJob(container, job.id);
+      continue;
+    }
+
+    const running = await container.stores.dialogueBriefUpdateJobStore.listJobs(articleId, userId, { statuses: ['running'] });
+    const staleRunning = running.filter(isStaleRunningJob);
+    if (staleRunning.length) {
+      for (const job of staleRunning) {
+        const message = 'Dialogue brief update was interrupted before completion.';
+        await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'dialogue.brief.failed', payload: { articleId: job.articleId, userId: job.userId, messageId: job.messageId, jobId: job.id, error: message, stale: true }, createdAt: nowIso() });
+        await container.stores.dialogueBriefUpdateJobStore.updateJob({ ...job, status: 'failed', error: message, completedAt: nowIso() });
+      }
+      continue;
+    }
+    if (!running.length) return;
+    await sleep(25);
+  }
+  throw new Error('Dialogue brief update timed out.');
+}
+
+export async function getDialogueBriefStatus(container: AppContainer, articleId: string, userId: string): Promise<{
+  brief?: DialogueBrief;
+  jobs: DialogueBriefUpdateJob[];
+  status: 'idle' | 'updating' | 'failed';
+  message?: string;
+}> {
+  const [brief, jobs] = await Promise.all([
+    container.stores.dialogueBriefStore.getBrief(articleId, userId),
+    container.stores.dialogueBriefUpdateJobStore.listJobs(articleId, userId, { limit: 8 }),
+  ]);
+  const latestJob = jobs[jobs.length - 1];
+  if (latestJob?.status === 'failed') return { brief: brief ? normalizeBrief(brief) : undefined, jobs, status: 'failed', message: latestJob.error };
+  if (jobs.some((job) => job.status === 'pending' || job.status === 'running')) return { brief: brief ? normalizeBrief(brief) : undefined, jobs, status: 'updating' };
+  return { brief: brief ? normalizeBrief(brief) : undefined, jobs, status: 'idle' };
+}
+
+async function processDialogueBriefUpdateJob(container: AppContainer, jobId: string, sessionId?: string): Promise<DialogueBriefUpdateJob | undefined> {
+  const job = await container.stores.dialogueBriefUpdateJobStore.getJob(jobId);
+  if (!job || (job.status !== 'pending' && !(job.status === 'failed' && job.attempts < maxBriefUpdateAttempts))) return job;
+  const running = await container.stores.dialogueBriefUpdateJobStore.updateJob({
+    ...job,
+    status: 'running',
+    attempts: job.attempts + 1,
+    error: undefined,
+    startedAt: nowIso(),
+  });
   try {
-    const patch = await input.container.runtime.invokeSkill<DialogueBriefUpdaterInput, DialogueBriefUpdaterOutput>(
+    const currentBrief = await getOrCreateDialogueBrief(container, running.articleId, running.userId);
+    const patch = await container.runtime.invokeSkill<DialogueBriefUpdaterInput, DialogueBriefUpdaterOutput>(
       'dialogue-brief-updater',
       {
-        message: input.message.content,
-        context: input.context,
+        message: running.messageContent,
+        context: { kind: running.contextKind, title: running.contextTitle },
         currentBrief: compactDialogueBriefForPrompt(currentBrief),
         skipKnowledge: true,
       },
-      { userId: input.userId, sessionId: input.sessionId, articleId: input.article.id },
+      { userId: running.userId, sessionId, articleId: running.articleId },
     );
-    const merged = mergeDialogueBrief(currentBrief, patch, input.context.kind, input.message.id);
-    return input.container.stores.dialogueBriefStore.saveBrief(merged);
-  } catch {
-    const merged = mergeDialogueBrief(currentBrief, fallbackBriefPatch(input.message.content), input.context.kind, input.message.id);
-    return input.container.stores.dialogueBriefStore.saveBrief(merged);
+    const merged = mergeDialogueBrief(currentBrief, patch, running.contextKind, running.messageId);
+    await container.stores.dialogueBriefStore.saveBrief(merged);
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'dialogue.brief.updated', payload: { articleId: running.articleId, userId: running.userId, messageId: running.messageId, jobId: running.id }, createdAt: nowIso() });
+    return container.stores.dialogueBriefUpdateJobStore.updateJob({ ...running, status: 'succeeded', completedAt: nowIso() });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'dialogue.brief.failed', payload: { articleId: running.articleId, userId: running.userId, messageId: running.messageId, jobId: running.id, error: message }, createdAt: nowIso() });
+    return container.stores.dialogueBriefUpdateJobStore.updateJob({ ...running, status: 'failed', error: message, completedAt: nowIso() });
   }
 }
 
@@ -153,23 +252,6 @@ export function mergeDialogueBrief(current: DialogueBrief, patch: DialogueBriefU
     supersededRequirements: dedupeItems(supersededRequirements).slice(-24),
     updatedAt: now,
   });
-}
-
-function fallbackBriefPatch(message: string): DialogueBriefUpdaterOutput {
-  const item = fallbackBriefItem(message);
-  return {
-    activeRequirements: item ? [item] : [],
-    evidenceNotes: [],
-    recentUserIntents: message.trim() ? [message] : [],
-    supersededRequirements: [],
-    conflicts: [],
-  };
-}
-
-function fallbackBriefItem(message: string): DialogueBriefUpdaterOutput['activeRequirements'][number] | undefined {
-  if (!/(改|修改|调整|删|删除|加|添加|新增|重写|扩写|压缩|不要|避免|改成|改为|换成|补充|合并|拆分|包含|纳入|加入|写进|放进|体现|保留|漏掉|遗漏|参考|使用|采用|沿用|突出|强调|弱化|去掉|移除|需要|必须|重点|资料|引用|来源|脂批|批语)/.test(message)) return undefined;
-  const kind = /(不要|避免|别|不写|去掉|移除)/.test(message) ? 'avoidance' : (/(资料|引用|来源|参考|脂批|批语)/.test(message) ? 'source' : 'requirement');
-  return { kind, text: compactText(message) };
 }
 
 function createBriefItem(kind: DialogueBriefItem['kind'], text: string, contextKind: DialogueContextKind, sourceMessageId: string | undefined, now: string): DialogueBriefItem {
@@ -282,4 +364,13 @@ function normalizeText(value: string): string {
 
 function compactText(value: string, limit = 160): string {
   return value.replace(/\s+/g, ' ').trim().slice(0, limit);
+}
+
+function isStaleRunningJob(job: DialogueBriefUpdateJob): boolean {
+  const startedAt = Date.parse(job.startedAt ?? job.updatedAt ?? job.createdAt);
+  return !Number.isFinite(startedAt) || Date.now() - startedAt > maxBriefJobRunningMs;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

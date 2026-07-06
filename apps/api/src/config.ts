@@ -1,10 +1,12 @@
 import { config as loadDotenv } from 'dotenv';
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { WorkflowExecutionMode } from '@wa/core';
 
+const projectRoot = resolve(__dirname, '../../..');
+
 function loadAppEnv() {
-  const envPaths = [resolve(process.cwd(), '.env'), resolve(__dirname, '../../..', '.env')];
+  const envPaths = [resolve(process.cwd(), '.env'), resolve(projectRoot, '.env')];
   const seen = new Set<string>();
   for (const path of envPaths) {
     if (!seen.has(path) && existsSync(path)) {
@@ -12,6 +14,10 @@ function loadAppEnv() {
       seen.add(path);
     }
   }
+}
+
+function resolveDataDir(value: string): string {
+  return isAbsolute(value) ? value : resolve(projectRoot, value);
 }
 
 loadAppEnv();
@@ -50,7 +56,7 @@ export function getConfig(): AppConfig {
   return {
     host: process.env.HOST ?? '0.0.0.0',
     port: Number(process.env.PORT ?? 8787),
-    dataDir: process.env.DATA_DIR ?? '.data',
+    dataDir: resolveDataDir(process.env.DATA_DIR ?? '.data'),
     webOrigin: process.env.WEB_ORIGIN ?? 'http://localhost:5173',
     llmProvider: process.env.LLM_PROVIDER === 'openai-compatible' ? 'openai-compatible' : 'mock',
     openaiBaseURL: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',

@@ -202,6 +202,25 @@ export interface DialogueBrief {
   updatedAt: string;
 }
 
+export type DialogueBriefUpdateJobStatus = 'pending' | 'running' | 'succeeded' | 'failed';
+
+export interface DialogueBriefUpdateJob {
+  id: string;
+  articleId: string;
+  userId: string;
+  messageId: string;
+  messageContent: string;
+  contextKind: DialogueContextKind;
+  contextTitle: string;
+  status: DialogueBriefUpdateJobStatus;
+  attempts: number;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
 export interface Session {
   id: string;
   userId: string;
@@ -274,6 +293,8 @@ export type AgentEventType =
   | 'skill.started'
   | 'skill.completed'
   | 'artifact.updated'
+  | 'dialogue.brief.updated'
+  | 'dialogue.brief.failed'
   | 'review.required'
   | 'queue.enqueued'
   | 'queue.dequeued'

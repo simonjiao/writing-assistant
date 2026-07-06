@@ -80,7 +80,7 @@ function normalizeOutput(output: Partial<TaskCardReviserOutput>, current: Writin
   const source = output.taskCard;
   if (!source) throw new Error('Task card reviser returned no taskCard.');
   const missingQuestions = requireOptionalStringArray(output.missingQuestions ?? source.interactionMode?.followUpQuestions);
-  const followUpPrompts = normalizeFollowUpPrompts(output.followUpPrompts ?? source.interactionMode?.followUpPrompts, missingQuestions);
+  const followUpPrompts = requireFollowUpPrompts(output.followUpPrompts ?? source.interactionMode?.followUpPrompts, missingQuestions, 'followUpPrompts');
   const taskCard: WritingTaskCard = {
     ...current,
     ...source,
@@ -136,13 +136,14 @@ function normalizeOutput(output: Partial<TaskCardReviserOutput>, current: Writin
   };
 }
 
-function normalizeFollowUpPrompts(value: unknown, fallbackQuestions: string[]): TaskCardFollowUpPrompt[] {
+function requireFollowUpPrompts(value: unknown, missingQuestions: string[], field: string): TaskCardFollowUpPrompt[] {
   const prompts = Array.isArray(value) ? value : [];
   const normalized = prompts
     .map((item, index) => normalizeFollowUpPrompt(item, index))
     .filter((item): item is TaskCardFollowUpPrompt => Boolean(item));
   if (normalized.length) return normalized.slice(0, 3);
-  return fallbackQuestions.slice(0, 3).map((question, index) => ({ id: `prompt-${index + 1}`, question, options: [], allowCustom: true }));
+  if (missingQuestions.length) throw new Error(`${field} must include prompts for missingQuestions.`);
+  return [];
 }
 
 function normalizeFollowUpPrompt(value: unknown, index: number): TaskCardFollowUpPrompt | undefined {

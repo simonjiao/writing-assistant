@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { AgentEvent, ArticleArtifact, ArticleVersion, ArtifactStore, DialogueBrief, DialogueBriefStore, DialogueMessage, DialogueMessageStore, EventTraceStore, KnowledgeItem, KnowledgeSearchOptions, KnowledgeStore, MemoryStore, newId, nowIso, RevisionProposal, RevisionProposalStore, Session, SessionStore, StateStore, TextPatch, UserWritingProfile, WorkspaceStore, WritingWorkspace, WorkflowRun } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleVersion, ArtifactStore, DialogueBrief, DialogueBriefStore, DialogueBriefUpdateJob, DialogueBriefUpdateJobStore, DialogueMessage, DialogueMessageStore, EventTraceStore, KnowledgeItem, KnowledgeSearchOptions, KnowledgeStore, MemoryStore, newId, nowIso, RevisionProposal, RevisionProposalStore, Session, SessionStore, StateStore, TextPatch, UserWritingProfile, WorkspaceStore, WritingWorkspace, WorkflowRun } from '@wa/core';
 import knowledgeSeedRules from '../rules/knowledge-seeds.json';
 import { SqliteJsonDb } from './sqliteJsonDb';
 
@@ -87,6 +87,25 @@ export class SqliteDialogueBriefStore implements DialogueBriefStore {
   constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'dialogue_briefs'); }
   getBrief(articleId: string, userId: string) { return this.db.get(dialogueBriefId(articleId, userId)); }
   saveBrief(brief: DialogueBrief) { return this.db.upsert({ ...brief, id: dialogueBriefId(brief.articleId, brief.userId), updatedAt: nowIso() }); }
+  close() { this.db.close(); }
+}
+
+export class SqliteDialogueBriefUpdateJobStore implements DialogueBriefUpdateJobStore {
+  private readonly db: SqliteJsonDb<DialogueBriefUpdateJob>;
+  constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'dialogue_brief_update_jobs'); }
+  createJob(input: Omit<DialogueBriefUpdateJob, 'id' | 'status' | 'attempts' | 'createdAt' | 'updatedAt'>) {
+    const now = nowIso();
+    return this.db.upsert({ ...input, id: newId('brief_job'), status: 'pending', attempts: 0, createdAt: now, updatedAt: now });
+  }
+  getJob(jobId: string) { return this.db.get(jobId); }
+  async listJobs(articleId: string, userId: string, options?: { statuses?: DialogueBriefUpdateJob['status'][]; limit?: number }) {
+    const statuses = options?.statuses ? new Set(options.statuses) : undefined;
+    const jobs = (await this.db.list())
+      .filter((job) => job.articleId === articleId && job.userId === userId && (!statuses || statuses.has(job.status)))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    return options?.limit ? jobs.slice(-options.limit) : jobs;
+  }
+  updateJob(job: DialogueBriefUpdateJob) { return this.db.upsert({ ...job, updatedAt: nowIso() }); }
   close() { this.db.close(); }
 }
 

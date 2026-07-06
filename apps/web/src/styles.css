@@ -1017,6 +1017,53 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   color: #6f665b;
   font-size: 13px;
 }
+.brief-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.brief-card-head h3 {
+  margin: 0;
+}
+.brief-card-head span {
+  flex: none;
+  color: #6f665b;
+  font-size: 12px;
+}
+.dialogue-brief-card.updating {
+  border-color: #cbd7e8;
+  background: #f8fbff;
+}
+.dialogue-brief-card.failed {
+  border-color: #e2b8a8;
+  background: #fff7f3;
+}
+.brief-section {
+  display: grid;
+  gap: 5px;
+  padding-top: 6px;
+}
+.brief-list {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 16px;
+  color: #2f3742;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.brief-conflict,
+.brief-error {
+  padding: 7px 8px;
+  border: 1px solid #e7d2c8;
+  border-radius: 8px;
+  background: #fffdf8;
+  color: #7c3f00;
+  font-size: 12px;
+  line-height: 1.45;
+}
 .block {
   border: 1px solid #d8c8aa;
   background: #fff8e7;

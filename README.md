@@ -100,7 +100,7 @@ OPENAI_MODEL=gpt-4.1-mini
 DATA_DIR=.data
 ```
 
-持久化存储固定使用 SQLite。Session、Workflow State、Memory、Article Artifact、Local Knowledge、EventTrace 都写入：
+持久化存储固定使用 SQLite。相对 `DATA_DIR` 会按项目根目录解析，避免从 workspace 子目录启动时写到另一套数据库。Session、Workflow State、Memory、Article Artifact、Local Knowledge、EventTrace 都写入：
 
 ```text
 ${DATA_DIR}/writing-assistant.sqlite

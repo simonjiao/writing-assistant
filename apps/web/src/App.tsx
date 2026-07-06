@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
-import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DialogueContextKind, DialogueMessage, DialogueResponse, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RevisionOperation, RevisionProposal, RunResponse, TaskCardFollowUpPrompt, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DialogueBriefStatus, DialogueContextKind, DialogueMessage, DialogueResponse, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RevisionOperation, RevisionProposal, RunResponse, TaskCardFollowUpPrompt, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
 
 const userId = 'demo-user';
 const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']);
@@ -51,6 +51,7 @@ export function App() {
   const [collapsedBlockIds, setCollapsedBlockIds] = useState<string[]>([]);
   const [dialogueResponse, setDialogueResponse] = useState<DialogueResponse>();
   const [dialogueMessages, setDialogueMessages] = useState<DialogueMessage[]>([]);
+  const [dialogueBriefStatus, setDialogueBriefStatus] = useState<DialogueBriefStatus>();
   const [pendingProposals, setPendingProposals] = useState<RevisionProposal[]>([]);
   const [proposalDirty, setProposalDirty] = useState(false);
   const [sectionGeneration, setSectionGeneration] = useState<SectionGenerationState>();
@@ -97,6 +98,14 @@ export function App() {
       return;
     }
     setDialogueMessages(await api.listDialogueMessages(articleId, userId));
+  }
+
+  async function refreshDialogueBrief(articleId = article?.id) {
+    if (!articleId) {
+      setDialogueBriefStatus(undefined);
+      return;
+    }
+    setDialogueBriefStatus(await api.getDialogueBrief(articleId, userId));
   }
 
   useEffect(() => {
@@ -150,10 +159,12 @@ export function App() {
     setClearedTaskCardPromptIds([]);
     setDialogueResponse(undefined);
     setDialogueMessages([]);
+    setDialogueBriefStatus(undefined);
     setProposalDirty(false);
     setOutlineRegenerationWarningOpen(false);
     void refreshDialogueProposals(article?.id).catch(() => setPendingProposals([]));
     void refreshDialogueMessages(article?.id).catch(() => setDialogueMessages([]));
+    void refreshDialogueBrief(article?.id).catch(() => setDialogueBriefStatus(undefined));
   }, [article?.id]);
   useEffect(() => () => window.clearTimeout(progressDismissTimer.current), []);
 
@@ -512,6 +523,7 @@ export function App() {
       setCurrentTaskMessage('');
       await refreshDialogueProposals(visibleArticle.id);
       if (!response.messages) await refreshDialogueMessages(visibleArticle.id);
+      await refreshDialogueBrief(visibleArticle.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -539,6 +551,7 @@ export function App() {
       setProposalDirty(false);
       await refreshDialogueProposals(visibleArticle.id);
       if (!response.messages) await refreshDialogueMessages(visibleArticle.id);
+      await refreshDialogueBrief(visibleArticle.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -555,6 +568,7 @@ export function App() {
       setProposalDirty(false);
       await refreshDialogueProposals(visibleArticle.id);
       await refreshDialogueMessages(visibleArticle.id);
+      await refreshDialogueBrief(visibleArticle.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -682,6 +696,7 @@ export function App() {
           })}</div> : null}
           <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} />)}</div>
           {!outlineGenerated ? <div className="editor-support">
+            {visibleArticle ? <DialogueBriefCard status={dialogueBriefStatus} /> : null}
             {visibleArticle ? <KnowledgeTagsCard selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
             <RevisionLogCard article={visibleArticle} />
             {visibleArticle && progressVisible ? <section className="support-card"><h3>执行进度</h3><ProgressTimeline events={liveEvents} run={lastRun?.run} /></section> : null}
@@ -707,6 +722,7 @@ export function App() {
               <button aria-label="收起辅助列" className="right-column-collapse-handle" disabled={busy} title="收起辅助列" onClick={() => updateSupportColumnCollapsed(true)}>&gt;</button>
             </div>
             <div className="right-support-content">
+              {visibleArticle ? <DialogueBriefCard status={dialogueBriefStatus} /> : null}
               {visibleArticle ? <KnowledgeTagsCard selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
               <RevisionLogCard article={visibleArticle} />
             </div>
@@ -948,6 +964,45 @@ function KnowledgeTagsCard(props: { selectedBlock?: ArticleBlock; hasWritingBloc
       </div> : <div className="empty">{props.hasWritingBlocks ? '选择一个段落后显示对应来源和标签。' : '生成正文后显示段落来源和标签。'}</div>}
     </section>
   );
+}
+
+function DialogueBriefCard(props: { status?: DialogueBriefStatus }) {
+  const status = props.status;
+  const brief = status?.brief;
+  const active = brief?.activeRequirements.slice(-5) ?? [];
+  const evidence = brief?.evidenceNotes.slice(-4) ?? [];
+  const superseded = brief?.supersededRequirements.slice(-3) ?? [];
+  const conflicts = brief?.unresolvedConflicts.slice(-3) ?? [];
+  const hasContent = active.length || evidence.length || superseded.length || conflicts.length;
+  return (
+    <section className={`support-card dialogue-brief-card ${status?.status ?? 'idle'}`}>
+      <div className="brief-card-head"><h3>对话上下文</h3><span>{briefStatusLabel(status)}</span></div>
+      {status?.message ? <div className="brief-error">{status.message}</div> : null}
+      {hasContent ? <>
+        <BriefItemList title="当前要求" items={active.map((item) => item.text)} empty="暂无明确要求" />
+        <BriefItemList title="资料证据" items={evidence.map((item) => item.text)} />
+        <BriefItemList title="已替代" items={superseded.map((item) => item.text)} />
+        {conflicts.length ? <div className="brief-section"><h4>冲突</h4>{conflicts.map((conflict) => <div className="brief-conflict" key={conflict.id}>{summarizeText(conflict.text, 64)}</div>)}</div> : null}
+      </> : <div className="empty">尚无可用对话上下文。</div>}
+    </section>
+  );
+}
+
+function BriefItemList(props: { title: string; items: string[]; empty?: string }) {
+  if (!props.items.length) return props.empty ? <div className="brief-section"><h4>{props.title}</h4><div className="empty">{props.empty}</div></div> : null;
+  return (
+    <div className="brief-section">
+      <h4>{props.title}</h4>
+      <ul className="brief-list">{props.items.map((item) => <li key={item}>{summarizeText(item, 72)}</li>)}</ul>
+    </div>
+  );
+}
+
+function briefStatusLabel(status?: DialogueBriefStatus): string {
+  if (!status) return '未加载';
+  if (status.status === 'updating') return '更新中';
+  if (status.status === 'failed') return '需处理';
+  return '已同步';
 }
 
 function RevisionLogCard(props: { article?: ArticleArtifact }) {

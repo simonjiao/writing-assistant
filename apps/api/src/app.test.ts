@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DialogueBrief, WritingTaskCard } from '@wa/core';
+import { DialogueBrief, WritingTaskCard, nowIso } from '@wa/core';
 import { createApp } from './app';
 import { createContainer } from './bootstrap';
 import { AppConfig } from './config';
@@ -736,10 +736,10 @@ describe('api app', () => {
     const config = testConfig();
     const container = createContainer(config);
     const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
-    let coordinatorInput: { conversation?: Array<{ role: string; content: string }>; conversationBrief?: DialogueBrief } | undefined;
+    const coordinatorInputs: Array<{ conversation?: Array<{ role: string; content: string }>; conversationBrief?: DialogueBrief }> = [];
     container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
       if (skillId === 'dialogue-coordinator') {
-        coordinatorInput = input as typeof coordinatorInput;
+        coordinatorInputs.push(input as { conversation?: Array<{ role: string; content: string }>; conversationBrief?: DialogueBrief });
         return { mode: 'proposal', message: '准备更新大纲。', summary: '修订大纲', operations: [{ type: 'revise-outline', instruction: '补充大闹厨房等关键情节。' }], warnings: [] };
       }
       return originalInvokeSkill(skillId as never, input as never, meta as never);
@@ -774,11 +774,135 @@ describe('api app', () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(coordinatorInput).toBeDefined();
-    expect(JSON.stringify(coordinatorInput)).not.toContain('司棋脂批资料司棋脂批资料');
-    expect(coordinatorInput?.conversation?.map((item) => item.role)).toEqual(['user']);
-    expect(coordinatorInput?.conversationBrief?.recentUserIntents.at(-1)?.text).toContain('大闹厨房');
-    expect(coordinatorInput?.conversationBrief?.activeRequirements.at(-1)?.text).toContain('大闹厨房');
+    expect(coordinatorInputs).toHaveLength(1);
+    expect(JSON.stringify(coordinatorInputs[0])).not.toContain('司棋脂批资料司棋脂批资料');
+    expect(coordinatorInputs[0].conversation?.map((item) => item.role)).toEqual(['user']);
+    expect(coordinatorInputs[0].conversationBrief?.recentUserIntents).toHaveLength(0);
+    expect(coordinatorInputs[0].conversationBrief?.activeRequirements).toHaveLength(0);
+
+    const refreshResponse = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-brief-user', message: '按以上意见更新方案', pendingProposalId: response.json().proposal.id, context: { kind: 'outline' } },
+    });
+
+    expect(refreshResponse.statusCode).toBe(200);
+    expect(coordinatorInputs).toHaveLength(2);
+    expect(coordinatorInputs[1].conversationBrief?.recentUserIntents.at(-1)?.text).toContain('大闹厨房');
+    expect(coordinatorInputs[1].conversationBrief?.activeRequirements.at(-1)?.text).toContain('大闹厨房');
+    await app.close();
+  });
+
+  it('fails closed when dialogue brief updates fail instead of extracting requirements locally', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
+    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+      if (skillId === 'dialogue-brief-updater') throw new Error('brief updater unavailable');
+      if (skillId === 'dialogue-coordinator') return { mode: 'proposal', message: '准备修改。', summary: '修订任务', operations: [{ type: 'revise-outline', instruction: '补充大闹厨房。' }], warnings: [] };
+      return originalInvokeSkill(skillId as never, input as never, meta as never);
+    }) as typeof container.runtime.invokeSkill;
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-dialogue-brief-fail',
+      topic: '司棋人物文章',
+      writingGoal: '撰写司棋人物文章。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: ['司棋'], themes: ['司棋'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-brief-fail-user', name: '对话摘要失败工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-brief-fail-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    article.outline = [{ id: 'sec-brief-fail-1', title: '旧大纲', goal: '旧目标。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }];
+    await container.stores.artifactStore.updateArticle(article);
+
+    const firstResponse = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-brief-fail-user', message: '需要补充大闹厨房情节', context: { kind: 'outline' } },
+    });
+    expect(firstResponse.statusCode).toBe(200);
+
+    const secondResponse = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-brief-fail-user', message: '按以上意见更新方案', pendingProposalId: firstResponse.json().proposal.id, context: { kind: 'outline' } },
+    });
+
+    expect(secondResponse.statusCode).toBe(409);
+    expect(secondResponse.json().briefStatus.status).toBe('failed');
+    const brief = await container.stores.dialogueBriefStore.getBrief(article.id, 'dialogue-brief-fail-user');
+    expect(brief?.activeRequirements).toHaveLength(0);
+    await app.close();
+  });
+
+  it('recovers interrupted dialogue brief jobs before routing the next message', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const coordinatorInputs: Array<{ conversationBrief?: DialogueBrief }> = [];
+    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
+    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+      if (skillId === 'dialogue-brief-updater') {
+        const message = (input as { message: string }).message;
+        return { activeRequirements: [{ kind: 'requirement', text: message }], evidenceNotes: [], recentUserIntents: [message], supersededRequirements: [], conflicts: [] };
+      }
+      if (skillId === 'dialogue-coordinator') {
+        coordinatorInputs.push(input as { conversationBrief?: DialogueBrief });
+        return { mode: 'proposal', message: '准备修改。', summary: '修订任务', operations: [{ type: 'revise-outline', instruction: '补充收束段。' }], warnings: [] };
+      }
+      return originalInvokeSkill(skillId as never, input as never, meta as never);
+    }) as typeof container.runtime.invokeSkill;
+    const app = createApp(config, container);
+    const taskCard: WritingTaskCard = {
+      id: 'task-dialogue-brief-stale',
+      topic: '红楼人物关系文章',
+      writingGoal: '撰写人物关系文章。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: ['宝玉', '黛玉'], themes: ['人物关系'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-brief-stale-user', name: '对话摘要恢复工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-brief-stale-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    article.outline = [{ id: 'sec-brief-stale-1', title: '旧大纲', goal: '旧目标。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }];
+    await container.stores.artifactStore.updateArticle(article);
+    const interruptedJob = await container.stores.dialogueBriefUpdateJobStore.createJob({
+      articleId: article.id,
+      userId: 'dialogue-brief-stale-user',
+      messageId: 'msg-interrupted-brief',
+      messageContent: '补充鸳鸯议婚的前置要求',
+      contextKind: 'outline',
+      contextTitle: '整体大纲',
+    });
+    await container.stores.dialogueBriefUpdateJobStore.updateJob({
+      ...interruptedJob,
+      status: 'running',
+      attempts: 1,
+      startedAt: new Date(Date.now() - 120_000).toISOString(),
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-brief-stale-user', message: '需要调整大纲，补充收束段', context: { kind: 'outline' } },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(coordinatorInputs[0].conversationBrief?.activeRequirements.map((item) => item.text)).toContain('补充鸳鸯议婚的前置要求');
+    const jobs = await container.stores.dialogueBriefUpdateJobStore.listJobs(article.id, 'dialogue-brief-stale-user');
+    expect(jobs.find((job) => job.id === interruptedJob.id)?.status).toBe('succeeded');
     await app.close();
   });
 

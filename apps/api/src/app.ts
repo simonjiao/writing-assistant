@@ -5,7 +5,7 @@ import { AgentEvent, ArticleArtifact, ArticleBlock, DialogueContextKind, Dialogu
 import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
-import { addKnowledgeEvidenceToBrief, buildCompactDialogueConversation, compactDialogueBriefForPrompt, updateDialogueBriefForUserMessage } from './dialogueBrief';
+import { addKnowledgeEvidenceToBrief, buildCompactDialogueConversation, compactDialogueBriefForPrompt, enqueueDialogueBriefUpdate, ensureDialogueBriefSettled, getDialogueBriefStatus, getOrCreateDialogueBrief } from './dialogueBrief';
 import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfileSummaries, recommendDomainProfiles, resolveDomainProfileSelection } from './domainProfiles';
 import { getWritingStandardDisplaySummary, getWritingStandardSummary, resolveWritingStandardSelection, WritingStandardSelectionRequest } from './writingStandards';
 
@@ -195,6 +195,11 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
+    try {
+      await ensureDialogueBriefSettled(container, access.article.id, userId);
+    } catch (error) {
+      return reply.code(409).send({ error: dialogueBriefBarrierError(error), briefStatus: await getDialogueBriefStatus(container, access.article.id, userId) });
+    }
     const pendingProposal = body.pendingProposalId ? await container.stores.revisionProposalStore.getProposal(body.pendingProposalId) : undefined;
     if (body.pendingProposalId && (!pendingProposal || pendingProposal.articleId !== access.article.id)) return reply.code(404).send({ error: 'Revision proposal not found.' });
     if (pendingProposal && pendingProposal.userId !== userId) return reply.code(403).send({ error: 'Revision proposal belongs to another user.' });
@@ -220,7 +225,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const conversation = await listDialogueMessages(container, access.article.id, userId, 24);
     if (route === 'answer' || route === 'clarify' || route === 'discuss') {
       if (shouldUpdateDialogueBrief(route, message, pendingProposal)) {
-        await updateDialogueBriefForUserMessage({ container, article: access.article, userId, sessionId: body.sessionId, message: userMessage, context: { kind: context.value.context.kind, title: context.value.context.title } });
+        await enqueueDialogueBriefUpdate({ container, article: access.article, userId, sessionId: body.sessionId, message: userMessage, context: { kind: context.value.context.kind, title: context.value.context.title } });
       }
       const assistantMessage = localDialogueReply(route, context.value.context, pendingProposal);
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id });
@@ -232,7 +237,8 @@ export function createApp(config: AppConfig, container: AppContainer) {
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: knowledgeAnswer.message, proposalId: pendingProposal?.id });
       return { mode: 'answer', message: knowledgeAnswer.message, messages: await listDialogueMessages(container, access.article.id, userId) };
     }
-    const conversationBrief = await updateDialogueBriefForUserMessage({ container, article: access.article, userId, sessionId: body.sessionId, message: userMessage, context: { kind: context.value.context.kind, title: context.value.context.title } });
+    const conversationBrief = await getOrCreateDialogueBrief(container, access.article.id, userId);
+    await enqueueDialogueBriefUpdate({ container, article: access.article, userId, sessionId: body.sessionId, message: userMessage, context: { kind: context.value.context.kind, title: context.value.context.title } });
     let result: DialogueCoordinatorOutput;
     try {
       result = await container.runtime.invokeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
@@ -274,6 +280,15 @@ export function createApp(config: AppConfig, container: AppContainer) {
     });
     await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: result.message, proposalId: proposal.id });
     return { mode: 'proposal', message: result.message, proposal, messages: await listDialogueMessages(container, access.article.id, userId) };
+  });
+  app.get('/api/articles/:articleId/dialogue/brief', async (request, reply) => {
+    const { articleId } = request.params as { articleId: string };
+    const query = request.query as { userId?: string };
+    const userId = readUserId(query.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const access = await requireArticleAccess(container, userId, articleId);
+    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
+    return getDialogueBriefStatus(container, articleId, userId);
   });
   app.get('/api/articles/:articleId/dialogue/messages', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
@@ -469,6 +484,11 @@ function localDialogueReply(route: DialogueRoute, context: DialogueCoordinatorIn
   if (route === 'answer') return `这是关于「${context.title}」的只读说明，不会修改当前任务。若要改动，请直接说明要改成什么。`;
   if (route === 'discuss' && pendingProposal) return '已记录这条意见，暂不刷新当前修改方案。需要合并这些意见时，可以点击“更新方案”，或直接说“按以上意见更新方案”。';
   return `我还不能判断要修改「${context.title}」的哪一部分。请说明要修改、添加、删除，还是只是讨论想法。`;
+}
+
+function dialogueBriefBarrierError(error: unknown): string {
+  const detail = error instanceof Error ? error.message : String(error);
+  return `上一轮对话上下文尚未更新完成或更新失败，已停止继续处理。${detail}`;
 }
 
 async function answerWithKnowledge(container: AppContainer, article: ArticleArtifact, context: DialogueCoordinatorInput['context'], message: string): Promise<{ message: string; query: string; items: KnowledgeItem[] }> {

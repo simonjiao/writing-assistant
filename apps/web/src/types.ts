@@ -13,6 +13,13 @@ export type RevisionOperation =
 export interface RevisionProposal { id: string; articleId: string; userId: string; contextKind: DialogueContextKind; summary: string; message: string; operations: RevisionOperation[]; warnings: string[]; status: 'pending' | 'applied' | 'dismissed'; createdAt: string; updatedAt: string }
 export interface DialogueMessage { id: string; articleId: string; userId: string; contextKind: DialogueContextKind; role: 'user' | 'assistant'; content: string; proposalId?: string; createdAt: string }
 export interface DialogueResponse { mode: 'answer' | 'clarify' | 'discuss' | 'proposal' | 'applied'; message: string; proposal?: RevisionProposal; article?: ArticleArtifact; run?: WorkflowRun; events?: AgentEvent[]; messages?: DialogueMessage[] }
+export type DialogueBriefItemKind = 'requirement' | 'avoidance' | 'source' | 'preference' | 'revision' | 'evidence' | 'intent';
+export type DialogueBriefItemStatus = 'active' | 'superseded';
+export interface DialogueBriefItem { id: string; kind: DialogueBriefItemKind; text: string; status: DialogueBriefItemStatus; contextKind?: DialogueContextKind; sourceMessageId?: string; createdAt: string; updatedAt: string }
+export interface DialogueBriefConflict { id: string; text: string; requirements: string[]; sourceMessageIds: string[]; createdAt: string; updatedAt: string }
+export interface DialogueBrief { id: string; articleId: string; userId: string; activeRequirements: DialogueBriefItem[]; evidenceNotes: DialogueBriefItem[]; recentUserIntents: DialogueBriefItem[]; unresolvedConflicts: DialogueBriefConflict[]; supersededRequirements: DialogueBriefItem[]; createdAt: string; updatedAt: string }
+export interface DialogueBriefUpdateJob { id: string; articleId: string; userId: string; messageId: string; messageContent: string; contextKind: DialogueContextKind; contextTitle: string; status: 'pending' | 'running' | 'succeeded' | 'failed'; attempts: number; error?: string; createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string }
+export interface DialogueBriefStatus { brief?: DialogueBrief; jobs: DialogueBriefUpdateJob[]; status: 'idle' | 'updating' | 'failed'; message?: string }
 export interface WritingWorkspace { id: string; userId: string; memberUserIds: string[]; name: string; isDefault: boolean; createdAt: string; updatedAt: string; deletedAt?: string }
 export interface DomainProfileOption { id: string; label: string; description?: string; defaultSelected?: boolean }
 export interface DomainProfileGroup { id: string; label: string; type: 'single' | 'multi'; options: DomainProfileOption[] }

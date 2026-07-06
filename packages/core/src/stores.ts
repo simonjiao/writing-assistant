@@ -3,6 +3,8 @@ import {
   ArticleArtifact,
   ArticleVersion,
   DialogueBrief,
+  DialogueBriefUpdateJob,
+  DialogueBriefUpdateJobStatus,
   DialogueMessage,
   KnowledgeItem,
   RevisionProposal,
@@ -58,6 +60,13 @@ export interface DialogueBriefStore {
   saveBrief(brief: DialogueBrief): Promise<DialogueBrief>;
 }
 
+export interface DialogueBriefUpdateJobStore {
+  createJob(input: Omit<DialogueBriefUpdateJob, 'id' | 'status' | 'attempts' | 'createdAt' | 'updatedAt'>): Promise<DialogueBriefUpdateJob>;
+  getJob(jobId: string): Promise<DialogueBriefUpdateJob | undefined>;
+  listJobs(articleId: string, userId: string, options?: { statuses?: DialogueBriefUpdateJobStatus[]; limit?: number }): Promise<DialogueBriefUpdateJob[]>;
+  updateJob(job: DialogueBriefUpdateJob): Promise<DialogueBriefUpdateJob>;
+}
+
 export interface WorkspaceStore {
   createWorkspace(input: { id?: string; userId: string; name: string; isDefault?: boolean; memberUserIds?: string[] }): Promise<WritingWorkspace>;
   getWorkspace(workspaceId: string): Promise<WritingWorkspace | undefined>;
@@ -95,6 +104,7 @@ export interface ExternalStores {
   revisionProposalStore: RevisionProposalStore;
   dialogueMessageStore: DialogueMessageStore;
   dialogueBriefStore: DialogueBriefStore;
+  dialogueBriefUpdateJobStore: DialogueBriefUpdateJobStore;
   knowledgeStore: KnowledgeStore;
   eventTraceStore: EventTraceStore;
 }
