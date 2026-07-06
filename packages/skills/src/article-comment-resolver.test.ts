@@ -82,4 +82,59 @@ describe('ArticleCommentResolverSkill', () => {
       llm: sequentialLlm(['', '']),
     })).rejects.toThrow('empty response');
   });
+
+  it('uses a default response when a valid revise payload omits response text', async () => {
+    const skill = new ArticleCommentResolverSkill();
+    const output = await skill.invoke({
+      input: { articleId: 'art-comment', comment, block, taskCard },
+      context: {} as never,
+      llm: sequentialLlm([
+        JSON.stringify({
+          action: 'revise',
+          response: '',
+          replacementText: '潘又安先自怯失措，司棋虽一时惊乱，却反显出比他更敢担承的刚性',
+        }),
+      ]),
+    });
+    expect(output.response).toBe('已按批注修订选中文本。');
+    expect(output.replacementText).toContain('更敢担承');
+  });
+
+  it('prioritizes user replies over old assistant messages in the resolver payload', async () => {
+    const skill = new ArticleCommentResolverSkill();
+    let payload: Record<string, unknown> | undefined;
+    const output = await skill.invoke({
+      input: {
+        articleId: 'art-comment',
+        comment: {
+          ...comment,
+          replies: [
+            { id: 'crp-old', role: 'assistant', content: '这条批注没有处理成功，需要人工确认：Article comment resolver returned empty response.', createdAt: now },
+            { id: 'crp-user', role: 'user', content: '可以评论二人的表现', createdAt: now },
+          ],
+        },
+        block,
+        taskCard,
+      },
+      context: {} as never,
+      llm: {
+        async chat(request: { messages: Array<{ role: string; content: string }> }) {
+          payload = JSON.parse(request.messages[1].content);
+          return {
+            content: JSON.stringify({
+              action: 'revise',
+              response: '已按用户补充评论二人的表现差异。',
+              replacementText: '潘又安先自怯失措，司棋虽一时惊乱，却反显出比他更敢担承的刚性',
+            }),
+            raw: { request },
+          };
+        },
+        async json<T>() { return {} as T; },
+      },
+    });
+    expect(output.action).toBe('revise');
+    expect(payload?.latestUserReply).toBe('可以评论二人的表现');
+    expect(payload?.userReplies).toEqual(['可以评论二人的表现']);
+    expect(JSON.stringify(payload)).not.toContain('没有处理成功');
+  });
 });
