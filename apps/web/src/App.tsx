@@ -697,7 +697,7 @@ export function App() {
           <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} />)}</div>
           {!outlineGenerated ? <div className="editor-support">
             {visibleArticle ? <DialogueBriefCard status={dialogueBriefStatus} /> : null}
-            {visibleArticle ? <KnowledgeTagsCard selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
+            {visibleArticle ? <KnowledgeTagsCard article={visibleArticle} selectedOutline={selectedOutline} outlineWholeSelected={outlineWholeSelected} selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
             <RevisionLogCard article={visibleArticle} />
             {visibleArticle && progressVisible ? <section className="support-card"><h3>执行进度</h3><ProgressTimeline events={liveEvents} run={lastRun?.run} /></section> : null}
           </div> : null}
@@ -723,7 +723,7 @@ export function App() {
             </div>
             <div className="right-support-content">
               {visibleArticle ? <DialogueBriefCard status={dialogueBriefStatus} /> : null}
-              {visibleArticle ? <KnowledgeTagsCard selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
+              {visibleArticle ? <KnowledgeTagsCard article={visibleArticle} selectedOutline={selectedOutline} outlineWholeSelected={outlineWholeSelected} selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
               <RevisionLogCard article={visibleArticle} />
             </div>
           </>}
@@ -951,19 +951,43 @@ function RevisionLogView(props: { article?: ArticleArtifact }) {
   );
 }
 
-function KnowledgeTagsCard(props: { selectedBlock?: ArticleBlock; hasWritingBlocks: boolean }) {
+function KnowledgeTagsCard(props: { article: ArticleArtifact; selectedOutline?: ArticleArtifact['outline'][number]; outlineWholeSelected: boolean; selectedBlock?: ArticleBlock; hasWritingBlocks: boolean }) {
+  const sectionBlocks = props.selectedOutline ? props.article.blocks.filter((block) => block.sectionId === props.selectedOutline?.id) : [];
+  const outlineSourceRefs = uniqueStrings(sectionBlocks.flatMap((block) => block.sourceRefs));
+  const outlineThemeTags = uniqueStrings([...(props.selectedOutline?.themeTags ?? []), ...sectionBlocks.flatMap((block) => block.themeTags)]);
+  const wholeSourceHints = uniqueStrings(props.article.outline.flatMap((item) => item.sourceHints));
+  const wholeThemeTags = uniqueStrings(props.article.outline.flatMap((item) => item.themeTags));
+  const wholeSourceRefs = uniqueStrings(props.article.blocks.flatMap((block) => block.sourceRefs));
   return (
     <section className="support-card">
       <h3>知识 / 引用 / 标签</h3>
       {props.selectedBlock ? <div>
-        <p className="mono">{props.selectedBlock.id}</p>
         <h4>引用来源</h4>
         {props.selectedBlock.sourceRefs.length ? props.selectedBlock.sourceRefs.map((ref) => <span className="tag" key={ref}>{ref}</span>) : <div className="empty">暂无引用绑定</div>}
         <h4>主题标签</h4>
         {props.selectedBlock.themeTags.length ? props.selectedBlock.themeTags.map((tag) => <span className="tag" key={tag}>{tag}</span>) : <div className="empty">暂无主题标签。</div>}
-      </div> : <div className="empty">{props.hasWritingBlocks ? '选择一个段落后显示对应来源和标签。' : '生成正文后显示段落来源和标签。'}</div>}
+      </div> : props.selectedOutline ? <div>
+        <h4>大纲资料线索</h4>
+        {props.selectedOutline.sourceHints.length ? props.selectedOutline.sourceHints.map((hint) => <span className="tag" key={hint}>{hint}</span>) : <div className="empty">暂无资料线索。</div>}
+        <h4>主题标签</h4>
+        {outlineThemeTags.length ? outlineThemeTags.map((tag) => <span className="tag" key={tag}>{tag}</span>) : <div className="empty">暂无主题标签。</div>}
+        <h4>已生成引用</h4>
+        {outlineSourceRefs.length ? outlineSourceRefs.map((ref) => <span className="tag" key={ref}>{ref}</span>) : <div className="empty">本大纲项还没有正文引用。</div>}
+      </div> : props.outlineWholeSelected ? <div>
+        <p className="mono">{props.article.outline.length} 个大纲项 · {props.article.blocks.length} 段正文</p>
+        <h4>大纲资料线索</h4>
+        {wholeSourceHints.length ? wholeSourceHints.slice(0, 12).map((hint) => <span className="tag" key={hint}>{hint}</span>) : <div className="empty">暂无资料线索。</div>}
+        <h4>主题标签</h4>
+        {wholeThemeTags.length ? wholeThemeTags.map((tag) => <span className="tag" key={tag}>{tag}</span>) : <div className="empty">暂无主题标签。</div>}
+        <h4>已生成引用</h4>
+        {wholeSourceRefs.length ? wholeSourceRefs.slice(0, 12).map((ref) => <span className="tag" key={ref}>{ref}</span>) : <div className="empty">还没有正文引用。</div>}
+      </div> : <div className="empty">{props.hasWritingBlocks ? '选择大纲项或段落后显示对应来源和标签。' : '选择大纲项可查看资料线索；生成正文后显示段落来源和标签。'}</div>}
     </section>
   );
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((item) => item.trim()).filter(Boolean))];
 }
 
 function DialogueBriefCard(props: { status?: DialogueBriefStatus }) {
@@ -976,14 +1000,14 @@ function DialogueBriefCard(props: { status?: DialogueBriefStatus }) {
   const hasContent = active.length || evidence.length || superseded.length || conflicts.length;
   return (
     <section className={`support-card dialogue-brief-card ${status?.status ?? 'idle'}`}>
-      <div className="brief-card-head"><h3>对话上下文</h3><span>{briefStatusLabel(status)}</span></div>
+      <div className="brief-card-head"><h3>对话摘要</h3><span>{briefStatusLabel(status)}</span></div>
       {status?.message ? <div className="brief-error">{status.message}</div> : null}
       {hasContent ? <>
-        <BriefItemList title="当前要求" items={active.map((item) => item.text)} empty="暂无明确要求" />
-        <BriefItemList title="资料证据" items={evidence.map((item) => item.text)} />
-        <BriefItemList title="已替代" items={superseded.map((item) => item.text)} />
-        {conflicts.length ? <div className="brief-section"><h4>冲突</h4>{conflicts.map((conflict) => <div className="brief-conflict" key={conflict.id}>{summarizeText(conflict.text, 64)}</div>)}</div> : null}
-      </> : <div className="empty">尚无可用对话上下文。</div>}
+        <BriefItemList title="已记录要求" items={active.map((item) => item.text)} empty="暂无明确要求" />
+        <BriefItemList title="资料线索" items={evidence.map((item) => item.text)} />
+        <BriefItemList title="已替代要求" items={superseded.map((item) => item.text)} />
+        {conflicts.length ? <div className="brief-section"><h4>待处理冲突</h4>{conflicts.map((conflict) => <div className="brief-conflict" key={conflict.id}>{summarizeText(conflict.text, 64)}</div>)}</div> : null}
+      </> : <div className="empty">尚无可用对话摘要。</div>}
     </section>
   );
 }
@@ -1308,7 +1332,7 @@ function buildDialogContext(target: TaskCardTarget, article?: ArticleArtifact, o
     return {
       kind: 'paragraph',
       label: '当前段落',
-      title: block.title || block.id,
+      title: block.title || '正文段落',
       detail: summarizeText(block.text, 90),
       contextText: formatParagraphContext(block),
       blockId: block.id,
@@ -1541,7 +1565,7 @@ function formatWholeOutlineContext(outline: ArticleArtifact['outline']): string 
 
 function formatParagraphContext(block: ArticleBlock): string {
   return [
-    `段落标题：${block.title || block.id}`,
+    `段落标题：${block.title || '正文段落'}`,
     `段落正文：${block.text}`,
     `引用来源：${joinList(block.sourceRefs) || '无'}`,
     `主题标签：${joinList(block.themeTags) || '无'}`,
