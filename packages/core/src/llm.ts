@@ -185,11 +185,22 @@ function mockOutline(topic: string, themes: string[]) {
 function mockDialogueCoordination(payload: Record<string, any>) {
   const message = String(payload.message ?? '');
   const context = payload.context as { kind?: string; outlineItemId?: string; blockId?: string; title?: string } | undefined;
+  const pendingProposal = payload.pendingProposal as { operations?: Array<Record<string, any>> } | undefined;
   if (/[?？]|为什么|为何|解释|说明|怎么|是否|吗/.test(message)) {
     return {
       mode: 'answer',
       message: `这是关于「${context?.title ?? '当前位置'}」的只读说明；如果需要改动，请明确说“修改为”或点击应用修改。`,
       operations: [],
+      warnings: [],
+    };
+  }
+  if (pendingProposal?.operations?.length && !/(确认|应用|执行|就这样|可以|同意|按这个改|直接改|改吧|ok|OK)/i.test(message)) {
+    const operation = pendingProposal.operations[0];
+    return {
+      mode: 'proposal',
+      message: '我会把这轮意见合并进当前修改方案，确认后再写入。',
+      summary: '更新当前修改方案',
+      operations: [{ ...operation, instruction: `${String(operation.instruction ?? '')}\n${message}`.trim() }],
       warnings: [],
     };
   }

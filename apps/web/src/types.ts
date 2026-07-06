@@ -11,7 +11,8 @@ export type RevisionOperation =
   | { type: 'revise-outline-item'; outlineItemId: string; instruction: string }
   | { type: 'patch-block'; blockId: string; instruction: string };
 export interface RevisionProposal { id: string; articleId: string; userId: string; contextKind: DialogueContextKind; summary: string; message: string; operations: RevisionOperation[]; warnings: string[]; status: 'pending' | 'applied' | 'dismissed'; createdAt: string; updatedAt: string }
-export interface DialogueResponse { mode: 'answer' | 'clarify' | 'proposal' | 'applied'; message: string; proposal?: RevisionProposal; article?: ArticleArtifact; run?: WorkflowRun; events?: AgentEvent[] }
+export interface DialogueMessage { id: string; articleId: string; userId: string; contextKind: DialogueContextKind; role: 'user' | 'assistant'; content: string; proposalId?: string; createdAt: string }
+export interface DialogueResponse { mode: 'answer' | 'clarify' | 'proposal' | 'applied'; message: string; proposal?: RevisionProposal; article?: ArticleArtifact; run?: WorkflowRun; events?: AgentEvent[]; messages?: DialogueMessage[] }
 export interface WritingWorkspace { id: string; userId: string; memberUserIds: string[]; name: string; isDefault: boolean; createdAt: string; updatedAt: string; deletedAt?: string }
 export interface DomainProfileOption { id: string; label: string; description?: string; defaultSelected?: boolean }
 export interface DomainProfileGroup { id: string; label: string; type: 'single' | 'multi'; options: DomainProfileOption[] }

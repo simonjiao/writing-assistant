@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { AgentEvent, ArticleArtifact, ArticleVersion, ArtifactStore, EventTraceStore, KnowledgeItem, KnowledgeStore, MemoryStore, newId, nowIso, RevisionProposal, RevisionProposalStore, Session, SessionStore, StateStore, TextPatch, UserWritingProfile, WorkspaceStore, WritingWorkspace, WorkflowRun } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleVersion, ArtifactStore, DialogueMessage, DialogueMessageStore, EventTraceStore, KnowledgeItem, KnowledgeStore, MemoryStore, newId, nowIso, RevisionProposal, RevisionProposalStore, Session, SessionStore, StateStore, TextPatch, UserWritingProfile, WorkspaceStore, WritingWorkspace, WorkflowRun } from '@wa/core';
 import knowledgeSeedRules from '../rules/knowledge-seeds.json';
 import { SqliteJsonDb } from './sqliteJsonDb';
 
@@ -62,6 +62,23 @@ export class SqliteRevisionProposalStore implements RevisionProposalStore {
   getProposal(proposalId: string) { return this.db.get(proposalId); }
   async listPendingProposals(articleId: string, userId: string) { return (await this.db.list()).filter((proposal) => proposal.articleId === articleId && proposal.userId === userId && proposal.status === 'pending'); }
   updateProposal(proposal: RevisionProposal) { return this.db.upsert({ ...proposal, updatedAt: nowIso() }); }
+  close() { this.db.close(); }
+}
+
+export class SqliteDialogueMessageStore implements DialogueMessageStore {
+  private readonly db: SqliteJsonDb<DialogueMessage>;
+  private lastCreatedAtMs = 0;
+  constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'dialogue_messages'); }
+  createMessage(input: Omit<DialogueMessage, 'id' | 'createdAt'>) {
+    const nowMs = Date.now();
+    const createdAtMs = nowMs <= this.lastCreatedAtMs ? this.lastCreatedAtMs + 1 : nowMs;
+    this.lastCreatedAtMs = createdAtMs;
+    return this.db.upsert({ ...input, id: newId('msg'), createdAt: new Date(createdAtMs).toISOString() });
+  }
+  async listMessages(articleId: string, userId: string, options?: { limit?: number }) {
+    const messages = (await this.db.list()).filter((message) => message.articleId === articleId && message.userId === userId).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    return options?.limit ? messages.slice(-options.limit) : messages;
+  }
   close() { this.db.close(); }
 }
 

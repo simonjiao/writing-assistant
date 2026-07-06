@@ -2,6 +2,7 @@ import {
   AgentEvent,
   ArticleArtifact,
   ArticleVersion,
+  DialogueMessage,
   KnowledgeItem,
   RevisionProposal,
   Session,
@@ -46,6 +47,11 @@ export interface RevisionProposalStore {
   updateProposal(proposal: RevisionProposal): Promise<RevisionProposal>;
 }
 
+export interface DialogueMessageStore {
+  createMessage(input: Omit<DialogueMessage, 'id' | 'createdAt'>): Promise<DialogueMessage>;
+  listMessages(articleId: string, userId: string, options?: { limit?: number }): Promise<DialogueMessage[]>;
+}
+
 export interface WorkspaceStore {
   createWorkspace(input: { id?: string; userId: string; name: string; isDefault?: boolean; memberUserIds?: string[] }): Promise<WritingWorkspace>;
   getWorkspace(workspaceId: string): Promise<WritingWorkspace | undefined>;
@@ -70,6 +76,7 @@ export interface ExternalStores {
   workspaceStore: WorkspaceStore;
   artifactStore: ArtifactStore;
   revisionProposalStore: RevisionProposalStore;
+  dialogueMessageStore: DialogueMessageStore;
   knowledgeStore: KnowledgeStore;
   eventTraceStore: EventTraceStore;
 }

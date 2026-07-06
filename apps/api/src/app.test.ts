@@ -555,10 +555,14 @@ describe('api app', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().mode).toBe('answer');
     expect(response.json().proposal).toBeUndefined();
+    expect(response.json().messages.map((message: { role: string }) => message.role)).toEqual(['user', 'assistant']);
     const after = await container.stores.artifactStore.getArticle(article.id);
     expect(after?.outline[0].title).toBe(before?.outline[0].title);
     expect(after?.versions).toHaveLength(before?.versions.length ?? 0);
     expect(await container.stores.revisionProposalStore.listPendingProposals(article.id, 'dialogue-answer-user')).toHaveLength(0);
+    const messagesResponse = await app.inject({ method: 'GET', url: `/api/articles/${article.id}/dialogue/messages?userId=dialogue-answer-user` });
+    expect(messagesResponse.statusCode).toBe(200);
+    expect(messagesResponse.json()).toHaveLength(2);
     await app.close();
   });
 
@@ -600,9 +604,25 @@ describe('api app', () => {
     const pendingResponse = await app.inject({ method: 'GET', url: `/api/articles/${article.id}/dialogue/proposals?userId=dialogue-proposal-user` });
     expect(pendingResponse.json()).toHaveLength(1);
 
+    const followUpResponse = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-proposal-user', message: '再强调不要沿用旧目标。', pendingProposalId: proposalBody.proposal.id, context: { kind: 'outline-item', outlineItemId: 'sec-dialogue-proposal' } },
+    });
+
+    expect(followUpResponse.statusCode).toBe(200);
+    const followUpBody = followUpResponse.json();
+    expect(followUpBody.mode).toBe('proposal');
+    expect(followUpBody.proposal.id).not.toBe(proposalBody.proposal.id);
+    expect(followUpBody.proposal.operations[0].instruction).toContain('不要沿用旧目标');
+    expect(followUpBody.messages.map((message: { role: string }) => message.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    const pendingAfterFollowUp = await container.stores.revisionProposalStore.listPendingProposals(article.id, 'dialogue-proposal-user');
+    expect(pendingAfterFollowUp).toHaveLength(1);
+    expect(pendingAfterFollowUp[0].id).toBe(followUpBody.proposal.id);
+
     const applyResponse = await app.inject({
       method: 'POST',
-      url: `/api/articles/${article.id}/dialogue/${proposalBody.proposal.id}/apply`,
+      url: `/api/articles/${article.id}/dialogue/${followUpBody.proposal.id}/apply`,
       payload: { userId: 'dialogue-proposal-user' },
     });
 

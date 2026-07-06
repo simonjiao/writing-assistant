@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
-import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DialogueContextKind, DialogueResponse, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RevisionOperation, RevisionProposal, RunResponse, TaskCardFollowUpPrompt, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DialogueContextKind, DialogueMessage, DialogueResponse, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RevisionOperation, RevisionProposal, RunResponse, TaskCardFollowUpPrompt, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
 
 const userId = 'demo-user';
 const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']);
@@ -49,6 +49,7 @@ export function App() {
   const [collapsedOutlineIds, setCollapsedOutlineIds] = useState<string[]>([]);
   const [collapsedBlockIds, setCollapsedBlockIds] = useState<string[]>([]);
   const [dialogueResponse, setDialogueResponse] = useState<DialogueResponse>();
+  const [dialogueMessages, setDialogueMessages] = useState<DialogueMessage[]>([]);
   const [pendingProposals, setPendingProposals] = useState<RevisionProposal[]>([]);
   const [sectionGeneration, setSectionGeneration] = useState<SectionGenerationState>();
   const refreshTimer = useRef<number | undefined>(undefined);
@@ -77,6 +78,14 @@ export function App() {
     const proposals = await api.listDialogueProposals(articleId, userId);
     setPendingProposals(proposals);
     setDialogueResponse((current) => current?.mode === 'proposal' && current.proposal && !proposals.some((proposal) => proposal.id === current.proposal?.id) ? undefined : current);
+  }
+
+  async function refreshDialogueMessages(articleId = article?.id) {
+    if (!articleId) {
+      setDialogueMessages([]);
+      return;
+    }
+    setDialogueMessages(await api.listDialogueMessages(articleId, userId));
   }
 
   useEffect(() => {
@@ -129,8 +138,10 @@ export function App() {
     setNewTaskMessage('');
     setClearedTaskCardPromptIds([]);
     setDialogueResponse(undefined);
+    setDialogueMessages([]);
     setOutlineRegenerationWarningOpen(false);
     void refreshDialogueProposals(article?.id).catch(() => setPendingProposals([]));
+    void refreshDialogueMessages(article?.id).catch(() => setDialogueMessages([]));
   }, [article?.id]);
   useEffect(() => () => window.clearTimeout(progressDismissTimer.current), []);
 
@@ -430,6 +441,7 @@ export function App() {
       applyDialogueResponse(response);
       setCurrentTaskMessage('');
       await refreshDialogueProposals(visibleArticle.id);
+      if (!response.messages) await refreshDialogueMessages(visibleArticle.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -437,7 +449,8 @@ export function App() {
     }
   }
   function applyDialogueResponse(response: DialogueResponse) {
-    setDialogueResponse(response);
+    if (response.messages) setDialogueMessages(response.messages);
+    setDialogueResponse(response.mode === 'answer' || response.mode === 'clarify' ? undefined : response);
     if (response.article) {
       setArticle(response.article);
       void refreshArticleSummaries(response.article.workspaceId).catch((err) => setError(err instanceof Error ? err.message : String(err)));
@@ -452,6 +465,7 @@ export function App() {
       const response = await api.applyDialogueProposal(visibleArticle.id, proposal.id, { userId, sessionId });
       applyDialogueResponse(response);
       await refreshDialogueProposals(visibleArticle.id);
+      if (!response.messages) await refreshDialogueMessages(visibleArticle.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -466,6 +480,7 @@ export function App() {
       await api.dismissDialogueProposal(visibleArticle.id, proposal.id, { userId });
       if (dialogueResponse?.proposal?.id === proposal.id) setDialogueResponse(undefined);
       await refreshDialogueProposals(visibleArticle.id);
+      await refreshDialogueMessages(visibleArticle.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -603,6 +618,7 @@ export function App() {
             {taskCardDialogTarget === 'current' && visibleArticle?.taskCard && taskCardFollowUpPrompts.length ? <TaskCardGuidance prompts={taskCardFollowUpPrompts} taskCard={visibleArticle.taskCard} message={currentTaskMessage} clearedPromptIds={clearedTaskCardPromptIds} onChooseOption={chooseTaskCardPromptOption} onClearAnswer={clearTaskCardPromptAnswer} /> : null}
             {taskCardDialogTarget === 'new' ? <NewTaskGuidance writingStandard={writingStandard} selectedLanguageEra={selectedLanguageEra} onSelectLanguageEra={setSelectedLanguageEra} onClearLanguageEra={() => setSelectedLanguageEra('')} domainProfiles={domainProfiles} recommendations={domainProfileRecommendations} selectedProfileId={selectedProfileId} selections={profileSelections} onSelectProfile={selectProfile} onClearProfile={() => selectProfile('')} onUpdateGroup={updateProfileGroup} /> : null}
             <DialogContextView context={dialogContext} />
+            {taskCardDialogTarget === 'current' ? <DialogueHistoryView messages={dialogueMessages} /> : null}
             <DialogueResultView response={dialogueResponse} proposal={activeDialogueProposal} busy={busy} onApply={applyDialogueProposal} onDismiss={dismissDialogueProposal} />
             <div className="task-dialog-input-row">
               <textarea value={activeTaskCardMessage} onChange={(event) => setActiveTaskCardMessage(event.target.value)} onKeyDown={submitTaskCardMessageWithKeyboard} placeholder={dialogPlaceholder(dialogContext)} />
@@ -671,12 +687,25 @@ function DialogContextView(props: { context: DialogContext }) {
   );
 }
 
+function DialogueHistoryView(props: { messages: DialogueMessage[] }) {
+  const messages = props.messages.slice(-8);
+  if (!messages.length) return null;
+  return (
+    <div className="dialogue-history">
+      {messages.map((message) => <div className={`dialogue-message ${message.role}`} key={message.id}>
+        <span>{message.role === 'user' ? '你' : '助手'}</span>
+        <p>{message.content}</p>
+      </div>)}
+    </div>
+  );
+}
+
 function DialogueResultView(props: { response?: DialogueResponse; proposal?: RevisionProposal; busy: boolean; onApply: (proposal: RevisionProposal) => void | Promise<void>; onDismiss: (proposal: RevisionProposal) => void | Promise<void> }) {
   const proposal = props.proposal;
   if (!props.response && !proposal) return null;
   return (
     <div className={proposal ? 'dialogue-result proposal' : 'dialogue-result'}>
-      {props.response?.message ? <p>{props.response.message}</p> : null}
+      {props.response?.message && !proposal ? <p>{props.response.message}</p> : null}
       {proposal ? <div className="dialogue-proposal">
         <div className="dialogue-proposal-head"><strong>{proposal.summary}</strong><span>{revisionOperationSummary(proposal.operations)}</span></div>
         {proposal.warnings.length ? <ul className="dialogue-warnings">{proposal.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}

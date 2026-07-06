@@ -1,7 +1,7 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply } from 'fastify';
-import { AgentEvent, ArticleArtifact, ArticleBlock, DialogueContextKind, EventSubscriptionFilter, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WritingTaskCard, WritingWorkspace } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleBlock, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WritingTaskCard, WritingWorkspace } from '@wa/core';
 import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, OutlineItemReviserOutput, OutlineReviserOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
@@ -194,14 +194,27 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
-    if (body.pendingProposalId && isApplyConfirmation(message)) return applyRevisionProposal(container, body.pendingProposalId, userId, body.sessionId);
+    const pendingProposal = body.pendingProposalId ? await container.stores.revisionProposalStore.getProposal(body.pendingProposalId) : undefined;
+    if (body.pendingProposalId && (!pendingProposal || pendingProposal.articleId !== access.article.id)) return reply.code(404).send({ error: 'Revision proposal not found.' });
+    if (pendingProposal && pendingProposal.userId !== userId) return reply.code(403).send({ error: 'Revision proposal belongs to another user.' });
+    if (pendingProposal && pendingProposal.status !== 'pending') return reply.code(400).send({ error: `Revision proposal is already ${pendingProposal.status}.` });
+    if (pendingProposal && isApplyConfirmation(message)) {
+      await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: pendingProposal.contextKind, role: 'user', content: message, proposalId: pendingProposal.id });
+      const applied = await applyRevisionProposal(container, pendingProposal.id, userId, body.sessionId);
+      await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: pendingProposal.contextKind, role: 'assistant', content: applied.message, proposalId: pendingProposal.id });
+      return { ...applied, messages: await listDialogueMessages(container, access.article.id, userId) };
+    }
     const context = resolveDialogueContext(access.article, body.context);
     if (!context.ok) return reply.code(context.statusCode).send({ error: context.error });
+    await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'user', content: message, proposalId: pendingProposal?.id });
+    const conversation = await listDialogueMessages(container, access.article.id, userId, 12);
     const result = await container.runtime.invokeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
       'dialogue-coordinator',
       {
         articleId: access.article.id,
         message,
+        conversation: conversation.map((item) => ({ role: item.role, content: item.content, proposalId: item.proposalId, createdAt: item.createdAt })),
+        pendingProposal: pendingProposal ? proposalForDialogue(pendingProposal) : undefined,
         context: context.value.context,
         taskCard: access.article.taskCard,
         outline: access.article.outline,
@@ -210,7 +223,11 @@ export function createApp(config: AppConfig, container: AppContainer) {
       },
       { userId, sessionId: body.sessionId, articleId: access.article.id },
     );
-    if (result.mode !== 'proposal') return { mode: result.mode, message: result.message };
+    if (result.mode !== 'proposal') {
+      await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: result.message, proposalId: pendingProposal?.id });
+      return { mode: result.mode, message: result.message, messages: await listDialogueMessages(container, access.article.id, userId) };
+    }
+    if (pendingProposal) await container.stores.revisionProposalStore.updateProposal({ ...pendingProposal, status: 'dismissed' });
     const proposal = await container.stores.revisionProposalStore.createProposal({
       articleId: access.article.id,
       userId,
@@ -220,7 +237,18 @@ export function createApp(config: AppConfig, container: AppContainer) {
       operations: result.operations,
       warnings: result.warnings,
     });
-    return { mode: 'proposal', message: result.message, proposal };
+    await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: result.message, proposalId: proposal.id });
+    return { mode: 'proposal', message: result.message, proposal, messages: await listDialogueMessages(container, access.article.id, userId) };
+  });
+  app.get('/api/articles/:articleId/dialogue/messages', async (request, reply) => {
+    const { articleId } = request.params as { articleId: string };
+    const query = request.query as { userId?: string; limit?: string };
+    const userId = readUserId(query.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const access = await requireArticleAccess(container, userId, articleId);
+    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
+    const limit = query.limit ? Number.parseInt(query.limit, 10) : undefined;
+    return listDialogueMessages(container, articleId, userId, Number.isFinite(limit) ? limit : undefined);
   });
   app.get('/api/articles/:articleId/dialogue/proposals', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
@@ -238,7 +266,9 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
     if (!proposal || proposal.articleId !== articleId) return reply.code(404).send({ error: 'Revision proposal not found.' });
-    return applyRevisionProposal(container, proposal.id, userId, body.sessionId);
+    const applied = await applyRevisionProposal(container, proposal.id, userId, body.sessionId);
+    await appendDialogueMessage(container, { articleId, userId, contextKind: proposal.contextKind, role: 'assistant', content: applied.message, proposalId: proposal.id });
+    return { ...applied, messages: await listDialogueMessages(container, articleId, userId) };
   });
   app.post('/api/articles/:articleId/dialogue/:proposalId/dismiss', async (request, reply) => {
     const { articleId, proposalId } = request.params as { articleId: string; proposalId: string };
@@ -248,7 +278,9 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
     if (!proposal || proposal.articleId !== articleId) return reply.code(404).send({ error: 'Revision proposal not found.' });
     if (proposal.userId !== userId) return reply.code(403).send({ error: 'Revision proposal belongs to another user.' });
-    return container.stores.revisionProposalStore.updateProposal({ ...proposal, status: 'dismissed' });
+    const dismissed = await container.stores.revisionProposalStore.updateProposal({ ...proposal, status: 'dismissed' });
+    await appendDialogueMessage(container, { articleId, userId, contextKind: proposal.contextKind, role: 'assistant', content: '已取消这次修改提案。', proposalId: proposal.id });
+    return dismissed;
   });
   app.post('/api/articles/:articleId/writing/start', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
@@ -366,6 +398,24 @@ function normalizeDialogueKind(value: string | undefined): DialogueContextKind {
   if (value === 'outline' || value === 'outline-item' || value === 'block' || value === 'task-card') return value;
   if (value === 'paragraph') return 'block';
   return 'task-card';
+}
+
+async function appendDialogueMessage(container: AppContainer, input: Omit<DialogueMessage, 'id' | 'createdAt'>): Promise<DialogueMessage> {
+  return container.stores.dialogueMessageStore.createMessage(input);
+}
+
+function listDialogueMessages(container: AppContainer, articleId: string, userId: string, limit = 24): Promise<DialogueMessage[]> {
+  return container.stores.dialogueMessageStore.listMessages(articleId, userId, { limit });
+}
+
+function proposalForDialogue(proposal: RevisionProposal): DialogueCoordinatorInput['pendingProposal'] {
+  return {
+    id: proposal.id,
+    summary: proposal.summary,
+    message: proposal.message,
+    operations: proposal.operations,
+    warnings: proposal.warnings,
+  };
 }
 
 function isApplyConfirmation(message: string): boolean {

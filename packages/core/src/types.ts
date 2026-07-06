@@ -155,6 +155,17 @@ export interface RevisionProposal {
   updatedAt: string;
 }
 
+export interface DialogueMessage {
+  id: string;
+  articleId: string;
+  userId: string;
+  contextKind: DialogueContextKind;
+  role: 'user' | 'assistant';
+  content: string;
+  proposalId?: string;
+  createdAt: string;
+}
+
 export interface Session {
   id: string;
   userId: string;

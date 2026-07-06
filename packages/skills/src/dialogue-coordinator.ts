@@ -3,6 +3,8 @@ import { ArticleBlock, DialogueContextKind, OutlineItem, RevisionOperation, safe
 export interface DialogueCoordinatorInput {
   articleId: string;
   message: string;
+  conversation?: Array<{ role: 'user' | 'assistant'; content: string; proposalId?: string; createdAt: string }>;
+  pendingProposal?: { id: string; summary: string; message: string; operations: RevisionOperation[]; warnings: string[] };
   context: {
     kind: DialogueContextKind;
     title: string;
@@ -52,6 +54,7 @@ export class DialogueCoordinatorSkill implements Skill<DialogueCoordinatorInput,
             '如果用户是在提问、要求解释、询问原因、问“为何/为什么/怎么/是否/吗”，mode 必须是 answer，operations 必须是 []。',
             '如果用户表达了修改意图但目标不明确，mode 是 clarify，operations 必须是 []。',
             '如果用户明确要求修改、调整、添加、删除、重写、压缩、扩写，mode 是 proposal，返回待确认 operations；此时也不直接写入。',
+            '如果 pendingProposal 存在，用户后续的补充、否定、调整、收窄、放宽，默认都是围绕该方案继续讨论；需要输出一个吸收前文的新 proposal，而不是要求用户重说。',
             'operation 必须服从当前 context：task-card 使用 revise-task-card；outline 使用 revise-outline；outline-item 使用 revise-outline-item；block 使用 patch-block。',
             '不要把解释类输入包装成修改方案。用户明确确认前，任何 proposal 都只是计划。',
           ].join('\n'),
@@ -61,6 +64,8 @@ export class DialogueCoordinatorSkill implements Skill<DialogueCoordinatorInput,
           content: JSON.stringify({
             articleId: input.articleId,
             message,
+            conversation: input.conversation ?? [],
+            pendingProposal: input.pendingProposal,
             context: input.context,
             taskCard: input.taskCard,
             outline: input.outline.map((item) => ({ id: item.id, title: item.title, goal: item.goal, order: item.order, status: item.status })),
