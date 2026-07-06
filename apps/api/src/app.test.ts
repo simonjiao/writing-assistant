@@ -612,17 +612,31 @@ describe('api app', () => {
 
     expect(followUpResponse.statusCode).toBe(200);
     const followUpBody = followUpResponse.json();
-    expect(followUpBody.mode).toBe('proposal');
-    expect(followUpBody.proposal.id).not.toBe(proposalBody.proposal.id);
-    expect(followUpBody.proposal.operations[0].instruction).toContain('不要沿用旧目标');
+    expect(followUpBody.mode).toBe('discuss');
+    expect(followUpBody.proposal).toBeUndefined();
     expect(followUpBody.messages.map((message: { role: string }) => message.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
     const pendingAfterFollowUp = await container.stores.revisionProposalStore.listPendingProposals(article.id, 'dialogue-proposal-user');
     expect(pendingAfterFollowUp).toHaveLength(1);
-    expect(pendingAfterFollowUp[0].id).toBe(followUpBody.proposal.id);
+    expect(pendingAfterFollowUp[0].id).toBe(proposalBody.proposal.id);
+
+    const refreshResponse = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-proposal-user', message: '按以上意见更新方案', pendingProposalId: proposalBody.proposal.id, context: { kind: 'outline-item', outlineItemId: 'sec-dialogue-proposal' } },
+    });
+
+    expect(refreshResponse.statusCode).toBe(200);
+    const refreshBody = refreshResponse.json();
+    expect(refreshBody.mode).toBe('proposal');
+    expect(refreshBody.proposal.id).not.toBe(proposalBody.proposal.id);
+    expect(refreshBody.proposal.operations[0].instruction).toContain('不要沿用旧目标');
+    const pendingAfterRefresh = await container.stores.revisionProposalStore.listPendingProposals(article.id, 'dialogue-proposal-user');
+    expect(pendingAfterRefresh).toHaveLength(1);
+    expect(pendingAfterRefresh[0].id).toBe(refreshBody.proposal.id);
 
     const applyResponse = await app.inject({
       method: 'POST',
-      url: `/api/articles/${article.id}/dialogue/${followUpBody.proposal.id}/apply`,
+      url: `/api/articles/${article.id}/dialogue/${refreshBody.proposal.id}/apply`,
       payload: { userId: 'dialogue-proposal-user' },
     });
 

@@ -51,6 +51,7 @@ export function App() {
   const [dialogueResponse, setDialogueResponse] = useState<DialogueResponse>();
   const [dialogueMessages, setDialogueMessages] = useState<DialogueMessage[]>([]);
   const [pendingProposals, setPendingProposals] = useState<RevisionProposal[]>([]);
+  const [proposalDirty, setProposalDirty] = useState(false);
   const [sectionGeneration, setSectionGeneration] = useState<SectionGenerationState>();
   const refreshTimer = useRef<number | undefined>(undefined);
   const progressDismissTimer = useRef<number | undefined>(undefined);
@@ -73,10 +74,12 @@ export function App() {
   async function refreshDialogueProposals(articleId = article?.id) {
     if (!articleId) {
       setPendingProposals([]);
+      setProposalDirty(false);
       return;
     }
     const proposals = await api.listDialogueProposals(articleId, userId);
     setPendingProposals(proposals);
+    if (!proposals.length) setProposalDirty(false);
     setDialogueResponse((current) => current?.mode === 'proposal' && current.proposal && !proposals.some((proposal) => proposal.id === current.proposal?.id) ? undefined : current);
   }
 
@@ -139,6 +142,7 @@ export function App() {
     setClearedTaskCardPromptIds([]);
     setDialogueResponse(undefined);
     setDialogueMessages([]);
+    setProposalDirty(false);
     setOutlineRegenerationWarningOpen(false);
     void refreshDialogueProposals(article?.id).catch(() => setPendingProposals([]));
     void refreshDialogueMessages(article?.id).catch(() => setDialogueMessages([]));
@@ -450,7 +454,9 @@ export function App() {
   }
   function applyDialogueResponse(response: DialogueResponse) {
     if (response.messages) setDialogueMessages(response.messages);
-    setDialogueResponse(response.mode === 'answer' || response.mode === 'clarify' ? undefined : response);
+    if (response.mode === 'discuss' && activeDialogueProposal) setProposalDirty(true);
+    if (response.mode === 'proposal' || response.mode === 'applied') setProposalDirty(false);
+    setDialogueResponse(response.mode === 'answer' || response.mode === 'clarify' || response.mode === 'discuss' ? undefined : response);
     if (response.article) {
       setArticle(response.article);
       void refreshArticleSummaries(response.article.workspaceId).catch((err) => setError(err instanceof Error ? err.message : String(err)));
@@ -464,6 +470,7 @@ export function App() {
     try {
       const response = await api.applyDialogueProposal(visibleArticle.id, proposal.id, { userId, sessionId });
       applyDialogueResponse(response);
+      setProposalDirty(false);
       await refreshDialogueProposals(visibleArticle.id);
       if (!response.messages) await refreshDialogueMessages(visibleArticle.id);
     } catch (err) {
@@ -479,6 +486,7 @@ export function App() {
     try {
       await api.dismissDialogueProposal(visibleArticle.id, proposal.id, { userId });
       if (dialogueResponse?.proposal?.id === proposal.id) setDialogueResponse(undefined);
+      setProposalDirty(false);
       await refreshDialogueProposals(visibleArticle.id);
       await refreshDialogueMessages(visibleArticle.id);
     } catch (err) {
@@ -619,7 +627,7 @@ export function App() {
             {taskCardDialogTarget === 'new' ? <NewTaskGuidance writingStandard={writingStandard} selectedLanguageEra={selectedLanguageEra} onSelectLanguageEra={setSelectedLanguageEra} onClearLanguageEra={() => setSelectedLanguageEra('')} domainProfiles={domainProfiles} recommendations={domainProfileRecommendations} selectedProfileId={selectedProfileId} selections={profileSelections} onSelectProfile={selectProfile} onClearProfile={() => selectProfile('')} onUpdateGroup={updateProfileGroup} /> : null}
             <DialogContextView context={dialogContext} />
             {taskCardDialogTarget === 'current' ? <DialogueHistoryView messages={dialogueMessages} /> : null}
-            <DialogueResultView response={dialogueResponse} proposal={activeDialogueProposal} busy={busy} onApply={applyDialogueProposal} onDismiss={dismissDialogueProposal} />
+            <DialogueResultView response={dialogueResponse} proposal={activeDialogueProposal} proposalDirty={proposalDirty} busy={busy} onApply={applyDialogueProposal} onDismiss={dismissDialogueProposal} onRefresh={() => sendDialogueMessage('按以上意见更新方案')} />
             <div className="task-dialog-input-row">
               <textarea value={activeTaskCardMessage} onChange={(event) => setActiveTaskCardMessage(event.target.value)} onKeyDown={submitTaskCardMessageWithKeyboard} placeholder={dialogPlaceholder(dialogContext)} />
               <button className={busy ? 'send-button processing' : 'send-button'} aria-label={busy ? '处理中' : '发送'} aria-busy={busy ? true : undefined} title={busy ? '处理中' : '发送'} disabled={busy || !canSubmitTaskCardMessage} onClick={() => void submitTaskCardMessage()}>↑</button>
@@ -700,7 +708,7 @@ function DialogueHistoryView(props: { messages: DialogueMessage[] }) {
   );
 }
 
-function DialogueResultView(props: { response?: DialogueResponse; proposal?: RevisionProposal; busy: boolean; onApply: (proposal: RevisionProposal) => void | Promise<void>; onDismiss: (proposal: RevisionProposal) => void | Promise<void> }) {
+function DialogueResultView(props: { response?: DialogueResponse; proposal?: RevisionProposal; proposalDirty: boolean; busy: boolean; onApply: (proposal: RevisionProposal) => void | Promise<void>; onDismiss: (proposal: RevisionProposal) => void | Promise<void>; onRefresh: () => void | Promise<void> }) {
   const proposal = props.proposal;
   if (!props.response && !proposal) return null;
   return (
@@ -708,8 +716,10 @@ function DialogueResultView(props: { response?: DialogueResponse; proposal?: Rev
       {props.response?.message && !proposal ? <p>{props.response.message}</p> : null}
       {proposal ? <div className="dialogue-proposal">
         <div className="dialogue-proposal-head"><strong>{proposal.summary}</strong><span>{revisionOperationSummary(proposal.operations)}</span></div>
+        {props.proposalDirty ? <div className="dialogue-proposal-note">已有新意见尚未合并进当前方案。</div> : null}
         {proposal.warnings.length ? <ul className="dialogue-warnings">{proposal.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
         <div className="dialogue-proposal-actions">
+          {props.proposalDirty ? <button className="secondary-button" disabled={props.busy} onClick={() => void props.onRefresh()}>更新方案</button> : null}
           <button disabled={props.busy} onClick={() => void props.onApply(proposal)}>应用修改</button>
           <button className="secondary-button" disabled={props.busy} onClick={() => void props.onDismiss(proposal)}>取消</button>
         </div>

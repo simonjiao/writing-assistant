@@ -58,7 +58,8 @@ export class DefaultContextBuilder implements ContextBuilder {
       session?.currentBlockId;
     const selectedBlock = article?.blocks.find((block) => block.id === blockId);
 
-    const queryParts = [
+    const skipKnowledge = objectInput.skipKnowledge === true;
+    const queryParts = skipKnowledge ? [] : [
       article?.taskCard?.topic,
       article?.taskCard?.writingGoal,
       selectedBlock?.text,

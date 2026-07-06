@@ -410,6 +410,15 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   color: #7c3f00;
   font-size: 12px;
 }
+.dialogue-proposal-note {
+  padding: 7px 8px;
+  border: 1px solid #d8dde6;
+  border-radius: 8px;
+  background: #fffdf8;
+  color: #6f665b;
+  font-size: 12px;
+  line-height: 1.4;
+}
 .dialogue-proposal-actions {
   display: flex;
   gap: 8px;

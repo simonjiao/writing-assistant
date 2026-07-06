@@ -71,6 +71,9 @@ export class MockLLMProvider implements LLMProvider {
       const instruction = String(payload.instruction ?? '修订任务卡');
       return { content: JSON.stringify(mockTaskCardRevision(currentTaskCard, instruction)), raw: { provider: 'mock' } };
     }
+    if (request.jsonMode && system.includes('轻量路由器')) {
+      return { content: JSON.stringify(mockDialogueRoute(payload)), raw: { provider: 'mock' } };
+    }
     if (request.jsonMode && system.includes('对话协调器')) {
       return { content: JSON.stringify(mockDialogueCoordination(payload)), raw: { provider: 'mock' } };
     }
@@ -182,6 +185,16 @@ function mockOutline(topic: string, themes: string[]) {
   };
 }
 
+function mockDialogueRoute(payload: Record<string, any>) {
+  const message = String(payload.message ?? '');
+  const hasPendingProposal = Boolean(payload.hasPendingProposal);
+  if (/(查|检索|搜索|资料|原文|出处|引用|脂批|批语|第[一二三四五六七八九十百0-9]+回|证据|知识库)/.test(message)) return { route: 'needs-rag' };
+  if (/[?？]|为什么|为何|解释|说明|怎么|是否|吗|是什么|什么意思/.test(message)) return { route: 'answer' };
+  if (/(改|修改|调整|删|删除|加|添加|新增|重写|扩写|压缩|不要|避免|改成|改为|换成|补充|合并|拆分)/.test(message)) return { route: 'propose' };
+  if (hasPendingProposal) return { route: 'discuss' };
+  return { route: 'clarify' };
+}
+
 function mockDialogueCoordination(payload: Record<string, any>) {
   const message = String(payload.message ?? '');
   const context = payload.context as { kind?: string; outlineItemId?: string; blockId?: string; title?: string } | undefined;
@@ -196,11 +209,18 @@ function mockDialogueCoordination(payload: Record<string, any>) {
   }
   if (pendingProposal?.operations?.length && !/(确认|应用|执行|就这样|可以|同意|按这个改|直接改|改吧|ok|OK)/i.test(message)) {
     const operation = pendingProposal.operations[0];
+    const baseInstruction = String(operation.instruction ?? '');
+    const discussion = Array.isArray(payload.conversation)
+      ? payload.conversation
+          .filter((item: Record<string, unknown>) => item.role === 'user' && typeof item.content === 'string')
+          .map((item: Record<string, unknown>) => String(item.content))
+          .filter((content: string) => content !== baseInstruction && !/(更新方案|按以上意见|按这些资料|重新给.*方案)/.test(content))
+      : [];
     return {
       mode: 'proposal',
       message: '我会把这轮意见合并进当前修改方案，确认后再写入。',
       summary: '更新当前修改方案',
-      operations: [{ ...operation, instruction: `${String(operation.instruction ?? '')}\n${message}`.trim() }],
+      operations: [{ ...operation, instruction: [baseInstruction, ...discussion].filter(Boolean).join('\n').trim() }],
       warnings: [],
     };
   }

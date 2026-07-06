@@ -1,5 +1,6 @@
 export * from './task-card-builder';
 export * from './dialogue-coordinator';
+export * from './dialogue-router';
 export * from './task-card-reviser';
 export * from './outline-planner';
 export * from './outline-item-reviser';

@@ -3,6 +3,7 @@ import { ArticleBlock, DialogueContextKind, OutlineItem, RevisionOperation, safe
 export interface DialogueCoordinatorInput {
   articleId: string;
   message: string;
+  skipKnowledge?: boolean;
   conversation?: Array<{ role: 'user' | 'assistant'; content: string; proposalId?: string; createdAt: string }>;
   pendingProposal?: { id: string; summary: string; message: string; operations: RevisionOperation[]; warnings: string[] };
   context: {
@@ -51,10 +52,11 @@ export class DialogueCoordinatorSkill implements Skill<DialogueCoordinatorInput,
           content: [
             '你是写作助手的对话协调器。',
             '你只判断用户这句话如何处理，不修改文章、不生成正文、不返回 Markdown，只返回 json object。',
-            '如果用户是在提问、要求解释、询问原因、问“为何/为什么/怎么/是否/吗”，mode 必须是 answer，operations 必须是 []。',
+            '上游已经完成轻量路由；你通常只会在用户明确要求生成或更新修改方案时被调用。',
+            '如果输入仍然明显只是提问或说明，mode 是 answer，operations 必须是 []。',
             '如果用户表达了修改意图但目标不明确，mode 是 clarify，operations 必须是 []。',
             '如果用户明确要求修改、调整、添加、删除、重写、压缩、扩写，mode 是 proposal，返回待确认 operations；此时也不直接写入。',
-            '如果 pendingProposal 存在，用户后续的补充、否定、调整、收窄、放宽，默认都是围绕该方案继续讨论；需要输出一个吸收前文的新 proposal，而不是要求用户重说。',
+            '如果 pendingProposal 存在，说明用户明确要求刷新当前方案；需要输出一个吸收 conversation 和 pendingProposal 的新 proposal。',
             'operation 必须服从当前 context：task-card 使用 revise-task-card；outline 使用 revise-outline；outline-item 使用 revise-outline-item；block 使用 patch-block。',
             '不要把解释类输入包装成修改方案。用户明确确认前，任何 proposal 都只是计划。',
           ].join('\n'),
