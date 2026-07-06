@@ -71,6 +71,9 @@ export class MockLLMProvider implements LLMProvider {
       const instruction = String(payload.instruction ?? '修订任务卡');
       return { content: JSON.stringify(mockTaskCardRevision(currentTaskCard, instruction)), raw: { provider: 'mock' } };
     }
+    if (request.jsonMode && system.includes('对话协调器')) {
+      return { content: JSON.stringify(mockDialogueCoordination(payload)), raw: { provider: 'mock' } };
+    }
     if (request.jsonMode && system.includes('大纲规划器')) {
       const taskCard = payload.taskCard as { topic?: string; scope?: { themes?: string[] } } | undefined;
       return { content: JSON.stringify(mockOutline(taskCard?.topic ?? '测试主题', taskCard?.scope?.themes ?? [])), raw: { provider: 'mock' } };
@@ -79,6 +82,11 @@ export class MockLLMProvider implements LLMProvider {
       const currentOutlineItem = payload.currentOutlineItem as { id?: string; title?: string; goal?: string; order?: number; expectedBlocks?: number; sourceHints?: string[]; themeTags?: string[]; status?: string } | undefined;
       const instruction = String(payload.instruction ?? '修订大纲项');
       return { content: JSON.stringify(mockOutlineItemRevision(currentOutlineItem, instruction)), raw: { provider: 'mock' } };
+    }
+    if (request.jsonMode && system.includes('大纲整体修订器')) {
+      const currentOutline = payload.currentOutline as Array<{ id?: string; title?: string; goal?: string; order?: number; expectedBlocks?: number; sourceHints?: string[]; themeTags?: string[]; status?: string }> | undefined;
+      const instruction = String(payload.instruction ?? '修订大纲');
+      return { content: JSON.stringify(mockOutlineRevision(currentOutline, instruction)), raw: { provider: 'mock' } };
     }
     if (request.jsonMode && system.includes('章节写作者')) {
       const section = payload.section as { id?: string; title?: string; goal?: string; themeTags?: string[] } | undefined;
@@ -174,6 +182,33 @@ function mockOutline(topic: string, themes: string[]) {
   };
 }
 
+function mockDialogueCoordination(payload: Record<string, any>) {
+  const message = String(payload.message ?? '');
+  const context = payload.context as { kind?: string; outlineItemId?: string; blockId?: string; title?: string } | undefined;
+  if (/[?？]|为什么|为何|解释|说明|怎么|是否|吗/.test(message)) {
+    return {
+      mode: 'answer',
+      message: `这是关于「${context?.title ?? '当前位置'}」的只读说明；如果需要改动，请明确说“修改为”或点击应用修改。`,
+      operations: [],
+      warnings: [],
+    };
+  }
+  if (!/(改|修改|调整|删|删除|加|添加|新增|重写|扩写|压缩|不要|避免|改成|改为)/.test(message)) {
+    return { mode: 'clarify', message: '我还不能判断要改哪里。请说明是要修改任务卡、大纲、某一节，还是正文段落。', operations: [], warnings: [] };
+  }
+  const instruction = message;
+  if (context?.kind === 'outline-item') {
+    return { mode: 'proposal', message: '我会先准备当前大纲项的修改方案，确认后再写入。', summary: '修订当前大纲项', operations: [{ type: 'revise-outline-item', outlineItemId: context.outlineItemId, instruction }], warnings: [] };
+  }
+  if (context?.kind === 'outline') {
+    return { mode: 'proposal', message: '我会先准备整篇大纲的调整方案，确认后再写入。', summary: '修订整篇大纲', operations: [{ type: 'revise-outline', instruction }], warnings: [] };
+  }
+  if (context?.kind === 'block') {
+    return { mode: 'proposal', message: '我会先准备当前段落的局部修改，确认后生成修改预览。', summary: '修订当前段落', operations: [{ type: 'patch-block', blockId: context.blockId, instruction }], warnings: [] };
+  }
+  return { mode: 'proposal', message: '我会先准备任务卡修改方案，确认后再写入。', summary: '修订任务卡', operations: [{ type: 'revise-task-card', instruction }], warnings: [] };
+}
+
 function mockOutlineItemRevision(currentOutlineItem: { id?: string; title?: string; goal?: string; order?: number; expectedBlocks?: number; sourceHints?: string[]; themeTags?: string[]; status?: string } | undefined, instruction: string) {
   const base = currentOutlineItem ?? { id: 'sec_mock', title: '测试大纲', goal: '测试大纲目标。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'draft' };
   const titleMatch = instruction.match(/(?:标题|题目)(?:改成|改为|调整为|设为|是)[:：\s]*([^，,。.!！?？]+)/);
@@ -193,6 +228,25 @@ function mockOutlineItemRevision(currentOutlineItem: { id?: string; title?: stri
     },
     summary: 'Mock outline item revision generated.',
     changedFields,
+  };
+}
+
+function mockOutlineRevision(currentOutline: Array<{ id?: string; title?: string; goal?: string; order?: number; expectedBlocks?: number; sourceHints?: string[]; themeTags?: string[]; status?: string }> | undefined, instruction: string) {
+  const outline = currentOutline?.length ? currentOutline : mockOutline('测试主题', []).outline;
+  const titleMatch = instruction.match(/(?:第一节|第一项|开头|第1节).{0,8}(?:标题|题目)?(?:改成|改为|调整为|设为)[:：\s]*([^，,。.!！?？]+)/);
+  return {
+    outline: outline.map((item, index) => ({
+      ...item,
+      title: index === 0 && titleMatch ? titleMatch[1].trim() : (item.title ?? `大纲 ${index + 1}`),
+      goal: index === 0 && (instruction.includes('不要') || instruction.includes('调整')) ? `${item.goal ?? ''} ${instruction}`.trim() : (item.goal ?? '大纲目标。'),
+      expectedBlocks: item.expectedBlocks ?? 1,
+      sourceHints: item.sourceHints ?? [],
+      themeTags: item.themeTags ?? [],
+      status: 'status' in item ? item.status ?? 'draft' : 'draft',
+    })),
+    summary: 'Mock outline revision generated.',
+    changedFields: ['outline'],
+    warnings: [],
   };
 }
 

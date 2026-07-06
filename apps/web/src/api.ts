@@ -1,4 +1,4 @@
-import { AgentEvent, ArticleArtifact, ArticleSummary, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, OutlineItem, RunResponse, WritingStandardSelection, WritingStandardSummary, WritingWorkspace } from './types';
+import { AgentEvent, ArticleArtifact, ArticleSummary, DialogueContextKind, DialogueResponse, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, OutlineItem, RevisionProposal, RunResponse, WritingStandardSelection, WritingStandardSummary, WritingWorkspace } from './types';
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8787';
 export interface TaskCardRevisionResponse { article: ArticleArtifact; summary: string; changedFields: string[] }
 export interface OutlineItemRevisionResponse { article: ArticleArtifact; outlineItem: OutlineItem; summary: string; changedFields: string[] }
@@ -22,6 +22,10 @@ export const api = {
   resume(runId: string, input: unknown) { return request<RunResponse>(`/api/workflows/${runId}/resume`, { method: 'POST', body: JSON.stringify(input) }); },
   getRun(runId: string) { return request<RunResponse>(`/api/runs/${runId}`); },
   getArticle(articleId: string, userId?: string) { const query = userId ? `?userId=${encodeURIComponent(userId)}` : ''; return request<ArticleArtifact>(`/api/articles/${articleId}${query}`); },
+  listDialogueProposals(articleId: string, userId: string) { return request<RevisionProposal[]>(`/api/articles/${articleId}/dialogue/proposals?userId=${encodeURIComponent(userId)}`); },
+  sendDialogue(articleId: string, input: { message: string; userId?: string; sessionId?: string; pendingProposalId?: string; context: { kind: DialogueContextKind; outlineItemId?: string; blockId?: string } }) { return request<DialogueResponse>(`/api/articles/${articleId}/dialogue`, { method: 'POST', body: JSON.stringify(input) }); },
+  applyDialogueProposal(articleId: string, proposalId: string, input: { userId?: string; sessionId?: string }) { return request<DialogueResponse>(`/api/articles/${articleId}/dialogue/${proposalId}/apply`, { method: 'POST', body: JSON.stringify(input) }); },
+  dismissDialogueProposal(articleId: string, proposalId: string, input: { userId?: string }) { return request<RevisionProposal>(`/api/articles/${articleId}/dialogue/${proposalId}/dismiss`, { method: 'POST', body: JSON.stringify(input) }); },
   reviseTaskCard(articleId: string, input: { instruction: string; userId?: string; sessionId?: string }) { return request<TaskCardRevisionResponse>(`/api/articles/${articleId}/task-card/revise`, { method: 'POST', body: JSON.stringify(input) }); },
   confirmTaskCard(articleId: string, input: { userId?: string; sessionId?: string }) { return request<ArticleArtifact>(`/api/articles/${articleId}/task-card/confirm`, { method: 'POST', body: JSON.stringify(input) }); },
   updateOutlineItem(articleId: string, sectionId: string, input: { title: string; goal: string; userId?: string }) { return request<ArticleArtifact>(`/api/articles/${articleId}/outline/${sectionId}`, { method: 'PATCH', body: JSON.stringify(input) }); },

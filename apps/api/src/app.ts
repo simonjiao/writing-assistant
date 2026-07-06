@@ -1,8 +1,8 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply } from 'fastify';
-import { AgentEvent, ArticleArtifact, EventSubscriptionFilter, newId, nowIso, Unsubscribe, WritingTaskCard, WritingWorkspace } from '@wa/core';
-import type { OutlineItemReviserOutput, TaskCardReviserOutput } from '@wa/skills';
+import { AgentEvent, ArticleArtifact, ArticleBlock, DialogueContextKind, EventSubscriptionFilter, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WritingTaskCard, WritingWorkspace } from '@wa/core';
+import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, OutlineItemReviserOutput, OutlineReviserOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
 import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfileSummaries, recommendDomainProfiles, resolveDomainProfileSelection } from './domainProfiles';
@@ -180,6 +180,72 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const updatedArticle = await container.stores.artifactStore.getArticle(updated.id);
     return { article: updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle, outlineItem: result.outlineItem, summary: result.summary, changedFields: result.changedFields };
   });
+  app.post('/api/articles/:articleId/dialogue', async (request, reply) => {
+    const articleId = ((request.params as { articleId?: string }).articleId ?? '').trim();
+    if (!articleId) return reply.code(400).send({ error: 'articleId is required.' });
+    const body = (request.body ?? {}) as { message?: string; userId?: string; sessionId?: string; context?: DialogueContextRequest; pendingProposalId?: string };
+    const message = body.message?.trim();
+    if (!message) return reply.code(400).send({ error: 'Dialogue message is required.' });
+    const userId = readUserId(body.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const access = await requireArticleAccess(container, userId, articleId);
+    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
+    if (body.pendingProposalId && isApplyConfirmation(message)) return applyRevisionProposal(container, body.pendingProposalId, userId, body.sessionId);
+    const context = resolveDialogueContext(access.article, body.context);
+    if (!context.ok) return reply.code(context.statusCode).send({ error: context.error });
+    const result = await container.runtime.invokeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
+      'dialogue-coordinator',
+      {
+        articleId: access.article.id,
+        message,
+        context: context.value.context,
+        taskCard: access.article.taskCard,
+        outline: access.article.outline,
+        selectedOutlineItem: context.value.selectedOutlineItem,
+        selectedBlock: context.value.selectedBlock,
+      },
+      { userId, sessionId: body.sessionId, articleId: access.article.id },
+    );
+    if (result.mode !== 'proposal') return { mode: result.mode, message: result.message };
+    const proposal = await container.stores.revisionProposalStore.createProposal({
+      articleId: access.article.id,
+      userId,
+      contextKind: context.value.context.kind,
+      summary: result.summary ?? result.message,
+      message: result.message,
+      operations: result.operations,
+      warnings: result.warnings,
+    });
+    return { mode: 'proposal', message: result.message, proposal };
+  });
+  app.get('/api/articles/:articleId/dialogue/proposals', async (request, reply) => {
+    const { articleId } = request.params as { articleId: string };
+    const query = request.query as { userId?: string };
+    const userId = readUserId(query.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const access = await requireArticleAccess(container, userId, articleId);
+    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
+    return container.stores.revisionProposalStore.listPendingProposals(articleId, userId);
+  });
+  app.post('/api/articles/:articleId/dialogue/:proposalId/apply', async (request, reply) => {
+    const { articleId, proposalId } = request.params as { articleId: string; proposalId: string };
+    const body = (request.body ?? {}) as { userId?: string; sessionId?: string };
+    const userId = readUserId(body.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
+    if (!proposal || proposal.articleId !== articleId) return reply.code(404).send({ error: 'Revision proposal not found.' });
+    return applyRevisionProposal(container, proposal.id, userId, body.sessionId);
+  });
+  app.post('/api/articles/:articleId/dialogue/:proposalId/dismiss', async (request, reply) => {
+    const { articleId, proposalId } = request.params as { articleId: string; proposalId: string };
+    const body = (request.body ?? {}) as { userId?: string };
+    const userId = readUserId(body.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
+    if (!proposal || proposal.articleId !== articleId) return reply.code(404).send({ error: 'Revision proposal not found.' });
+    if (proposal.userId !== userId) return reply.code(403).send({ error: 'Revision proposal belongs to another user.' });
+    return container.stores.revisionProposalStore.updateProposal({ ...proposal, status: 'dismissed' });
+  });
   app.post('/api/articles/:articleId/outline/confirm', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
     const body = (request.body ?? {}) as { userId?: string; sessionId?: string };
@@ -230,6 +296,151 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.get('/api/events/stream', async (request, reply) => { const query = request.query as { runId?: string; userId?: string }; await openSseStream(container, reply, { runId: query.runId, userId: query.userId }); });
   app.get('/api/events/ws', { websocket: true }, (socket, request) => { const query = request.query as { runId?: string; userId?: string }; let unsubscribe: Unsubscribe | undefined; void Promise.resolve(container.eventBus.subscribe({ runId: query.runId, userId: query.userId }, (event) => socket.send(JSON.stringify({ type: 'event', event })))).then((value) => { unsubscribe = value; }); socket.send(JSON.stringify({ type: 'connected' })); socket.on('close', () => unsubscribe?.()); });
   return app;
+}
+
+type DialogueContextRequest = { kind?: string; outlineItemId?: string; blockId?: string };
+
+type ResolvedDialogueContext = {
+  context: DialogueCoordinatorInput['context'];
+  selectedOutlineItem?: OutlineItem;
+  selectedBlock?: ArticleBlock;
+};
+
+function resolveDialogueContext(article: ArticleArtifact, request?: DialogueContextRequest): { ok: true; value: ResolvedDialogueContext } | { ok: false; statusCode: number; error: string } {
+  const kind = normalizeDialogueKind(request?.kind);
+  if (kind === 'outline-item') {
+    const outlineItemId = request?.outlineItemId?.trim();
+    if (!outlineItemId) return { ok: false, statusCode: 400, error: 'outlineItemId is required for outline item dialogue.' };
+    const selectedOutlineItem = article.outline.find((item) => item.id === outlineItemId);
+    if (!selectedOutlineItem) return { ok: false, statusCode: 404, error: 'Outline section not found.' };
+    return {
+      ok: true,
+      value: {
+        context: { kind, title: selectedOutlineItem.title, detail: selectedOutlineItem.goal, outlineItemId },
+        selectedOutlineItem,
+      },
+    };
+  }
+  if (kind === 'block') {
+    const blockId = request?.blockId?.trim();
+    if (!blockId) return { ok: false, statusCode: 400, error: 'blockId is required for block dialogue.' };
+    const selectedBlock = article.blocks.find((block) => block.id === blockId);
+    if (!selectedBlock) return { ok: false, statusCode: 404, error: 'Article block not found.' };
+    return {
+      ok: true,
+      value: {
+        context: { kind, title: selectedBlock.title || selectedBlock.id, detail: selectedBlock.text.slice(0, 180), blockId },
+        selectedBlock,
+      },
+    };
+  }
+  if (kind === 'outline') {
+    return {
+      ok: true,
+      value: {
+        context: {
+          kind,
+          title: '大纲整体',
+          detail: article.outline.map((item) => `${item.order}. ${item.title}`).join('\n'),
+        },
+      },
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      context: {
+        kind: 'task-card',
+        title: article.taskCard?.topic ?? article.title,
+        detail: article.taskCard?.writingGoal,
+      },
+    },
+  };
+}
+
+function normalizeDialogueKind(value: string | undefined): DialogueContextKind {
+  if (value === 'outline' || value === 'outline-item' || value === 'block' || value === 'task-card') return value;
+  if (value === 'paragraph') return 'block';
+  return 'task-card';
+}
+
+function isApplyConfirmation(message: string): boolean {
+  return /^(确认|应用|执行|就这样|可以|同意|按这个改|直接改|改吧|ok|OK)$/i.test(message.trim());
+}
+
+async function applyRevisionProposal(container: AppContainer, proposalId: string, userId: string, sessionId?: string) {
+  const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
+  if (!proposal) throw new Error('Revision proposal not found.');
+  if (proposal.userId !== userId) throw new Error('Revision proposal belongs to another user.');
+  if (proposal.status !== 'pending') throw new Error(`Revision proposal is already ${proposal.status}.`);
+  const access = await requireArticleAccess(container, userId, proposal.articleId);
+  if (!access.ok) throw new Error(access.error);
+  let article = access.article;
+  let runPayload: Awaited<ReturnType<typeof enrichRun>> | undefined;
+  for (const operation of proposal.operations) {
+    const result = await applyRevisionOperation(container, article, operation, userId, sessionId);
+    if (result.runPayload) runPayload = result.runPayload;
+    article = result.article;
+  }
+  const applied = await container.stores.revisionProposalStore.updateProposal({ ...proposal, status: 'applied' });
+  const articlePayload = await container.stores.artifactStore.getArticle(article.id);
+  return {
+    mode: 'applied',
+    message: runPayload ? '已进入修改预览流程，确认后才会写入正文。' : '修改已应用。',
+    proposal: applied,
+    article: articlePayload ? withWritingStandardSummary(articlePayload) : articlePayload,
+    ...(runPayload ?? {}),
+  };
+}
+
+async function applyRevisionOperation(container: AppContainer, article: ArticleArtifact, operation: RevisionOperation, userId: string, sessionId?: string): Promise<{ article: ArticleArtifact; runPayload?: Awaited<ReturnType<typeof enrichRun>> }> {
+  if (operation.type === 'revise-task-card') {
+    if (!article.taskCard) throw new Error('Article has no task card to revise.');
+    const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; currentTaskCard: WritingTaskCard }, TaskCardReviserOutput>(
+      'task-card-reviser',
+      { articleId: article.id, instruction: operation.instruction, currentTaskCard: article.taskCard },
+      { userId, sessionId, articleId: article.id },
+    );
+    article.taskCard = result.taskCard;
+    article.title = result.taskCard.topic;
+    const updated = await container.stores.artifactStore.updateArticle(article);
+    await container.stores.artifactStore.commitVersion(article.id, `修订任务卡：${result.summary.slice(0, 80)}`, 'user');
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'task-card-revised', changedFields: result.changedFields, userId }, createdAt: nowIso() });
+    return { article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated };
+  }
+  if (operation.type === 'revise-outline-item') {
+    const existing = article.outline.find((item) => item.id === operation.outlineItemId);
+    if (!existing) throw new Error(`Outline section not found: ${operation.outlineItemId}`);
+    const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; currentOutlineItem: typeof existing; taskCard?: WritingTaskCard; articleOutline: typeof article.outline }, OutlineItemReviserOutput>(
+      'outline-item-reviser',
+      { articleId: article.id, instruction: operation.instruction, currentOutlineItem: existing, taskCard: article.taskCard, articleOutline: article.outline },
+      { userId, sessionId, articleId: article.id },
+    );
+    article.outline = article.outline.map((item) => item.id === operation.outlineItemId ? result.outlineItem : item);
+    const updated = await container.stores.artifactStore.updateArticle(article);
+    await container.stores.artifactStore.commitVersion(article.id, `修订大纲章节：${result.summary.slice(0, 80)}`, 'user');
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, sectionId: operation.outlineItemId, reason: 'outline-section-revised', changedFields: result.changedFields, userId }, createdAt: nowIso() });
+    return { article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated };
+  }
+  if (operation.type === 'revise-outline') {
+    const writtenSectionIds = [...new Set(article.blocks.map((block) => block.sectionId).filter((id): id is string => Boolean(id)))];
+    const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; taskCard?: WritingTaskCard; currentOutline: OutlineItem[]; writtenSectionIds: string[] }, OutlineReviserOutput>(
+      'outline-reviser',
+      { articleId: article.id, instruction: operation.instruction, taskCard: article.taskCard, currentOutline: article.outline, writtenSectionIds },
+      { userId, sessionId, articleId: article.id },
+    );
+    const nextIds = new Set(result.outline.map((item) => item.id));
+    const removedWrittenTitles = article.outline.filter((item) => !nextIds.has(item.id) && writtenSectionIds.includes(item.id)).map((item) => item.title);
+    if (removedWrittenTitles.length) throw new Error(`Cannot remove outline sections with generated text: ${removedWrittenTitles.join(', ')}`);
+    article.outline = result.outline;
+    const updated = await container.stores.artifactStore.updateArticle(article);
+    await container.stores.artifactStore.commitVersion(article.id, `修订大纲：${result.summary.slice(0, 80)}`, 'user');
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'outline-revised', changedFields: result.changedFields, warnings: result.warnings, userId }, createdAt: nowIso() });
+    return { article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated };
+  }
+  const run = await container.engine.startWorkflow('patch-workflow', { articleId: article.id, blockId: operation.blockId, instruction: operation.instruction }, { userId, sessionId, articleId: article.id, workspaceId: article.workspaceId });
+  if (sessionId) await container.stores.sessionStore.updateSession(sessionId, { currentArticleId: article.id, currentWorkspaceId: article.workspaceId, currentBlockId: operation.blockId });
+  return { article, runPayload: await enrichRun(container, run.id) };
 }
 
 function defaultWorkspaceId(userId: string): string {

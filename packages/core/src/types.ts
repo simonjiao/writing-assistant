@@ -133,6 +133,28 @@ export interface TextPatch {
   createdAt: string;
 }
 
+export type DialogueContextKind = 'task-card' | 'outline' | 'outline-item' | 'block';
+
+export type RevisionOperation =
+  | { type: 'revise-task-card'; instruction: string }
+  | { type: 'revise-outline'; instruction: string }
+  | { type: 'revise-outline-item'; outlineItemId: string; instruction: string }
+  | { type: 'patch-block'; blockId: string; instruction: string };
+
+export interface RevisionProposal {
+  id: string;
+  articleId: string;
+  userId: string;
+  contextKind: DialogueContextKind;
+  summary: string;
+  message: string;
+  operations: RevisionOperation[];
+  warnings: string[];
+  status: 'pending' | 'applied' | 'dismissed';
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Session {
   id: string;
   userId: string;

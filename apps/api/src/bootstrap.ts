@@ -15,6 +15,7 @@ import {
   nowIso,
   OpenAICompatibleProvider,
   PublishingEventTraceStore,
+  RevisionProposalStore,
   SessionStore,
   SkillRegistry,
   StateStore,
@@ -28,7 +29,7 @@ import {
 } from '@wa/core';
 import { registerDefaultSkills } from '@wa/skills';
 import { AppConfig } from './config';
-import { SqliteArtifactStore, SqliteEventTraceStore, SqliteKnowledgeStore, SqliteMemoryStore, SqliteSessionStore, SqliteStateStore, SqliteWorkspaceStore } from './stores/sqliteStores';
+import { SqliteArtifactStore, SqliteEventTraceStore, SqliteKnowledgeStore, SqliteMemoryStore, SqliteRevisionProposalStore, SqliteSessionStore, SqliteStateStore, SqliteWorkspaceStore } from './stores/sqliteStores';
 import { HttpRagKnowledgeStore } from './stores/httpRagKnowledgeStore';
 import { TonglingyuRetrieverKnowledgeStore } from './stores/tonglingyuRetrieverKnowledgeStore';
 import { RedisWorkflowQueue } from './queue/redisWorkflowQueue';
@@ -50,6 +51,7 @@ interface StoreBundle {
   memoryStore: MemoryStore;
   workspaceStore: WorkspaceStore;
   artifactStore: ArtifactStore;
+  revisionProposalStore: RevisionProposalStore;
   localKnowledgeStore: KnowledgeStore;
   eventTraceStore: EventTraceStore;
   close?: () => Promise<void>;
@@ -60,7 +62,7 @@ export function createContainer(config: AppConfig): AppContainer {
   const eventBus: EventBus = new InMemoryEventBus();
   const eventTraceStore = new PublishingEventTraceStore(base.eventTraceStore, eventBus) as EventTraceStore;
   const knowledgeStore = createKnowledgeStore(config, base.localKnowledgeStore, eventTraceStore);
-  const stores: ExternalStores = { stateStore: base.stateStore, sessionStore: base.sessionStore, memoryStore: base.memoryStore, workspaceStore: base.workspaceStore, artifactStore: base.artifactStore, knowledgeStore, eventTraceStore };
+  const stores: ExternalStores = { stateStore: base.stateStore, sessionStore: base.sessionStore, memoryStore: base.memoryStore, workspaceStore: base.workspaceStore, artifactStore: base.artifactStore, revisionProposalStore: base.revisionProposalStore, knowledgeStore, eventTraceStore };
 
   const llm = config.llmProvider === 'openai-compatible' ? new OpenAICompatibleProvider({ baseURL: config.openaiBaseURL, apiKey: config.openaiApiKey, model: config.openaiModel }) : new MockLLMProvider();
   const skills = registerDefaultSkills(new SkillRegistry());
@@ -80,6 +82,7 @@ function createStores(config: AppConfig): StoreBundle {
   const memoryStore = new SqliteMemoryStore(config.dataDir);
   const workspaceStore = new SqliteWorkspaceStore(config.dataDir);
   const artifactStore = new SqliteArtifactStore(config.dataDir);
+  const revisionProposalStore = new SqliteRevisionProposalStore(config.dataDir);
   const localKnowledgeStore = new SqliteKnowledgeStore(config.dataDir);
   const eventTraceStore = new SqliteEventTraceStore(config.dataDir);
   return {
@@ -88,6 +91,7 @@ function createStores(config: AppConfig): StoreBundle {
     memoryStore,
     workspaceStore,
     artifactStore,
+    revisionProposalStore,
     localKnowledgeStore,
     eventTraceStore,
     async close() {
@@ -96,6 +100,7 @@ function createStores(config: AppConfig): StoreBundle {
       memoryStore.close();
       workspaceStore.close();
       artifactStore.close();
+      revisionProposalStore.close();
       localKnowledgeStore.close();
       eventTraceStore.close();
     },

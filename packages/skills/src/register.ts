@@ -1,5 +1,7 @@
 import { SkillRegistry } from '@wa/core';
+import { DialogueCoordinatorSkill } from './dialogue-coordinator';
 import { OutlinePlannerSkill } from './outline-planner';
+import { OutlineReviserSkill } from './outline-reviser';
 import { OutlineItemReviserSkill } from './outline-item-reviser';
 import { PatchEditorSkill } from './patch-editor';
 import { QualityEvaluatorSkill } from './quality-evaluator';
@@ -9,9 +11,11 @@ import { TaskCardReviserSkill } from './task-card-reviser';
 
 export function registerDefaultSkills(registry: SkillRegistry): SkillRegistry {
   registry.register(new TaskCardBuilderSkill());
+  registry.register(new DialogueCoordinatorSkill());
   registry.register(new TaskCardReviserSkill());
   registry.register(new OutlinePlannerSkill());
   registry.register(new OutlineItemReviserSkill());
+  registry.register(new OutlineReviserSkill());
   registry.register(new SectionWriterSkill());
   registry.register(new PatchEditorSkill());
   registry.register(new QualityEvaluatorSkill());

@@ -451,6 +451,101 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('answers dialogue questions without mutating article artifacts', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-dialogue-answer',
+      topic: '对话解释测试',
+      writingGoal: '测试解释不落库。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: [], themes: ['对话解释'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-answer-user', name: '对话解释工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-answer-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    article.outline = [{ id: 'sec-dialogue-answer', title: '解释项', goal: '解释项目标。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }];
+    await container.stores.artifactStore.updateArticle(article);
+    const before = await container.stores.artifactStore.getArticle(article.id);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-answer-user', message: '为什么这里要这样写？', context: { kind: 'outline-item', outlineItemId: 'sec-dialogue-answer' } },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().mode).toBe('answer');
+    expect(response.json().proposal).toBeUndefined();
+    const after = await container.stores.artifactStore.getArticle(article.id);
+    expect(after?.outline[0].title).toBe(before?.outline[0].title);
+    expect(after?.versions).toHaveLength(before?.versions.length ?? 0);
+    expect(await container.stores.revisionProposalStore.listPendingProposals(article.id, 'dialogue-answer-user')).toHaveLength(0);
+    await app.close();
+  });
+
+  it('persists dialogue proposals and applies them only after confirmation', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-dialogue-proposal',
+      topic: '对话方案测试',
+      writingGoal: '测试方案确认后写入。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: [], themes: ['对话方案'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-proposal-user', name: '对话方案工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-proposal-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    article.outline = [{ id: 'sec-dialogue-proposal', title: '旧标题', goal: '旧目标。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }];
+    await container.stores.artifactStore.updateArticle(article);
+
+    const proposalResponse = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-proposal-user', message: '标题改成新标题。', context: { kind: 'outline-item', outlineItemId: 'sec-dialogue-proposal' } },
+    });
+
+    expect(proposalResponse.statusCode).toBe(200);
+    const proposalBody = proposalResponse.json();
+    expect(proposalBody.mode).toBe('proposal');
+    expect(proposalBody.proposal.status).toBe('pending');
+    expect((await container.stores.artifactStore.getArticle(article.id))?.outline[0].title).toBe('旧标题');
+    const pendingResponse = await app.inject({ method: 'GET', url: `/api/articles/${article.id}/dialogue/proposals?userId=dialogue-proposal-user` });
+    expect(pendingResponse.json()).toHaveLength(1);
+
+    const applyResponse = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue/${proposalBody.proposal.id}/apply`,
+      payload: { userId: 'dialogue-proposal-user' },
+    });
+
+    expect(applyResponse.statusCode).toBe(200);
+    const applyBody = applyResponse.json();
+    expect(applyBody.mode).toBe('applied');
+    expect(applyBody.proposal.status).toBe('applied');
+    expect(applyBody.article.outline[0].title).toBe('新标题');
+    expect(applyBody.article.versions[applyBody.article.versions.length - 1].reason).toContain('修订大纲章节');
+    expect(await container.stores.revisionProposalStore.listPendingProposals(article.id, 'dialogue-proposal-user')).toHaveLength(0);
+    await app.close();
+  });
+
   it('records section revisions with readable section titles', async () => {
     const config = testConfig();
     const container = createContainer(config);

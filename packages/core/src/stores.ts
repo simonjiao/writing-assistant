@@ -3,6 +3,7 @@ import {
   ArticleArtifact,
   ArticleVersion,
   KnowledgeItem,
+  RevisionProposal,
   Session,
   TextPatch,
   UserWritingProfile,
@@ -38,6 +39,13 @@ export interface ArtifactStore {
   applyPatch(patch: TextPatch): Promise<ArticleArtifact>;
 }
 
+export interface RevisionProposalStore {
+  createProposal(input: Omit<RevisionProposal, 'id' | 'status' | 'createdAt' | 'updatedAt'>): Promise<RevisionProposal>;
+  getProposal(proposalId: string): Promise<RevisionProposal | undefined>;
+  listPendingProposals(articleId: string, userId: string): Promise<RevisionProposal[]>;
+  updateProposal(proposal: RevisionProposal): Promise<RevisionProposal>;
+}
+
 export interface WorkspaceStore {
   createWorkspace(input: { id?: string; userId: string; name: string; isDefault?: boolean; memberUserIds?: string[] }): Promise<WritingWorkspace>;
   getWorkspace(workspaceId: string): Promise<WritingWorkspace | undefined>;
@@ -61,6 +69,7 @@ export interface ExternalStores {
   memoryStore: MemoryStore;
   workspaceStore: WorkspaceStore;
   artifactStore: ArtifactStore;
+  revisionProposalStore: RevisionProposalStore;
   knowledgeStore: KnowledgeStore;
   eventTraceStore: EventTraceStore;
 }

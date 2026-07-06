@@ -4,6 +4,14 @@ export interface OutlineItem { id: string; title: string; goal: string; order: n
 export interface ArticleBlock { id: string; type: string; sectionId?: string; title?: string; text: string; sourceRefs: string[]; themeTags: string[]; status: string }
 export interface ArticleArtifact { id: string; userId: string; workspaceId: string; title: string; taskCard?: WritingTaskCard; outline: OutlineItem[]; blocks: ArticleBlock[]; versions: Array<{ id: string; reason: string; author: string; createdAt: string }> }
 export interface ArticleSummary { id: string; workspaceId: string; title: string; taskStatus?: 'draft' | 'confirmed'; outlineCount: number; blockCount: number; updatedAt: string; deletedAt?: string }
+export type DialogueContextKind = 'task-card' | 'outline' | 'outline-item' | 'block';
+export type RevisionOperation =
+  | { type: 'revise-task-card'; instruction: string }
+  | { type: 'revise-outline'; instruction: string }
+  | { type: 'revise-outline-item'; outlineItemId: string; instruction: string }
+  | { type: 'patch-block'; blockId: string; instruction: string };
+export interface RevisionProposal { id: string; articleId: string; userId: string; contextKind: DialogueContextKind; summary: string; message: string; operations: RevisionOperation[]; warnings: string[]; status: 'pending' | 'applied' | 'dismissed'; createdAt: string; updatedAt: string }
+export interface DialogueResponse { mode: 'answer' | 'clarify' | 'proposal' | 'applied'; message: string; proposal?: RevisionProposal; article?: ArticleArtifact; run?: WorkflowRun; events?: AgentEvent[] }
 export interface WritingWorkspace { id: string; userId: string; memberUserIds: string[]; name: string; isDefault: boolean; createdAt: string; updatedAt: string; deletedAt?: string }
 export interface DomainProfileOption { id: string; label: string; description?: string; defaultSelected?: boolean }
 export interface DomainProfileGroup { id: string; label: string; type: 'single' | 'multi'; options: DomainProfileOption[] }

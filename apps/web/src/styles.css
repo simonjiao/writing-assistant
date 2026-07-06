@@ -334,6 +334,56 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .dialog-context.context-outline {
   border-color: #d8c8aa;
 }
+.dialog-context.context-outline-item {
+  border-color: #d8c8aa;
+}
+.dialogue-result {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #d8dde6;
+  border-radius: 10px;
+  background: #fffdf8;
+}
+.dialogue-result p {
+  margin: 0;
+  color: #2f3742;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.dialogue-result.proposal {
+  border-color: #c8d3e2;
+  background: #f8fbff;
+}
+.dialogue-proposal {
+  display: grid;
+  gap: 8px;
+}
+.dialogue-proposal-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.dialogue-proposal-head strong {
+  color: #18202a;
+  font-size: 14px;
+}
+.dialogue-proposal-head span {
+  color: #6f665b;
+  font-size: 12px;
+}
+.dialogue-warnings {
+  margin: 0;
+  padding-left: 18px;
+  color: #7c3f00;
+  font-size: 12px;
+}
+.dialogue-proposal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
 .task-dialog-input-row {
   display: grid;
   grid-template-columns: 1fr 42px;
@@ -524,6 +574,21 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .profile-options label { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
 .profile-options input { width: auto; }
 .outline { margin-top: 18px; }
+.outline > h3 {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  margin: 0 0 10px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.outline > h3:hover,
+.outline.selected > h3,
+.outline > h3:focus-visible {
+  background: #fffdf8;
+  outline: 1px solid #d8c8aa;
+}
 .outline-item {
   display: grid;
   gap: 0;

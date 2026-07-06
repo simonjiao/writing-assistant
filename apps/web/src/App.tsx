@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
-import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RunResponse, TaskCardFollowUpPrompt, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DialogueContextKind, DialogueResponse, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RevisionOperation, RevisionProposal, RunResponse, TaskCardFollowUpPrompt, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
 
 const userId = 'demo-user';
 const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']);
@@ -10,7 +10,7 @@ const navigationCollapsedStorageKey = 'writing-assistant.navigation-collapsed';
 const supportColumnCollapsedStorageKey = 'writing-assistant.support-column-collapsed';
 type SectionGenerationState = { sectionId: string; runId?: string; status: WorkflowRun['status'] | 'starting'; error?: string };
 type TaskCardTarget = 'current' | 'new';
-type DialogContext = { kind: 'new-task' | 'task-card' | 'outline' | 'paragraph'; label: string; title: string; detail: string; contextText: string };
+type DialogContext = { kind: 'new-task' | 'task-card' | 'outline' | 'outline-item' | 'paragraph'; label: string; title: string; detail: string; contextText: string; outlineItemId?: string; blockId?: string };
 
 export function App() {
   const [sessionId, setSessionId] = useState<string>();
@@ -42,8 +42,11 @@ export function App() {
   const [progressVisible, setProgressVisible] = useState(false);
   const [editingOutline, setEditingOutline] = useState<{ id: string; title: string; goal: string }>();
   const [selectedOutlineId, setSelectedOutlineId] = useState<string>();
+  const [outlineWholeSelected, setOutlineWholeSelected] = useState(false);
   const [collapsedOutlineIds, setCollapsedOutlineIds] = useState<string[]>([]);
   const [collapsedBlockIds, setCollapsedBlockIds] = useState<string[]>([]);
+  const [dialogueResponse, setDialogueResponse] = useState<DialogueResponse>();
+  const [pendingProposals, setPendingProposals] = useState<RevisionProposal[]>([]);
   const [sectionGeneration, setSectionGeneration] = useState<SectionGenerationState>();
   const refreshTimer = useRef<number | undefined>(undefined);
   const progressDismissTimer = useRef<number | undefined>(undefined);
@@ -61,6 +64,16 @@ export function App() {
     }
     const summaries = await api.listArticles(userId, workspaceId);
     setArticleSummaries(summaries);
+  }
+
+  async function refreshDialogueProposals(articleId = article?.id) {
+    if (!articleId) {
+      setPendingProposals([]);
+      return;
+    }
+    const proposals = await api.listDialogueProposals(articleId, userId);
+    setPendingProposals(proposals);
+    setDialogueResponse((current) => current?.mode === 'proposal' && current.proposal && !proposals.some((proposal) => proposal.id === current.proposal?.id) ? undefined : current);
   }
 
   useEffect(() => {
@@ -106,10 +119,13 @@ export function App() {
     setCollapsedOutlineIds([]);
     setCollapsedBlockIds([]);
     setSelectedOutlineId(undefined);
+    setOutlineWholeSelected(false);
     setSectionGeneration(undefined);
     setTaskCardTarget(article?.taskCard ? 'current' : 'new');
     setCurrentTaskMessage('');
     setNewTaskMessage('');
+    setDialogueResponse(undefined);
+    void refreshDialogueProposals(article?.id).catch(() => setPendingProposals([]));
   }, [article?.id]);
   useEffect(() => () => window.clearTimeout(progressDismissTimer.current), []);
 
@@ -135,7 +151,8 @@ export function App() {
   const taskCardFollowUpPrompts = useMemo(() => visibleArticle?.taskCard?.status === 'draft' ? taskCardPrompts(visibleArticle.taskCard) : [], [visibleArticle?.taskCard]);
   const hasWritingBlocks = Boolean(visibleArticle?.blocks.length);
   const outlineGenerated = Boolean(visibleArticle?.outline.length);
-  const dialogContext = useMemo(() => buildDialogContext(taskCardDialogTarget, visibleArticle, selectedOutline, selectedBlock), [taskCardDialogTarget, visibleArticle, selectedOutline, selectedBlock]);
+  const dialogContext = useMemo(() => buildDialogContext(taskCardDialogTarget, visibleArticle, outlineWholeSelected, selectedOutline, selectedBlock), [taskCardDialogTarget, visibleArticle, outlineWholeSelected, selectedOutline, selectedBlock]);
+  const activeDialogueProposal = dialogueResponse?.proposal?.status === 'pending' ? dialogueResponse.proposal : pendingProposals[0];
 
   function applyRunResponse(response: RunResponse) {
     setLastRun(response);
@@ -178,6 +195,7 @@ export function App() {
       setLastRun(undefined);
       setSelectedBlockId(undefined);
       setSelectedOutlineId(undefined);
+      setOutlineWholeSelected(false);
       setLiveEvents([]);
       setProgressVisible(false);
       setCurrentTaskMessage('');
@@ -200,6 +218,7 @@ export function App() {
         setLastRun(undefined);
         setSelectedBlockId(undefined);
         setSelectedOutlineId(undefined);
+        setOutlineWholeSelected(false);
         setLiveEvents([]);
         setProgressVisible(false);
       }
@@ -234,8 +253,11 @@ export function App() {
     setTaskCardTarget('new');
     setSelectedBlockId(undefined);
     setSelectedOutlineId(undefined);
+    setOutlineWholeSelected(false);
     setEditingOutline(undefined);
     setNewTaskMessage('');
+    setDialogueResponse(undefined);
+    setPendingProposals([]);
     setLastRun(undefined);
     setLiveEvents([]);
     setProgressVisible(false);
@@ -274,6 +296,7 @@ export function App() {
     setLastRun(undefined);
     setSelectedBlockId(undefined);
     setSelectedOutlineId(undefined);
+    setOutlineWholeSelected(false);
     setLiveEvents([]);
     setProgressVisible(false);
     await refreshArticleSummaries(workspaceId);
@@ -295,6 +318,7 @@ export function App() {
       setLastRun(undefined);
       setSelectedBlockId(undefined);
       setSelectedOutlineId(undefined);
+      setOutlineWholeSelected(false);
       setLiveEvents([]);
       setProgressVisible(false);
       setArticleSummaries([]);
@@ -319,6 +343,7 @@ export function App() {
       setLastRun(undefined);
       setSelectedBlockId(undefined);
       setSelectedOutlineId(undefined);
+      setOutlineWholeSelected(false);
       setLiveEvents([]);
       setProgressVisible(false);
       if (nextWorkspace) await refreshArticleSummaries(nextWorkspace.id);
@@ -361,16 +386,7 @@ export function App() {
       }
       return;
     }
-    if (visibleArticle && selectedBlock) {
-      const response = await execute(() => api.startPatch(visibleArticle.id, selectedBlock.id, contextualizeDialogInstruction(message, dialogContext), userId, sessionId));
-      if (response) setCurrentTaskMessage('');
-      return;
-    }
-    if (visibleArticle && selectedOutline) {
-      await reviseOutlineItem(contextualizeDialogInstruction(message, dialogContext));
-      return;
-    }
-    await reviseTaskCard(contextualizeDialogInstruction(message, dialogContext));
+    await sendDialogueMessage(message);
   }
   function submitTaskCardMessageWithKeyboard(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -380,6 +396,57 @@ export function App() {
   }
   function chooseTaskCardPromptOption(prompt: TaskCardFollowUpPrompt, option: string) {
     setCurrentTaskMessage((current) => appendPromptAnswer(current, prompt.question, option));
+  }
+  async function sendDialogueMessage(message: string) {
+    if (!visibleArticle?.taskCard) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const response = await api.sendDialogue(visibleArticle.id, { message, userId, sessionId, pendingProposalId: activeDialogueProposal?.id, context: apiDialogueContext(dialogContext) });
+      applyDialogueResponse(response);
+      setCurrentTaskMessage('');
+      await refreshDialogueProposals(visibleArticle.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  function applyDialogueResponse(response: DialogueResponse) {
+    setDialogueResponse(response);
+    if (response.article) {
+      setArticle(response.article);
+      void refreshArticleSummaries(response.article.workspaceId).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    }
+    if (response.run && response.events) applyRunResponse({ run: response.run, article: response.article, events: response.events });
+  }
+  async function applyDialogueProposal(proposal: RevisionProposal) {
+    if (!visibleArticle) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const response = await api.applyDialogueProposal(visibleArticle.id, proposal.id, { userId, sessionId });
+      applyDialogueResponse(response);
+      await refreshDialogueProposals(visibleArticle.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function dismissDialogueProposal(proposal: RevisionProposal) {
+    if (!visibleArticle) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.dismissDialogueProposal(visibleArticle.id, proposal.id, { userId });
+      if (dialogueResponse?.proposal?.id === proposal.id) setDialogueResponse(undefined);
+      await refreshDialogueProposals(visibleArticle.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
   }
   async function reviseTaskCard(instruction: string) {
     if (!article?.taskCard || !instruction.trim()) return;
@@ -477,7 +544,7 @@ export function App() {
             <div className="history-list">{articleSummaries.length ? articleSummaries.map((item) => <div className={visibleArticle?.id === item.id ? 'history-row active' : 'history-row'} key={item.id}><button className="history-item" disabled={busy} onClick={() => void openArticle(item.id)}><strong>{item.title}</strong><span>{taskStatusLabel(item.taskStatus)} · {item.outlineCount}纲 · {item.blockCount}节</span><span>{new Date(item.updatedAt).toLocaleString()}</span></button><button aria-label={`删除 ${item.title}`} className="history-delete" disabled={busy} title="删除任务" onClick={() => void deleteArticle(item.id)}>×</button></div>) : <div className="empty">当前工作台暂无任务。</div>}</div>
           </>}
         </aside>
-        {taskCardConfirmed ? <aside className={dialogContext.kind === 'task-card' ? 'panel task-card-panel selected' : 'panel task-card-panel'} onClick={() => { setTaskCardTarget('current'); setSelectedBlockId(undefined); setSelectedOutlineId(undefined); }}>
+        {taskCardConfirmed ? <aside className={dialogContext.kind === 'task-card' ? 'panel task-card-panel selected' : 'panel task-card-panel'} onClick={() => { setTaskCardTarget('current'); setSelectedBlockId(undefined); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }}>
           <h2>任务卡</h2>
           {visibleArticle.taskCard ? <TaskCardView taskCard={visibleArticle.taskCard} /> : null}
           {visibleArticle && canGenerateOutline && <button disabled={busy} onClick={() => execute(() => api.startOutline(visibleArticle.id, userId, sessionId))}>{visibleArticle.outline.length ? '重新生成大纲' : '生成大纲'}</button>}
@@ -486,21 +553,21 @@ export function App() {
         <section className="panel editor-panel">
           <div className="editor-scroll-content">
           {taskCardDraft && visibleArticle?.taskCard ? <section className="draft-task-card-main"><div className="draft-task-card-head"><h2>任务卡草稿</h2><button disabled={busy} onClick={() => void confirmTaskCard()}>确认任务卡</button></div><TaskCardView taskCard={visibleArticle.taskCard} /></section> : null}
-          {visibleArticle?.outline.length ? <div className="outline"><h3>大纲</h3>{visibleArticle.outline.map((item) => {
+          {visibleArticle?.outline.length ? <div className={outlineWholeSelected ? 'outline selected' : 'outline'}><h3 role="button" tabIndex={0} onClick={() => { setOutlineWholeSelected(true); setSelectedOutlineId(undefined); setSelectedBlockId(undefined); }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setOutlineWholeSelected(true); setSelectedOutlineId(undefined); setSelectedBlockId(undefined); } }}>大纲</h3>{visibleArticle.outline.map((item) => {
             const isEditing = editingOutline?.id === item.id;
             const sectionBlocks = visibleArticle.blocks.filter((block) => block.sectionId === item.id);
             const outlineCollapsed = !isEditing && collapsedOutlineIds.includes(item.id);
             const outlineSelected = selectedOutlineId === item.id || isEditing;
             return (
-              <div className={['outline-item', outlineCollapsed ? 'collapsed' : '', outlineSelected ? 'selected' : ''].filter(Boolean).join(' ')} key={item.id} onClick={() => { setSelectedOutlineId(item.id); setSelectedBlockId(undefined); }}>
+              <div className={['outline-item', outlineCollapsed ? 'collapsed' : '', outlineSelected ? 'selected' : ''].filter(Boolean).join(' ')} key={item.id} onClick={() => { setSelectedOutlineId(item.id); setOutlineWholeSelected(false); setSelectedBlockId(undefined); }}>
                 {isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div className="outline-main"><div className="outline-heading"><button type="button" className="collapse-button" aria-label={outlineCollapsed ? `展开 ${item.title}` : `折叠 ${item.title}`} title={outlineCollapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); setSelectedOutlineId(item.id); toggleOutlineCollapsed(item.id); }}>{outlineCollapsed ? '>' : 'v'}</button><div className="outline-title"><strong>{item.title}</strong><span>{outlineStatusLabel(item.status)}{sectionBlocks.length ? ` · ${sectionBlocks.length} 段正文` : ''}</span></div></div>{outlineCollapsed ? null : <p>{item.goal}</p>}</div>}
                 <OutlineActionBar isEditing={isEditing} busy={busy} canSave={Boolean(editingOutline?.title.trim() && editingOutline.goal.trim())} hasSectionBlocks={Boolean(sectionBlocks.length)} onSave={() => void saveOutlineEdit()} onCancel={() => setEditingOutline(undefined)} onEdit={() => { setSelectedOutlineId(item.id); setEditingOutline({ id: item.id, title: item.title, goal: item.goal }); }} onGenerate={() => void startSectionGeneration(item.id)} />
                 {!outlineCollapsed && progressVisible && sectionGeneration?.sectionId === item.id ? <GenerationProgressView progress={sectionGeneration} events={liveEvents} /> : null}
-                {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={(blockId) => { setSelectedBlockId(blockId); setSelectedOutlineId(undefined); }} onToggleBlockCollapse={toggleBlockCollapsed} /> : null}
+                {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={(blockId) => { setSelectedBlockId(blockId); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleBlockCollapse={toggleBlockCollapsed} /> : null}
               </div>
             );
           })}</div> : null}
-          <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} />)}</div>
+          <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} />)}</div>
           {!outlineGenerated ? <div className="editor-support">
             {hasWritingBlocks ? <KnowledgeTagsCard selectedBlock={selectedBlock} /> : null}
             <RevisionLogCard article={visibleArticle} />
@@ -512,6 +579,7 @@ export function App() {
             {taskCardDialogTarget === 'current' && taskCardFollowUpPrompts.length ? <TaskCardGuidance prompts={taskCardFollowUpPrompts} onChooseOption={chooseTaskCardPromptOption} /> : null}
             {taskCardDialogTarget === 'new' ? <NewTaskGuidance writingStandard={writingStandard} selectedLanguageEra={selectedLanguageEra} onSelectLanguageEra={setSelectedLanguageEra} domainProfiles={domainProfiles} recommendations={domainProfileRecommendations} selectedProfileId={selectedProfileId} selections={profileSelections} onSelectProfile={selectProfile} onUpdateGroup={updateProfileGroup} /> : null}
             <DialogContextView context={dialogContext} />
+            <DialogueResultView response={dialogueResponse} proposal={activeDialogueProposal} busy={busy} onApply={applyDialogueProposal} onDismiss={dismissDialogueProposal} />
             <div className="task-dialog-input-row">
               <textarea value={activeTaskCardMessage} onChange={(event) => setActiveTaskCardMessage(event.target.value)} onKeyDown={submitTaskCardMessageWithKeyboard} placeholder={dialogPlaceholder(dialogContext)} />
               <button className={busy ? 'send-button processing' : 'send-button'} aria-label={busy ? '处理中' : '发送'} aria-busy={busy ? true : undefined} title={busy ? '处理中' : '发送'} disabled={busy || !canSubmitTaskCardMessage} onClick={() => void submitTaskCardMessage()}>↑</button>
@@ -570,6 +638,24 @@ function DialogContextView(props: { context: DialogContext }) {
     <div className={`dialog-context context-${props.context.kind}`}>
       <span>{props.context.label}</span>
       <strong>{props.context.title}</strong>
+    </div>
+  );
+}
+
+function DialogueResultView(props: { response?: DialogueResponse; proposal?: RevisionProposal; busy: boolean; onApply: (proposal: RevisionProposal) => void | Promise<void>; onDismiss: (proposal: RevisionProposal) => void | Promise<void> }) {
+  const proposal = props.proposal;
+  if (!props.response && !proposal) return null;
+  return (
+    <div className={proposal ? 'dialogue-result proposal' : 'dialogue-result'}>
+      {props.response?.message ? <p>{props.response.message}</p> : null}
+      {proposal ? <div className="dialogue-proposal">
+        <div className="dialogue-proposal-head"><strong>{proposal.summary}</strong><span>{revisionOperationSummary(proposal.operations)}</span></div>
+        {proposal.warnings.length ? <ul className="dialogue-warnings">{proposal.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
+        <div className="dialogue-proposal-actions">
+          <button disabled={props.busy} onClick={() => void props.onApply(proposal)}>应用修改</button>
+          <button className="secondary-button" disabled={props.busy} onClick={() => void props.onDismiss(proposal)}>取消</button>
+        </div>
+      </div> : null}
     </div>
   );
 }
@@ -919,6 +1005,17 @@ function joinList(items?: string[]): string {
   return (items ?? []).filter((item) => item.trim().length > 0).join('、');
 }
 
+function revisionOperationSummary(operations: RevisionOperation[]): string {
+  const labels: Record<RevisionOperation['type'], string> = {
+    'revise-task-card': '任务卡',
+    'revise-outline': '大纲整体',
+    'revise-outline-item': '大纲项',
+    'patch-block': '正文段落',
+  };
+  const names = [...new Set(operations.map((operation) => labels[operation.type]))];
+  return names.length ? names.join('、') : '待确认';
+}
+
 function defaultProfileSelections(profile: DomainProfileSummary): Record<string, string | string[]> {
   return Object.fromEntries(profile.groups.map((group) => {
     const defaults = group.options.filter((option) => option.defaultSelected).map((option) => option.id);
@@ -933,7 +1030,7 @@ function taskCardPrompts(taskCard: WritingTaskCard): TaskCardFollowUpPrompt[] {
   return (taskCard.interactionMode.followUpQuestions ?? []).filter((question) => question.trim()).slice(0, 3).map((question, index) => ({ id: `question-${index + 1}`, question, options: [], allowCustom: true }));
 }
 
-function buildDialogContext(target: TaskCardTarget, article?: ArticleArtifact, outline?: ArticleArtifact['outline'][number], block?: ArticleBlock): DialogContext {
+function buildDialogContext(target: TaskCardTarget, article?: ArticleArtifact, outlineWholeSelected = false, outline?: ArticleArtifact['outline'][number], block?: ArticleBlock): DialogContext {
   if (target === 'new' || !article?.taskCard) return { kind: 'new-task', label: '当前位置', title: '新任务', detail: '当前输入会用于创建新的任务卡。', contextText: '' };
   if (block) {
     return {
@@ -942,15 +1039,26 @@ function buildDialogContext(target: TaskCardTarget, article?: ArticleArtifact, o
       title: block.title || block.id,
       detail: summarizeText(block.text, 90),
       contextText: formatParagraphContext(block),
+      blockId: block.id,
+    };
+  }
+  if (outlineWholeSelected && article.outline.length) {
+    return {
+      kind: 'outline',
+      label: '当前大纲',
+      title: '大纲整体',
+      detail: `${article.outline.length} 个大纲项`,
+      contextText: formatWholeOutlineContext(article.outline),
     };
   }
   if (outline) {
     return {
-      kind: 'outline',
-      label: '当前大纲',
+      kind: 'outline-item',
+      label: '当前大纲项',
       title: outline.title,
       detail: summarizeText(outline.goal, 90),
       contextText: formatOutlineContext(outline),
+      outlineItemId: outline.id,
     };
   }
   return {
@@ -960,6 +1068,13 @@ function buildDialogContext(target: TaskCardTarget, article?: ArticleArtifact, o
     detail: summarizeText(article.taskCard.writingGoal, 90),
     contextText: formatTaskCardContext(article.taskCard),
   };
+}
+
+function apiDialogueContext(context: DialogContext): { kind: DialogueContextKind; outlineItemId?: string; blockId?: string } {
+  if (context.kind === 'outline-item') return { kind: 'outline-item', outlineItemId: context.outlineItemId };
+  if (context.kind === 'outline') return { kind: 'outline' };
+  if (context.kind === 'paragraph') return { kind: 'block', blockId: context.blockId };
+  return { kind: 'task-card' };
 }
 
 function contextualizeDialogInstruction(instruction: string, context: DialogContext): string {
@@ -975,7 +1090,8 @@ function appendPromptAnswer(current: string, question: string, answer: string): 
 function dialogPlaceholder(context: DialogContext): string {
   if (context.kind === 'new-task') return '输入写作需求，创建新的任务卡。';
   if (context.kind === 'paragraph') return '对当前段落的修改意见';
-  if (context.kind === 'outline') return '围绕当前大纲提出修改意见';
+  if (context.kind === 'outline') return '围绕整篇大纲提问或提出修改意见';
+  if (context.kind === 'outline-item') return '围绕当前大纲项提问或提出修改意见';
   return '对当前任务卡的修改意见';
 }
 
@@ -1009,6 +1125,10 @@ function formatOutlineContext(outline: ArticleArtifact['outline'][number]): stri
     `主题标签：${joinList(outline.themeTags) || '无'}`,
     `状态：${outline.status}`,
   ].join('\n');
+}
+
+function formatWholeOutlineContext(outline: ArticleArtifact['outline']): string {
+  return outline.map((item) => `${item.order}. ${item.title}：${item.goal}`).join('\n');
 }
 
 function formatParagraphContext(block: ArticleBlock): string {

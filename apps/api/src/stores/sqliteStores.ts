@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { AgentEvent, ArticleArtifact, ArticleVersion, ArtifactStore, EventTraceStore, KnowledgeItem, KnowledgeStore, MemoryStore, newId, nowIso, Session, SessionStore, StateStore, TextPatch, UserWritingProfile, WorkspaceStore, WritingWorkspace, WorkflowRun } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleVersion, ArtifactStore, EventTraceStore, KnowledgeItem, KnowledgeStore, MemoryStore, newId, nowIso, RevisionProposal, RevisionProposalStore, Session, SessionStore, StateStore, TextPatch, UserWritingProfile, WorkspaceStore, WritingWorkspace, WorkflowRun } from '@wa/core';
 import knowledgeSeedRules from '../rules/knowledge-seeds.json';
 import { SqliteJsonDb } from './sqliteJsonDb';
 
@@ -52,6 +52,16 @@ export class SqliteArtifactStore implements ArtifactStore {
   async deleteArticle(articleId: string) { const article = await this.db.get(articleId); if (!article) throw new Error(`Article not found: ${articleId}`); const deleted = { ...article, deletedAt: article.deletedAt ?? nowIso(), updatedAt: nowIso() }; await this.db.upsert(deleted); return deleted; }
   async commitVersion(articleId: string, reason: string, author: ArticleVersion['author']) { const article = await this.getArticle(articleId); if (!article) throw new Error(`Article not found: ${articleId}`); const version: ArticleVersion = { id: newId('ver'), reason, author, snapshot: { taskCard: article.taskCard, outline: article.outline, blocks: article.blocks, citations: article.citations, themeTags: article.themeTags }, createdAt: nowIso() }; article.versions = [...article.versions, version]; article.updatedAt = nowIso(); await this.db.upsert(article); return version; }
   async applyPatch(patch: TextPatch) { const article = await this.getArticle(patch.articleId); if (!article) throw new Error(`Article not found: ${patch.articleId}`); article.blocks = article.blocks.map((block) => block.id === patch.blockId ? { ...block, text: patch.after, updatedAt: nowIso(), status: 'draft' } : block); article.updatedAt = nowIso(); await this.db.upsert(article); await this.commitVersion(article.id, `应用局部修改：${patch.instruction}`, 'agent'); return (await this.getArticle(article.id)) as ArticleArtifact; }
+  close() { this.db.close(); }
+}
+
+export class SqliteRevisionProposalStore implements RevisionProposalStore {
+  private readonly db: SqliteJsonDb<RevisionProposal>;
+  constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'revision_proposals'); }
+  createProposal(input: Omit<RevisionProposal, 'id' | 'status' | 'createdAt' | 'updatedAt'>) { const now = nowIso(); return this.db.upsert({ ...input, id: newId('prop'), status: 'pending', createdAt: now, updatedAt: now }); }
+  getProposal(proposalId: string) { return this.db.get(proposalId); }
+  async listPendingProposals(articleId: string, userId: string) { return (await this.db.list()).filter((proposal) => proposal.articleId === articleId && proposal.userId === userId && proposal.status === 'pending'); }
+  updateProposal(proposal: RevisionProposal) { return this.db.upsert({ ...proposal, updatedAt: nowIso() }); }
   close() { this.db.close(); }
 }
 
