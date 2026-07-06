@@ -1,4 +1,4 @@
-import { AgentEvent, EventTraceStore, KnowledgeItem, KnowledgeStore, newId, nowIso } from '@wa/core';
+import { AgentEvent, EventTraceStore, KnowledgeItem, KnowledgeSearchOptions, KnowledgeStore, newId, nowIso } from '@wa/core';
 
 export interface TonglingyuRetrieverKnowledgeStoreConfig {
   baseURL: string;
@@ -38,17 +38,24 @@ interface TonglingyuRetrieveResponse {
 export class TonglingyuRetrieverKnowledgeStore implements KnowledgeStore {
   constructor(private readonly config: TonglingyuRetrieverKnowledgeStoreConfig) {}
 
-  async search(query: string, options?: { limit?: number; themeTags?: string[] }): Promise<KnowledgeItem[]> {
+  async search(query: string, options?: KnowledgeSearchOptions): Promise<KnowledgeItem[]> {
     const limit = options?.limit ?? 6;
+    const fetchLimit = options?.requiredEvidenceTypes?.length ? Math.min(Math.max(limit * 4, 12), 60) : limit;
+    const structuredTerms = options?.structuredTerms?.length ? options.structuredTerms : options?.themeTags ?? [];
     const eventBase = { runId: undefined, payload: { query, limit, themeTags: options?.themeTags ?? [], provider: 'tonglingyu' }, createdAt: nowIso() };
     await this.emit({ ...eventBase, id: newId('evt'), type: 'rag.http.started' });
     try {
       const response = await this.post<TonglingyuRetrieveResponse>(this.config.retrievePath ?? '/retrieve', {
         query,
-        top_k: limit,
-        ...(options?.themeTags?.length ? { structured_terms: options.themeTags } : {}),
+        top_k: fetchLimit,
+        ...(structuredTerms.length ? { structured_terms: structuredTerms } : {}),
+        ...(options?.keywordQueries?.length ? { keyword_queries: options.keywordQueries } : {}),
+        ...(options?.semanticQueries?.length ? { semantic_queries: options.semanticQueries } : {}),
+        ...(options?.requiredEvidenceTypes?.length ? { required_evidence_types: options.requiredEvidenceTypes } : {}),
+        ...(options?.routes?.length ? { routes: options.routes } : {}),
+        ...(typeof options?.rerank === 'boolean' ? { rerank: options.rerank } : {}),
       });
-      const items = this.normalizeResponse(response).slice(0, limit);
+      const items = this.normalizeResponse(response, options?.requiredEvidenceTypes).slice(0, limit);
       await this.emit({ ...eventBase, id: newId('evt'), type: 'rag.http.completed', payload: { ...eventBase.payload, count: items.length }, createdAt: nowIso() });
       return items;
     } catch (error) {
@@ -72,13 +79,14 @@ export class TonglingyuRetrieverKnowledgeStore implements KnowledgeStore {
     } finally { clearTimeout(timeout); }
   }
 
-  private normalizeResponse(response: TonglingyuRetrieveResponse): KnowledgeItem[] {
+  private normalizeResponse(response: TonglingyuRetrieveResponse, requiredEvidenceTypes?: string[]): KnowledgeItem[] {
     if (response.ok === false) {
       const message = response.error?.message ?? response.error?.code ?? 'unknown retriever error';
       throw new Error(`Tonglingyu retriever failed: ${message}`);
     }
     const docs = response.evidence_pack?.docs ?? [];
-    return docs.map((doc, index) => this.normalizeDoc(doc, index, response.evidence_pack?.sufficiency));
+    const filteredDocs = filterByRequiredEvidence(docs, requiredEvidenceTypes);
+    return filteredDocs.map((doc, index) => this.normalizeDoc(doc, index, response.evidence_pack?.sufficiency));
   }
 
   private normalizeDoc(doc: TonglingyuEvidenceDoc, index: number, sufficiency?: JsonRecord): KnowledgeItem {
@@ -98,10 +106,13 @@ export class TonglingyuRetrieverKnowledgeStore implements KnowledgeStore {
         schemaVersion: doc.schema_version,
         route: doc.route,
         score: doc.score,
+        basisStatus: str(metadata.basis_status),
+        evidenceTypes: arrayOfStrings(metadata.evidence_types),
         source,
         refs: doc.refs ?? {},
         routes: doc.routes ?? [],
         display,
+        rawMetadata: metadata,
         sourceScope: doc.source_scope ?? {},
         usagePolicy: doc.usage_policy ?? {},
         sufficiency,
@@ -113,9 +124,21 @@ export class TonglingyuRetrieverKnowledgeStore implements KnowledgeStore {
   private async emit(event: AgentEvent): Promise<void> { await this.config.eventTraceStore?.append(event); }
 }
 
+function filterByRequiredEvidence(docs: TonglingyuEvidenceDoc[], requiredEvidenceTypes?: string[]): TonglingyuEvidenceDoc[] {
+  const required = requiredEvidenceTypes?.filter(Boolean) ?? [];
+  if (!required.length) return docs;
+  const typed = docs.filter((doc) => {
+    const evidenceTypes = new Set(arrayOfStrings(doc.metadata?.evidence_types));
+    return required.every((type) => evidenceTypes.has(type));
+  });
+  const accepted = typed.filter((doc) => doc.metadata?.basis_status === 'accepted');
+  return accepted.length ? accepted : (typed.length ? typed : docs);
+}
+
 function firstString(...values: unknown[]): string {
   for (const value of values) if (typeof value === 'string' && value.trim()) return value;
   return 'Tonglingyu evidence';
 }
+function str(value: unknown): string | undefined { return typeof value === 'string' ? value : undefined; }
 function arrayOfStrings(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []; }
 function compactStrings(values: unknown[]): string[] { return [...new Set(values.filter((item): item is string => typeof item === 'string' && item.trim().length > 0))]; }

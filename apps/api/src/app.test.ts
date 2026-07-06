@@ -47,6 +47,37 @@ async function startTonglingyuRetrieverServer(): Promise<{ baseURL: string; last
     let raw = '';
     for await (const chunk of req) raw += chunk;
     lastRequest = JSON.parse(raw || '{}') as Record<string, unknown>;
+    if (Array.isArray(lastRequest.required_evidence_types) && lastRequest.required_evidence_types.includes('commentary')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        ok: true,
+        evidence_pack: {
+          docs: [
+            {
+              doc_id: 'doc-noise-base-text',
+              route: 'bm25',
+              content: '司棋正文事件，但不是批语。',
+              score: 200,
+              metadata: { chunk_kind: 'event', evidence_projection: 'answer_basis', evidence_types: ['base_text'], basis_status: 'required_evidence_type_mismatch' },
+              refs: {},
+              display: { title: '司棋正文事件' },
+            },
+            {
+              doc_id: 'doc-siqi-commentary',
+              route: 'bm25',
+              content: '第七十四回批语：余为司棋心动。',
+              score: 120,
+              source: { citation_hint: '第七十四回批语' },
+              metadata: { chunk_kind: 'commentary', evidence_projection: 'answer_basis', evidence_types: ['commentary', 'version_note'], basis_status: 'accepted' },
+              refs: { commentary_ids: ['commentary-74-siqi'] },
+              display: { title: '第074回｜批语' },
+            },
+          ],
+          sufficiency: { sufficient: true },
+        },
+      }));
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       ok: true,
@@ -713,6 +744,47 @@ describe('api app', () => {
     expect(body[0].content).toContain('精神相通');
     expect(body[0].themeTags).toContain('vector');
     expect(body[0].metadata.refs.segment_ids).toEqual(['seg-32-1']);
+    await app.close();
+    await retriever.close();
+  });
+
+  it('uses commentary-scoped RAG for explicit commentary dialogue questions', async () => {
+    const retriever = await startTonglingyuRetrieverServer();
+    const config = testConfig({ ragProvider: 'tonglingyu', ragBaseURL: retriever.baseURL, ragSearchPath: '/retrieve' });
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-dialogue-rag-commentary',
+      topic: '司棋人物文章',
+      writingGoal: '撰写一篇综合全面介绍《红楼梦》人物司棋的文章。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: ['司棋'], themes: ['司棋'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-rag-user', name: '对话 RAG 工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-rag-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-rag-user', message: '脂批中有哪些司棋的批语', context: { kind: 'task-card' } },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.mode).toBe('answer');
+    expect(retriever.lastRequest()?.query).toBe('司棋 脂批 批语');
+    expect(retriever.lastRequest()?.required_evidence_types).toEqual(['commentary']);
+    expect(body.message).toContain('第074回｜批语');
+    expect(body.message).toContain('余为司棋心动');
+    expect(body.message).not.toContain('司棋正文事件');
     await app.close();
     await retriever.close();
   });

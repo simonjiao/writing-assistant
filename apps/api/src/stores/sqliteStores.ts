@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { AgentEvent, ArticleArtifact, ArticleVersion, ArtifactStore, DialogueMessage, DialogueMessageStore, EventTraceStore, KnowledgeItem, KnowledgeStore, MemoryStore, newId, nowIso, RevisionProposal, RevisionProposalStore, Session, SessionStore, StateStore, TextPatch, UserWritingProfile, WorkspaceStore, WritingWorkspace, WorkflowRun } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleVersion, ArtifactStore, DialogueMessage, DialogueMessageStore, EventTraceStore, KnowledgeItem, KnowledgeSearchOptions, KnowledgeStore, MemoryStore, newId, nowIso, RevisionProposal, RevisionProposalStore, Session, SessionStore, StateStore, TextPatch, UserWritingProfile, WorkspaceStore, WritingWorkspace, WorkflowRun } from '@wa/core';
 import knowledgeSeedRules from '../rules/knowledge-seeds.json';
 import { SqliteJsonDb } from './sqliteJsonDb';
 
@@ -85,7 +85,7 @@ export class SqliteDialogueMessageStore implements DialogueMessageStore {
 export class SqliteKnowledgeStore implements KnowledgeStore {
   private readonly db: SqliteJsonDb<KnowledgeItem>;
   constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'knowledge'); }
-  async search(query: string, options?: { limit?: number; themeTags?: string[] }) { await this.seedIfEmpty(); const items = await this.db.list(); const q = query.toLowerCase(); const scored = items.map((item) => { const haystack = `${item.title}\n${item.content}\n${item.themeTags.join(' ')}`.toLowerCase(); const tagScore = options?.themeTags?.some((tag) => item.themeTags.includes(tag)) ? 2 : 0; const textScore = q.split(/\s+/).filter(Boolean).reduce((score, token) => score + (haystack.includes(token) ? 1 : 0), 0); return { item, score: tagScore + textScore }; }).sort((a, b) => b.score - a.score); return scored.slice(0, options?.limit ?? 6).map((entry) => entry.item); }
+  async search(query: string, options?: KnowledgeSearchOptions) { await this.seedIfEmpty(); const items = await this.db.list(); const q = query.toLowerCase(); const scored = items.map((item) => { const haystack = `${item.title}\n${item.content}\n${item.themeTags.join(' ')}`.toLowerCase(); const tagScore = options?.themeTags?.some((tag) => item.themeTags.includes(tag)) ? 2 : 0; const textScore = q.split(/\s+/).filter(Boolean).reduce((score, token) => score + (haystack.includes(token) ? 1 : 0), 0); return { item, score: tagScore + textScore }; }).sort((a, b) => b.score - a.score); return scored.slice(0, options?.limit ?? 6).map((entry) => entry.item); }
   async listByRefs(sourceRefs: string[]) { await this.seedIfEmpty(); const refs = new Set(sourceRefs); return (await this.db.list()).filter((item) => refs.has(item.sourceRef)); }
   private async seedIfEmpty() { if ((await this.db.list()).length > 0) return; const now = nowIso(); const seeds = knowledgeSeedRules as Array<Omit<KnowledgeItem, 'createdAt'>>; for (const seed of seeds) await this.db.upsert({ ...seed, createdAt: now }); }
   close() { this.db.close(); }

@@ -17,6 +17,7 @@ export function App() {
   const [sessionId, setSessionId] = useState<string>();
   const [currentTaskMessage, setCurrentTaskMessage] = useState('');
   const [newTaskMessage, setNewTaskMessage] = useState('');
+  const [dialogInputHistory, setDialogInputHistory] = useState<string[]>([]);
   const [taskCardTarget, setTaskCardTarget] = useState<TaskCardTarget>('new');
   const [article, setArticle] = useState<ArticleArtifact>();
   const [articleSummaries, setArticleSummaries] = useState<ArticleSummary[]>([]);
@@ -56,11 +57,18 @@ export function App() {
   const refreshTimer = useRef<number | undefined>(undefined);
   const progressDismissTimer = useRef<number | undefined>(undefined);
   const activeRunId = useRef<string | undefined>(undefined);
+  const taskDialogInputRef = useRef<HTMLTextAreaElement>(null);
+  const historyBrowseIndex = useRef<number | undefined>(undefined);
+  const historyDraft = useRef('');
   const taskCardDialogTarget: TaskCardTarget = article?.taskCard && taskCardTarget === 'current' ? 'current' : 'new';
   const visibleArticle = taskCardDialogTarget === 'new' ? undefined : article;
   const activeTaskCardMessage = taskCardDialogTarget === 'new' ? newTaskMessage : currentTaskMessage;
   const setActiveTaskCardMessage = taskCardDialogTarget === 'new' ? setNewTaskMessage : setCurrentTaskMessage;
   const domainRecommendationText = taskCardDialogTarget === 'new' ? newTaskMessage : '';
+  const activeDialogInputHistory = useMemo(() => uniqueRecentMessages([
+    ...dialogInputHistory,
+    ...dialogueMessages.filter((message) => message.role === 'user').map((message) => message.content),
+  ]), [dialogInputHistory, dialogueMessages]);
 
   async function refreshArticleSummaries(workspaceId = selectedWorkspaceId) {
     if (!workspaceId) {
@@ -411,6 +419,8 @@ export function App() {
   async function submitTaskCardMessage() {
     const message = activeTaskCardMessage.trim();
     if (!message) return;
+    rememberDialogInput(message);
+    resetHistoryBrowse();
     if (!article?.taskCard || taskCardDialogTarget === 'new') {
       const response = await execute(() => api.startTaskCard(message, userId, sessionId, selectedWorkspaceId, currentDomainProfileSelection(), currentWritingStandardSelection()));
       if (response?.article) {
@@ -423,10 +433,66 @@ export function App() {
     await sendDialogueMessage(message);
   }
   function submitTaskCardMessageWithKeyboard(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
+      browseDialogInputHistory(event);
+      return;
+    }
     if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (event.nativeEvent.isComposing || busy || !canSubmitTaskCardMessage) return;
+    if (busy || !canSubmitTaskCardMessage) return;
     event.preventDefault();
     void submitTaskCardMessage();
+  }
+  function updateTaskCardMessage(value: string) {
+    resetHistoryBrowse();
+    setActiveTaskCardMessage(value);
+  }
+  function rememberDialogInput(message: string) {
+    setDialogInputHistory((current) => uniqueRecentMessages([...current, message]).slice(-50));
+  }
+  function resetHistoryBrowse() {
+    historyBrowseIndex.current = undefined;
+    historyDraft.current = '';
+  }
+  function browseDialogInputHistory(event: KeyboardEvent<HTMLTextAreaElement>) {
+    const direction = event.key === 'ArrowUp' ? 'up' : 'down';
+    const target = event.currentTarget;
+    const isBrowsing = historyBrowseIndex.current !== undefined;
+    const canBrowse =
+      isBrowsing ||
+      (direction === 'up' && target.selectionStart === 0 && target.selectionEnd === 0) ||
+      (direction === 'down' && target.selectionStart === target.value.length && target.selectionEnd === target.value.length);
+    if (!canBrowse || !activeDialogInputHistory.length) return;
+    if (!isBrowsing && direction === 'down') return;
+    event.preventDefault();
+    if (!isBrowsing) {
+      historyDraft.current = activeTaskCardMessage;
+      historyBrowseIndex.current = activeDialogInputHistory.length - 1;
+    } else if (direction === 'up') {
+      historyBrowseIndex.current = Math.max(0, (historyBrowseIndex.current ?? 0) - 1);
+    } else {
+      const nextIndex = (historyBrowseIndex.current ?? 0) + 1;
+      if (nextIndex >= activeDialogInputHistory.length) {
+        historyBrowseIndex.current = undefined;
+        setActiveTaskCardMessage(historyDraft.current);
+        historyDraft.current = '';
+        focusTaskDialogInputAtEnd();
+        return;
+      }
+      historyBrowseIndex.current = nextIndex;
+    }
+    setActiveTaskCardMessage(activeDialogInputHistory[historyBrowseIndex.current]);
+    focusTaskDialogInputAtEnd();
+  }
+  function focusTaskDialogInputAtEnd() {
+    window.requestAnimationFrame(() => {
+      const input = taskDialogInputRef.current;
+      if (!input) return;
+      const end = input.value.length;
+      input.focus();
+      input.setSelectionRange(end, end);
+    });
   }
   function chooseTaskCardPromptOption(prompt: TaskCardFollowUpPrompt, option: string) {
     setClearedTaskCardPromptIds((current) => current.filter((id) => id !== prompt.id));
@@ -629,7 +695,7 @@ export function App() {
             {taskCardDialogTarget === 'current' ? <DialogueHistoryView messages={dialogueMessages} /> : null}
             <DialogueResultView response={dialogueResponse} proposal={activeDialogueProposal} proposalDirty={proposalDirty} busy={busy} onApply={applyDialogueProposal} onDismiss={dismissDialogueProposal} onRefresh={() => sendDialogueMessage('按以上意见更新方案')} />
             <div className="task-dialog-input-row">
-              <textarea value={activeTaskCardMessage} onChange={(event) => setActiveTaskCardMessage(event.target.value)} onKeyDown={submitTaskCardMessageWithKeyboard} placeholder={dialogPlaceholder(dialogContext)} />
+              <textarea ref={taskDialogInputRef} value={activeTaskCardMessage} onChange={(event) => updateTaskCardMessage(event.target.value)} onKeyDown={submitTaskCardMessageWithKeyboard} placeholder={dialogPlaceholder(dialogContext)} />
               <button className={busy ? 'send-button processing' : 'send-button'} aria-label={busy ? '处理中' : '发送'} aria-busy={busy ? true : undefined} title={busy ? '处理中' : '发送'} disabled={busy || !canSubmitTaskCardMessage} onClick={() => void submitTaskCardMessage()}>↑</button>
             </div>
           </div>
@@ -1443,6 +1509,18 @@ function toggleSelection(values: string[], value: string, checked: boolean): str
 
 function toggleId(values: string[], value: string): string[] {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
+}
+
+function uniqueRecentMessages(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of [...values].reverse()) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result.reverse();
 }
 
 function parseMemberUserIds(value: string): string[] {

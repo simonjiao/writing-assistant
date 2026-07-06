@@ -59,8 +59,19 @@ export interface WorkspaceStore {
   updateWorkspace(workspace: WritingWorkspace): Promise<WritingWorkspace>;
 }
 
+export interface KnowledgeSearchOptions {
+  limit?: number;
+  themeTags?: string[];
+  structuredTerms?: string[];
+  requiredEvidenceTypes?: string[];
+  routes?: string[];
+  keywordQueries?: string[];
+  semanticQueries?: string[];
+  rerank?: boolean;
+}
+
 export interface KnowledgeStore {
-  search(query: string, options?: { limit?: number; themeTags?: string[] }): Promise<KnowledgeItem[]>;
+  search(query: string, options?: KnowledgeSearchOptions): Promise<KnowledgeItem[]>;
   listByRefs(sourceRefs: string[]): Promise<KnowledgeItem[]>;
 }
 

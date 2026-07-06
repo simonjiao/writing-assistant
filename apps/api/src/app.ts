@@ -1,7 +1,7 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply } from 'fastify';
-import { AgentEvent, ArticleArtifact, ArticleBlock, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, KnowledgeItem, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WritingTaskCard, WritingWorkspace } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleBlock, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, KnowledgeItem, KnowledgeSearchOptions, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WritingTaskCard, WritingWorkspace } from '@wa/core';
 import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
@@ -321,7 +321,19 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const updatedArticle = await container.stores.artifactStore.getArticle(article.id);
     return updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle;
   });
-  app.post('/api/knowledge/search', async (request) => { const body = request.body as { query: string; limit?: number; themeTags?: string[] }; return container.stores.knowledgeStore.search(body.query, { limit: body.limit, themeTags: body.themeTags }); });
+  app.post('/api/knowledge/search', async (request) => {
+    const body = request.body as { query: string } & KnowledgeSearchOptions;
+    return container.stores.knowledgeStore.search(body.query, {
+      limit: body.limit,
+      themeTags: body.themeTags,
+      structuredTerms: body.structuredTerms,
+      requiredEvidenceTypes: body.requiredEvidenceTypes,
+      routes: body.routes,
+      keywordQueries: body.keywordQueries,
+      semanticQueries: body.semanticQueries,
+      rerank: body.rerank,
+    });
+  });
 
   app.post('/api/workflows/task-card/start', async (request, reply) => {
     const body = request.body as { rawRequirement: string; userId?: string; sessionId?: string; workspaceId?: string; domainProfile?: DomainProfileSelectionRequest; writingStandard?: WritingStandardSelectionRequest };
@@ -439,11 +451,44 @@ function localDialogueReply(route: DialogueRoute, context: DialogueCoordinatorIn
 }
 
 async function answerWithKnowledge(container: AppContainer, article: ArticleArtifact, context: DialogueCoordinatorInput['context'], message: string): Promise<string> {
-  const query = [message, article.taskCard?.topic, context.detail].filter(Boolean).join('\n');
-  const items = await container.stores.knowledgeStore.search(query, { limit: 4 });
+  const spec = knowledgeSearchSpec(article, message);
+  const items = await container.stores.knowledgeStore.search(spec.query, spec.options);
   if (!items.length) return '没有查到足够相关的资料。可以换一种问法，或明确要查的原文、脂批、章节或人物。';
   const lines = items.map((item, index) => `${index + 1}. ${knowledgeItemLabel(item)}`);
   return [`查到 ${items.length} 条相关资料，可以作为后续修改或写作依据：`, ...lines, '如果要把这些资料合并进当前修改方案，请说“按这些资料更新方案”。'].join('\n');
+}
+
+function knowledgeSearchSpec(article: ArticleArtifact, message: string): { query: string; options: KnowledgeSearchOptions } {
+  if (isCommentaryKnowledgeRequest(message)) {
+    const terms = extractKnowledgeTerms(message, article);
+    const query = [...terms, '脂批', '批语'].join(' ').trim() || message;
+    return {
+      query,
+      options: {
+        limit: 4,
+        structuredTerms: terms,
+        keywordQueries: [query],
+        semanticQueries: [`脂批中关于${terms.join('、') || '当前对象'}的批语`],
+        requiredEvidenceTypes: ['commentary'],
+        routes: ['bm25', 'vector', 'commentary'],
+      },
+    };
+  }
+  return { query: message, options: { limit: 4 } };
+}
+
+function isCommentaryKnowledgeRequest(message: string): boolean {
+  return /(脂批|批语|批注|评语)/.test(message);
+}
+
+function extractKnowledgeTerms(message: string, article: ArticleArtifact): string[] {
+  const cleaned = message.replace(/脂批|批语|批注|评语|有哪些|有哪|关于|查|检索|搜索|一下|请|资料|原文|出处|引用|证据|中|的|和|与|及|以及|第[一二三四五六七八九十百0-9]+回/g, ' ');
+  const messageTerms = cleaned.split(/[\s，,。.!！?？、；;：:《》“”"']+/).map((item) => item.trim()).filter((item) => item.length >= 2 && item.length <= 12);
+  const scopedTerms = article.taskCard?.scope.characters?.filter(Boolean) ?? [];
+  const topicTerm = article.taskCard?.topic
+    ?.replace(/人物文章|文章|介绍|综合|全面|关于|写一篇|赏析|分析|评论/g, '')
+    .trim();
+  return [...new Set([...messageTerms, ...scopedTerms, ...(topicTerm ? [topicTerm] : [])])].filter((item) => item.length >= 2 && item.length <= 12).slice(0, 4);
 }
 
 async function refineDialogueRoute(container: AppContainer, article: ArticleArtifact, userId: string, sessionId: string | undefined, message: string, context: DialogueCoordinatorInput['context'], hasPendingProposal: boolean): Promise<DialogueRoute> {
@@ -462,7 +507,8 @@ async function refineDialogueRoute(container: AppContainer, article: ArticleArti
 
 function knowledgeItemLabel(item: KnowledgeItem): string {
   const source = item.sourceRef ? `（${item.sourceRef}）` : '';
-  return `${item.title}${source}`;
+  const snippet = item.content ? `：${item.content.replace(/\s+/g, ' ').slice(0, 90)}` : '';
+  return `${item.title}${source}${snippet}`;
 }
 
 async function appendDialogueMessage(container: AppContainer, input: Omit<DialogueMessage, 'id' | 'createdAt'>): Promise<DialogueMessage> {

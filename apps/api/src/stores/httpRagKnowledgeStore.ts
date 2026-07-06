@@ -1,4 +1,4 @@
-import { AgentEvent, EventTraceStore, KnowledgeItem, KnowledgeStore, newId, nowIso } from '@wa/core';
+import { AgentEvent, EventTraceStore, KnowledgeItem, KnowledgeSearchOptions, KnowledgeStore, newId, nowIso } from '@wa/core';
 
 export interface HttpRagKnowledgeStoreConfig { baseURL: string; apiKey?: string; searchPath?: string; refsPath?: string; timeoutMs?: number; eventTraceStore?: EventTraceStore }
 
@@ -8,7 +8,7 @@ type RagResponse = RawRagItem[] | { items?: RawRagItem[]; results?: RawRagItem[]
 export class HttpRagKnowledgeStore implements KnowledgeStore {
   constructor(private readonly config: HttpRagKnowledgeStoreConfig) {}
 
-  async search(query: string, options?: { limit?: number; themeTags?: string[] }): Promise<KnowledgeItem[]> {
+  async search(query: string, options?: KnowledgeSearchOptions): Promise<KnowledgeItem[]> {
     const eventBase = { runId: undefined, payload: { query, limit: options?.limit ?? 6, themeTags: options?.themeTags ?? [] }, createdAt: nowIso() };
     await this.emit({ ...eventBase, id: newId('evt'), type: 'rag.http.started' });
     try {
