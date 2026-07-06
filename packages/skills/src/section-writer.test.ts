@@ -82,6 +82,19 @@ function capturingLlm(content: unknown, calls: Array<{ messages: Array<{ role: s
   };
 }
 
+function sequentialCapturingLlm(contents: unknown[], calls: Array<{ messages: Array<{ role: string; content: string }>; maxTokens?: number }>) {
+  let index = 0;
+  return {
+    async chat(request: { messages: Array<{ role: string; content: string }>; maxTokens?: number }) {
+      calls.push({ messages: request.messages, maxTokens: request.maxTokens });
+      const content = contents[Math.min(index, contents.length - 1)];
+      index += 1;
+      return { content: JSON.stringify(content) };
+    },
+    async json<T>() { return {} as T; },
+  };
+}
+
 function context() {
   return { knowledge, compactSummary: '', article: { outline: articleOutline, blocks: [] } } as never;
 }
@@ -110,10 +123,41 @@ describe('SectionWriterSkill', () => {
     expect(system).toContain('整篇文章的一环');
     expect(system).toContain('block.sourceRefs 必须绑定');
     expect(user.sourceUsePolicy?.prohibitedModes).toEqual(['translation', 'paraphrase', 'retelling', 'source-summary']);
-    expect(user.writingBudget).toMatchObject({ targetChars: 300, maxChars: 405 });
+    expect(user.writingBudget).toMatchObject({ targetChars: 300, maxChars: 470, allocationBasis: expect.stringContaining('expectedBlocks') });
     expect(user.writingContinuity?.currentSection?.title).toBe('测试章节');
     expect(user.writingContinuity?.policy?.join('；')).toContain('前文尚未使用的来源');
     expect(calls[0].maxTokens).toBeUndefined();
+  });
+
+  it('allocates a larger budget to outline sections with more expected blocks', async () => {
+    const skill = new SectionWriterSkill();
+    const calls: Array<{ messages: Array<{ role: string; content: string }>; maxTokens?: number }> = [];
+    await skill.invoke({
+      input: { articleId: 'art_1', section: { ...section, id: 'sec_3', title: '主体章节', order: 3, expectedBlocks: 3 }, taskCard },
+      context: {
+        knowledge,
+        compactSummary: '',
+        article: {
+          outline: [
+            section,
+            { ...section, id: 'sec_2', title: '第二节', order: 2, expectedBlocks: 1 },
+            { ...section, id: 'sec_3', title: '主体章节', order: 3, expectedBlocks: 3 },
+            { ...section, id: 'sec_4', title: '第四节', order: 4, expectedBlocks: 1 },
+          ],
+          blocks: [],
+        },
+      } as never,
+      llm: capturingLlm({
+        block: {
+          text: '主体章节获得更多篇幅后，仍然先提出判断，再说明材料怎样支撑这一判断。',
+          sourceRefs: ['test:k1'],
+          themeTags: ['测试主题'],
+        },
+        summary: '已生成分析性正文。',
+      }, calls),
+    });
+    const user = JSON.parse(calls[0].messages.find((message) => message.role === 'user')?.content ?? '{}') as { writingBudget?: { targetChars?: number; maxChars?: number; currentSectionWeight?: number; totalSectionWeight?: number } };
+    expect(user.writingBudget).toMatchObject({ currentSectionWeight: 3, totalSectionWeight: 6, targetChars: 600, maxChars: 860 });
   });
 
   it('filters knowledge that conflicts with a closed pre-80 source policy', async () => {
@@ -302,7 +346,39 @@ describe('SectionWriterSkill', () => {
     })).rejects.toThrow('quote-heavy prose');
   });
 
-  it('rejects sections that exceed the current section budget', async () => {
+  it('asks for a compressed rewrite when a section exceeds the current budget', async () => {
+    const skill = new SectionWriterSkill();
+    const calls: Array<{ messages: Array<{ role: string; content: string }>; maxTokens?: number }> = [];
+    const output = await skill.invoke({
+      input: { articleId: 'art_1', section, taskCard },
+      context: context(),
+      llm: sequentialCapturingLlm([
+        {
+          block: {
+            text: '分析判断。'.repeat(150),
+            sourceRefs: ['test:k1'],
+            themeTags: ['测试主题'],
+          },
+          candidateSources: ['test:k1'],
+          summary: '初稿过长。',
+        },
+        {
+          block: {
+            text: '本节保留核心判断，删去重复铺陈，只说明材料如何支撑论点，并回到章节目标。',
+            sourceRefs: ['test:k1'],
+            themeTags: ['测试主题'],
+          },
+          candidateSources: ['test:k1'],
+          summary: '已压缩为合格正文。',
+        },
+      ], calls),
+    });
+    expect(output.block.text).toContain('删去重复铺陈');
+    expect(calls).toHaveLength(2);
+    expect(calls[1].messages[0].content).toContain('章节正文压缩编辑器');
+  });
+
+  it('rejects sections that still exceed the current section budget after rewrite', async () => {
     const skill = new SectionWriterSkill();
     await expect(skill.invoke({
       input: { articleId: 'art_1', section, taskCard },

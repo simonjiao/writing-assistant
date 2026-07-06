@@ -39,7 +39,7 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
     const knowledge = filterKnowledgeByTaskCardPolicy(context.knowledge, taskCard);
     const writingContinuity = buildWritingContinuity(input, context.article, knowledge);
     const sectionKnowledge = prioritizeSectionKnowledge(knowledge, writingContinuity);
-    const writingBudget = buildSectionWritingBudget(taskCard, context.article?.outline.length ?? 1);
+    const writingBudget = buildSectionWritingBudget(taskCard, input.section, context.article);
     const response = await llm.chat({
       jsonMode: true,
       temperature: 0.45,
@@ -95,18 +95,28 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
         },
       ],
     });
-    const parsed = safeJsonParse<SectionWriterRawOutput>(response.content);
-    if (!parsed?.block?.text && !parsed?.blocks?.some((block) => block.text)) throw new Error(`Section writer did not return a valid block: ${response.content.slice(0, 300)}`);
-    return normalizeOutput(parsed, { ...input, taskCard }, sectionKnowledge, writingBudget, writingContinuity);
+    const parsed = parseSectionWriterResponse(response.content);
+    try {
+      return normalizeOutput(parsed, { ...input, taskCard }, sectionKnowledge, writingBudget, writingContinuity);
+    } catch (error) {
+      if (!(error instanceof SectionLengthBudgetError)) throw error;
+      const revised = await reviseOverlongSection({ input: { ...input, taskCard }, parsed, knowledge: sectionKnowledge, writingBudget, writingContinuity, lengthError: error, llm });
+      return normalizeOutput(revised, { ...input, taskCard }, sectionKnowledge, writingBudget, writingContinuity);
+    }
   }
 }
 
 interface SectionWritingBudget {
   articleExpectedLength: string;
   outlineSections: number;
+  totalTargetChars: number;
+  totalSectionWeight: number;
+  currentSectionWeight: number;
+  writtenChars: number;
   targetChars: number;
   minChars: number;
   maxChars: number;
+  allocationBasis: string;
   policy: string;
 }
 
@@ -118,6 +128,55 @@ interface WritingContinuity {
   usedSourceRefs: Array<{ sourceRef: string; count: number; sections: string[] }>;
   unusedSourceRefs: string[];
   policy: string[];
+}
+
+class SectionLengthBudgetError extends Error {
+  constructor(readonly actualChars: number, readonly maxChars: number) {
+    super(`Section writer exceeded current section length budget: ${actualChars}/${maxChars} characters.`);
+  }
+}
+
+function parseSectionWriterResponse(content: string): SectionWriterRawOutput {
+  const parsed = safeJsonParse<SectionWriterRawOutput>(content);
+  if (!parsed?.block?.text && !parsed?.blocks?.some((block) => block.text)) throw new Error(`Section writer did not return a valid block: ${content.slice(0, 300)}`);
+  return parsed;
+}
+
+async function reviseOverlongSection(input: { input: SectionWriterInput; parsed: SectionWriterRawOutput; knowledge: KnowledgeItem[]; writingBudget: SectionWritingBudget; writingContinuity: WritingContinuity; lengthError: SectionLengthBudgetError; llm: Parameters<Skill<SectionWriterInput, SectionWriterOutput>['invoke']>[0]['llm'] }): Promise<SectionWriterRawOutput> {
+  const response = await input.llm.chat({
+    jsonMode: true,
+    temperature: 0.25,
+    messages: [
+      {
+        role: 'system',
+        content: [
+          '你是章节正文压缩编辑器，只输出 JSON：blocks、summary。',
+          '你的任务不是续写，而是把已有章节草稿重写得更凝练，并压缩到 writingBudget.maxChars 以内。',
+          '必须保留当前章节的核心判断、必要过渡和来源绑定；不得新增未在 knowledge 中出现的 sourceRef。',
+          '不要机械截断；必须输出完整、可直接保存的正文。',
+          '不得加入新情节、新人物、新资料，也不得改变 taskCard、section 和 sourcePolicy 的约束。',
+          '如果原草稿有复述、铺陈、重复引用或空泛解释，优先删去这些部分。',
+        ].join('\n'),
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          taskCard: input.input.taskCard,
+          section: input.input.section,
+          writingBudget: input.writingBudget,
+          lengthProblem: { actualChars: input.lengthError.actualChars, maxChars: input.lengthError.maxChars },
+          originalDraft: input.parsed,
+          knowledge: input.knowledge,
+          writingContinuity: input.writingContinuity,
+          requiredOutputShape: {
+            blocks: [{ title: 'string', text: 'string', sourceRefs: ['string'], themeTags: ['string'] }],
+            summary: 'string',
+          },
+        }),
+      },
+    ],
+  });
+  return parseSectionWriterResponse(response.content);
 }
 
 function normalizeOutput(output: SectionWriterRawOutput, input: SectionWriterInput, knowledge: KnowledgeItem[], writingBudget: SectionWritingBudget, writingContinuity: WritingContinuity): SectionWriterOutput {
@@ -221,18 +280,43 @@ function optionalStringArray(value: unknown, field: string): string[] | undefine
   return value === undefined ? undefined : requireStringArray(value, field);
 }
 
-function buildSectionWritingBudget(taskCard: WritingTaskCard, outlineSections: number): SectionWritingBudget {
-  const sectionCount = Math.max(1, outlineSections);
+function buildSectionWritingBudget(taskCard: WritingTaskCard, section: OutlineItem, article: ArticleArtifact | undefined): SectionWritingBudget {
+  const outline = article?.outline.length ? article.outline : [section];
+  const sectionCount = Math.max(1, outline.length);
   const articleTarget = parseExpectedLengthTarget(taskCard.structure.expectedLength) ?? (taskCard.structure.articleType === 'longform' ? 3200 : 1600);
-  const targetChars = Math.round(articleTarget / sectionCount);
+  const currentSection = outline.find((item) => item.id === section.id) ?? section;
+  const totalSectionWeight = outline.reduce((sum, item) => sum + sectionBudgetWeight(item), 0);
+  const currentSectionWeight = sectionBudgetWeight(currentSection);
+  const plannedTarget = Math.round(articleTarget * currentSectionWeight / totalSectionWeight);
+  const writtenSectionIds = new Set((article?.blocks ?? []).map((block) => block.sectionId).filter((id): id is string => Boolean(id) && id !== section.id));
+  const writtenChars = (article?.blocks ?? []).filter((block) => block.sectionId !== section.id).reduce((sum, block) => sum + countCjkOrLetters(block.text), 0);
+  const remainingSections = outline.filter((item) => item.id === section.id || !writtenSectionIds.has(item.id));
+  const remainingWeight = Math.max(currentSectionWeight, remainingSections.reduce((sum, item) => sum + sectionBudgetWeight(item), 0));
+  const remainingTarget = Math.max(plannedTarget, articleTarget - writtenChars);
+  const adaptiveTarget = Math.round(remainingTarget * currentSectionWeight / remainingWeight);
+  const lowerBound = Math.round(plannedTarget * 0.72);
+  const upperBound = Math.round(plannedTarget * 1.45);
+  const targetChars = clamp(adaptiveTarget, lowerBound, upperBound);
+  const maxCap = Math.min(Math.max(articleTarget, 500), taskCard.structure.articleType === 'longform' ? 1800 : 1400);
+  const maxChars = clamp(Math.round(targetChars * 1.3) + 80, 360, maxCap);
+  const minChars = clamp(Math.round(targetChars * 0.55), 160, Math.max(160, maxChars - 80));
   return {
     articleExpectedLength: taskCard.structure.expectedLength,
     outlineSections: sectionCount,
+    totalTargetChars: articleTarget,
+    totalSectionWeight,
+    currentSectionWeight,
+    writtenChars,
     targetChars,
-    minChars: clamp(Math.round(targetChars * 0.65), 220, 700),
-    maxChars: clamp(Math.round(targetChars * 1.35), 360, 900),
-    policy: '整篇长度按大纲章节数拆分；本次只写当前章节，宁可凝练，不要把整篇文章展开到单节里。',
+    minChars,
+    maxChars,
+    allocationBasis: '按大纲 expectedBlocks 权重分配；已写章节计入整篇已用字数，当前节按剩余预算自适应调整。',
+    policy: '整篇长度是总预算，不平均硬切到每节；当前章节按大纲权重和剩余篇幅分配，宁可凝练，不要把整篇文章展开到单节里。',
   };
+}
+
+function sectionBudgetWeight(section: OutlineItem): number {
+  return Math.max(1, Math.min(5, Number.isFinite(section.expectedBlocks) ? Math.round(section.expectedBlocks) : 1));
 }
 
 function parseExpectedLengthTarget(value: string): number | undefined {
@@ -249,7 +333,7 @@ function clamp(value: number, min: number, max: number): number {
 function validateLengthBudget(text: string, writingBudget: SectionWritingBudget): void {
   const length = countCjkOrLetters(text);
   if (length > writingBudget.maxChars) {
-    throw new Error(`Section writer exceeded current section length budget: ${length}/${writingBudget.maxChars} characters.`);
+    throw new SectionLengthBudgetError(length, writingBudget.maxChars);
   }
 }
 

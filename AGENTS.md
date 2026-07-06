@@ -25,4 +25,9 @@ This file applies to the whole repository.
 ## Local Runtime
 
 - Use Node.js 22.x. Run `nvm use` before local project commands.
+- Use one fixed local runtime path: `npm run local:start`, `npm run local:status`, `npm run local:stop`, and `npm run local:restart`.
+- Use target-specific restarts with npm argument forwarding, for example `npm run local:restart -- api` or `npm run local:restart -- web`.
+- Do not start project services with ad hoc `npm run start`, `npm run dev`, `nohup`, manual PID management, or temporary `launchctl submit` commands.
+- Local runtime logs must stay under `.data/logs/`.
+- Redis is not part of the default local runtime. Use Redis only when `WORKFLOW_QUEUE_DRIVER=redis` is explicitly configured.
 - Do not commit `.env`, `.data`, `dist`, `dist-ts`, `node_modules`, or generated runtime data.
