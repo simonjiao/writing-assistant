@@ -10,7 +10,7 @@ const navigationCollapsedStorageKey = 'writing-assistant.navigation-collapsed';
 const supportColumnCollapsedStorageKey = 'writing-assistant.support-column-collapsed';
 type SectionGenerationState = { sectionId: string; runId?: string; status: WorkflowRun['status'] | 'starting'; error?: string };
 type TaskCardTarget = 'current' | 'new';
-type DialogContext = { kind: 'new-task' | 'task-card' | 'outline' | 'paragraph'; label: string; title: string; detail: string };
+type DialogContext = { kind: 'new-task' | 'task-card' | 'outline' | 'paragraph'; label: string; title: string; detail: string; contextText: string };
 
 export function App() {
   const [sessionId, setSessionId] = useState<string>();
@@ -362,7 +362,7 @@ export function App() {
       return;
     }
     if (visibleArticle && selectedBlock) {
-      const response = await execute(() => api.startPatch(visibleArticle.id, selectedBlock.id, message, userId, sessionId));
+      const response = await execute(() => api.startPatch(visibleArticle.id, selectedBlock.id, contextualizeDialogInstruction(message, dialogContext), userId, sessionId));
       if (response) setCurrentTaskMessage('');
       return;
     }
@@ -551,7 +551,6 @@ function DialogContextView(props: { context: DialogContext }) {
     <div className={`dialog-context context-${props.context.kind}`}>
       <span>{props.context.label}</span>
       <strong>{props.context.title}</strong>
-      <p>{props.context.detail}</p>
     </div>
   );
 }
@@ -916,15 +915,37 @@ function taskCardPrompts(taskCard: WritingTaskCard): TaskCardFollowUpPrompt[] {
 }
 
 function buildDialogContext(target: TaskCardTarget, article?: ArticleArtifact, outline?: ArticleArtifact['outline'][number], block?: ArticleBlock): DialogContext {
-  if (target === 'new' || !article?.taskCard) return { kind: 'new-task', label: '新任务', title: '尚未创建', detail: '当前输入会用于创建新的任务卡。' };
-  if (block) return { kind: 'paragraph', label: '当前段落', title: block.title || block.id, detail: summarizeText(block.text, 90) };
-  if (outline) return { kind: 'outline', label: '当前大纲', title: outline.title, detail: summarizeText(outline.goal, 90) };
-  return { kind: 'task-card', label: '当前任务卡', title: article.taskCard.topic, detail: summarizeText(article.taskCard.writingGoal, 90) };
+  if (target === 'new' || !article?.taskCard) return { kind: 'new-task', label: '当前位置', title: '新任务', detail: '当前输入会用于创建新的任务卡。', contextText: '' };
+  if (block) {
+    return {
+      kind: 'paragraph',
+      label: '当前段落',
+      title: block.title || block.id,
+      detail: summarizeText(block.text, 90),
+      contextText: formatParagraphContext(block),
+    };
+  }
+  if (outline) {
+    return {
+      kind: 'outline',
+      label: '当前大纲',
+      title: outline.title,
+      detail: summarizeText(outline.goal, 90),
+      contextText: formatOutlineContext(outline),
+    };
+  }
+  return {
+    kind: 'task-card',
+    label: '当前任务卡',
+    title: article.taskCard.topic,
+    detail: summarizeText(article.taskCard.writingGoal, 90),
+    contextText: formatTaskCardContext(article.taskCard),
+  };
 }
 
 function contextualizeDialogInstruction(instruction: string, context: DialogContext): string {
   if (context.kind === 'new-task') return instruction;
-  return [`当前对话上下文：${context.label}`, `标题：${context.title}`, `摘要：${context.detail}`, '', `用户意见：${instruction}`].join('\n');
+  return [`当前对话上下文：${context.label}`, `标题：${context.title}`, '完整上下文：', context.contextText || context.detail, '', `用户意见：${instruction}`].join('\n');
 }
 
 function appendPromptAnswer(current: string, question: string, answer: string): string {
@@ -943,6 +964,42 @@ function summarizeText(value: string, maxLength: number): string {
   const text = value.replace(/\s+/g, ' ').trim();
   if (!text) return '暂无摘要。';
   return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
+}
+
+function formatTaskCardContext(taskCard: WritingTaskCard): string {
+  return [
+    `主题：${taskCard.topic}`,
+    `写作目标：${taskCard.writingGoal}`,
+    `读者：${taskCard.audience}`,
+    `写作标准：${taskCard.topRules?.summary || joinList(taskCard.topRules?.writingStandards) || '未指定'}`,
+    `范围：版本 ${joinList(taskCard.scope.editions) || '未指定'}；章节 ${joinList(taskCard.scope.chapters) || '未指定'}；人物 ${joinList(taskCard.scope.characters) || '未指定'}；主题 ${joinList(taskCard.scope.themes) || '未指定'}`,
+    `结构：${taskCard.structure.articleType}；${taskCard.structure.expectedLength}${taskCard.structure.outlinePreference ? `；${taskCard.structure.outlinePreference}` : ''}`,
+    `风格：${taskCard.style.register}；${taskCard.style.tone}${taskCard.style.characterVoice ? `；${taskCard.style.characterVoice}` : ''}`,
+    `必须包含：${joinList(taskCard.constraints.mustInclude) || '无'}`,
+    `必须避免：${joinList(taskCard.constraints.mustAvoid) || '无'}`,
+    `来源策略：${taskCard.constraints.sourcePolicy}`,
+  ].join('\n');
+}
+
+function formatOutlineContext(outline: ArticleArtifact['outline'][number]): string {
+  return [
+    `大纲标题：${outline.title}`,
+    `写作目标：${outline.goal}`,
+    `预计正文块数：${outline.expectedBlocks}`,
+    `来源线索：${joinList(outline.sourceHints) || '无'}`,
+    `主题标签：${joinList(outline.themeTags) || '无'}`,
+    `状态：${outline.status}`,
+  ].join('\n');
+}
+
+function formatParagraphContext(block: ArticleBlock): string {
+  return [
+    `段落标题：${block.title || block.id}`,
+    `段落正文：${block.text}`,
+    `引用来源：${joinList(block.sourceRefs) || '无'}`,
+    `主题标签：${joinList(block.themeTags) || '无'}`,
+    `状态：${block.status}`,
+  ].join('\n');
 }
 
 function singleSelection(value: string | string[] | undefined): string {

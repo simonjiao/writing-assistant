@@ -303,27 +303,29 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   z-index: 2;
 }
 .dialog-context {
-  display: grid;
-  gap: 3px;
-  padding: 9px 11px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 10px;
+  overflow: hidden;
   border: 1px solid #d8dde6;
-  border-radius: 10px;
+  border-radius: 999px;
   background: #fffdf8;
 }
 .dialog-context span {
+  flex: 0 0 auto;
   color: #6f665b;
   font-size: 12px;
 }
 .dialog-context strong {
+  min-width: 0;
+  overflow: hidden;
   color: #18202a;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.35;
-}
-.dialog-context p {
-  margin: 0;
-  color: #4d5966;
-  font-size: 12px;
-  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dialog-context.context-paragraph {
   border-color: #d8c8aa;
