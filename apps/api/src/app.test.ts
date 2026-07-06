@@ -3,10 +3,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { WritingTaskCard } from '@wa/core';
+import { DialogueBrief, WritingTaskCard } from '@wa/core';
 import { createApp } from './app';
 import { createContainer } from './bootstrap';
 import { AppConfig } from './config';
+import { mergeDialogueBrief } from './dialogueBrief';
 
 let dataDir: string | undefined;
 afterEach(async () => { if (dataDir) await rm(dataDir, { recursive: true, force: true }); dataDir = undefined; });
@@ -555,6 +556,12 @@ describe('api app', () => {
   it('answers dialogue questions without mutating article artifacts', async () => {
     const config = testConfig();
     const container = createContainer(config);
+    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
+    const invokedSkills: string[] = [];
+    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+      invokedSkills.push(skillId);
+      return originalInvokeSkill(skillId as never, input as never, meta as never);
+    }) as typeof container.runtime.invokeSkill;
     const app = createApp(config, container);
     const now = new Date().toISOString();
     const taskCard: WritingTaskCard = {
@@ -594,6 +601,8 @@ describe('api app', () => {
     const messagesResponse = await app.inject({ method: 'GET', url: `/api/articles/${article.id}/dialogue/messages?userId=dialogue-answer-user` });
     expect(messagesResponse.statusCode).toBe(200);
     expect(messagesResponse.json()).toHaveLength(2);
+    expect(invokedSkills).toEqual([]);
+    expect(await container.stores.dialogueBriefStore.getBrief(article.id, 'dialogue-answer-user')).toBeUndefined();
     await app.close();
   });
 
@@ -721,6 +730,87 @@ describe('api app', () => {
     expect(await container.stores.revisionProposalStore.listPendingProposals(article.id, 'dialogue-json-failure-user')).toHaveLength(0);
     expect(body.messages.map((message: { role: string }) => message.role)).toEqual(['user', 'assistant']);
     await app.close();
+  });
+
+  it('sends compact dialogue brief to the coordinator instead of full assistant history', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
+    let coordinatorInput: { conversation?: Array<{ role: string; content: string }>; conversationBrief?: DialogueBrief } | undefined;
+    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+      if (skillId === 'dialogue-coordinator') {
+        coordinatorInput = input as typeof coordinatorInput;
+        return { mode: 'proposal', message: '准备更新大纲。', summary: '修订大纲', operations: [{ type: 'revise-outline', instruction: '补充大闹厨房等关键情节。' }], warnings: [] };
+      }
+      return originalInvokeSkill(skillId as never, input as never, meta as never);
+    }) as typeof container.runtime.invokeSkill;
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-dialogue-brief',
+      topic: '司棋人物文章',
+      writingGoal: '撰写司棋人物文章。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: ['司棋'], themes: ['司棋'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-brief-user', name: '对话摘要工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-brief-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    article.outline = [{ id: 'sec-brief-1', title: '旧大纲', goal: '旧目标。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }];
+    await container.stores.artifactStore.updateArticle(article);
+    const longRagReply = `查到 4 条相关资料：${'司棋脂批资料'.repeat(300)}`;
+    await container.stores.dialogueMessageStore.createMessage({ articleId: article.id, userId: 'dialogue-brief-user', contextKind: 'task-card', role: 'assistant', content: longRagReply });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-brief-user', message: '需要补充大闹厨房情节', context: { kind: 'outline' } },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(coordinatorInput).toBeDefined();
+    expect(JSON.stringify(coordinatorInput)).not.toContain('司棋脂批资料司棋脂批资料');
+    expect(coordinatorInput?.conversation?.map((item) => item.role)).toEqual(['user']);
+    expect(coordinatorInput?.conversationBrief?.recentUserIntents.at(-1)?.text).toContain('大闹厨房');
+    expect(coordinatorInput?.conversationBrief?.activeRequirements.at(-1)?.text).toContain('大闹厨房');
+    await app.close();
+  });
+
+  it('lets newer conflicting dialogue requirements supersede older ones by default', () => {
+    const now = new Date().toISOString();
+    const brief: DialogueBrief = {
+      id: 'brief-test',
+      articleId: 'art-brief',
+      userId: 'brief-user',
+      activeRequirements: [],
+      evidenceNotes: [],
+      recentUserIntents: [],
+      unresolvedConflicts: [],
+      supersededRequirements: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    const first = mergeDialogueBrief(brief, { activeRequirements: [{ kind: 'avoidance', text: '不要写潘又安' }], evidenceNotes: [], recentUserIntents: ['不要写潘又安'], supersededRequirements: [], conflicts: [] }, 'outline', 'msg-1');
+    const replacedByLatest = mergeDialogueBrief(first, { activeRequirements: [{ kind: 'requirement', text: '重点写潘又安' }], evidenceNotes: [], recentUserIntents: ['重点写潘又安'], supersededRequirements: [], conflicts: [] }, 'outline', 'msg-2');
+    expect(replacedByLatest.activeRequirements.map((item) => item.text)).toContain('重点写潘又安');
+    expect(replacedByLatest.activeRequirements.map((item) => item.text)).not.toContain('不要写潘又安');
+    expect(replacedByLatest.supersededRequirements.map((item) => item.text)).toContain('不要写潘又安');
+    expect(replacedByLatest.unresolvedConflicts).toHaveLength(0);
+
+    const replaced = mergeDialogueBrief(first, { activeRequirements: [{ kind: 'requirement', text: '改为重点写潘又安' }], evidenceNotes: [], recentUserIntents: ['改为重点写潘又安'], supersededRequirements: [], conflicts: [] }, 'outline', 'msg-3');
+    expect(replaced.activeRequirements.map((item) => item.text)).toContain('改为重点写潘又安');
+    expect(replaced.supersededRequirements.map((item) => item.text)).toContain('不要写潘又安');
+    expect(replaced.unresolvedConflicts).toHaveLength(0);
+
+    const explicitConflict = mergeDialogueBrief(first, { activeRequirements: [], evidenceNotes: [], recentUserIntents: ['既要重点写潘又安又不要写潘又安'], supersededRequirements: [], conflicts: [{ text: '当前消息内部要求冲突', requirements: ['重点写潘又安', '不要写潘又安'] }] }, 'outline', 'msg-4');
+    expect(explicitConflict.activeRequirements.map((item) => item.text)).toContain('不要写潘又安');
+    expect(explicitConflict.unresolvedConflicts[0].requirements).toEqual(['重点写潘又安', '不要写潘又安']);
   });
 
   it('records section revisions with readable section titles', async () => {
@@ -874,6 +964,8 @@ describe('api app', () => {
     const pending = await container.stores.revisionProposalStore.listPendingProposals(article.id, 'dialogue-source-discussion-user');
     expect(pending).toHaveLength(1);
     expect(pending[0].id).toBe(proposal.id);
+    const brief = await container.stores.dialogueBriefStore.getBrief(article.id, 'dialogue-source-discussion-user');
+    expect(brief?.activeRequirements.at(-1)?.text).toContain('脂批内容');
     await app.close();
     await retriever.close();
   });

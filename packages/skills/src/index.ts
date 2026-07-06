@@ -1,4 +1,5 @@
 export * from './task-card-builder';
+export * from './dialogue-brief-updater';
 export * from './dialogue-coordinator';
 export * from './dialogue-router';
 export * from './task-card-reviser';

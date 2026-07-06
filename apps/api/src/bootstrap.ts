@@ -2,6 +2,7 @@ import {
   AgentRuntime,
   ArtifactStore,
   DefaultContextBuilder,
+  DialogueBriefStore,
   DialogueMessageStore,
   END,
   EventBus,
@@ -30,7 +31,7 @@ import {
 } from '@wa/core';
 import { registerDefaultSkills } from '@wa/skills';
 import { AppConfig } from './config';
-import { SqliteArtifactStore, SqliteDialogueMessageStore, SqliteEventTraceStore, SqliteKnowledgeStore, SqliteMemoryStore, SqliteRevisionProposalStore, SqliteSessionStore, SqliteStateStore, SqliteWorkspaceStore } from './stores/sqliteStores';
+import { SqliteArtifactStore, SqliteDialogueBriefStore, SqliteDialogueMessageStore, SqliteEventTraceStore, SqliteKnowledgeStore, SqliteMemoryStore, SqliteRevisionProposalStore, SqliteSessionStore, SqliteStateStore, SqliteWorkspaceStore } from './stores/sqliteStores';
 import { HttpRagKnowledgeStore } from './stores/httpRagKnowledgeStore';
 import { TonglingyuRetrieverKnowledgeStore } from './stores/tonglingyuRetrieverKnowledgeStore';
 import { RedisWorkflowQueue } from './queue/redisWorkflowQueue';
@@ -54,6 +55,7 @@ interface StoreBundle {
   artifactStore: ArtifactStore;
   revisionProposalStore: RevisionProposalStore;
   dialogueMessageStore: DialogueMessageStore;
+  dialogueBriefStore: DialogueBriefStore;
   localKnowledgeStore: KnowledgeStore;
   eventTraceStore: EventTraceStore;
   close?: () => Promise<void>;
@@ -64,7 +66,7 @@ export function createContainer(config: AppConfig): AppContainer {
   const eventBus: EventBus = new InMemoryEventBus();
   const eventTraceStore = new PublishingEventTraceStore(base.eventTraceStore, eventBus) as EventTraceStore;
   const knowledgeStore = createKnowledgeStore(config, base.localKnowledgeStore, eventTraceStore);
-  const stores: ExternalStores = { stateStore: base.stateStore, sessionStore: base.sessionStore, memoryStore: base.memoryStore, workspaceStore: base.workspaceStore, artifactStore: base.artifactStore, revisionProposalStore: base.revisionProposalStore, dialogueMessageStore: base.dialogueMessageStore, knowledgeStore, eventTraceStore };
+  const stores: ExternalStores = { stateStore: base.stateStore, sessionStore: base.sessionStore, memoryStore: base.memoryStore, workspaceStore: base.workspaceStore, artifactStore: base.artifactStore, revisionProposalStore: base.revisionProposalStore, dialogueMessageStore: base.dialogueMessageStore, dialogueBriefStore: base.dialogueBriefStore, knowledgeStore, eventTraceStore };
 
   const llm = config.llmProvider === 'openai-compatible' ? new OpenAICompatibleProvider({ baseURL: config.openaiBaseURL, apiKey: config.openaiApiKey, model: config.openaiModel }) : new MockLLMProvider();
   const skills = registerDefaultSkills(new SkillRegistry());
@@ -86,6 +88,7 @@ function createStores(config: AppConfig): StoreBundle {
   const artifactStore = new SqliteArtifactStore(config.dataDir);
   const revisionProposalStore = new SqliteRevisionProposalStore(config.dataDir);
   const dialogueMessageStore = new SqliteDialogueMessageStore(config.dataDir);
+  const dialogueBriefStore = new SqliteDialogueBriefStore(config.dataDir);
   const localKnowledgeStore = new SqliteKnowledgeStore(config.dataDir);
   const eventTraceStore = new SqliteEventTraceStore(config.dataDir);
   return {
@@ -96,6 +99,7 @@ function createStores(config: AppConfig): StoreBundle {
     artifactStore,
     revisionProposalStore,
     dialogueMessageStore,
+    dialogueBriefStore,
     localKnowledgeStore,
     eventTraceStore,
     async close() {
@@ -106,6 +110,7 @@ function createStores(config: AppConfig): StoreBundle {
       artifactStore.close();
       revisionProposalStore.close();
       dialogueMessageStore.close();
+      dialogueBriefStore.close();
       localKnowledgeStore.close();
       eventTraceStore.close();
     },

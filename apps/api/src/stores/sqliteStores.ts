@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { AgentEvent, ArticleArtifact, ArticleVersion, ArtifactStore, DialogueMessage, DialogueMessageStore, EventTraceStore, KnowledgeItem, KnowledgeSearchOptions, KnowledgeStore, MemoryStore, newId, nowIso, RevisionProposal, RevisionProposalStore, Session, SessionStore, StateStore, TextPatch, UserWritingProfile, WorkspaceStore, WritingWorkspace, WorkflowRun } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleVersion, ArtifactStore, DialogueBrief, DialogueBriefStore, DialogueMessage, DialogueMessageStore, EventTraceStore, KnowledgeItem, KnowledgeSearchOptions, KnowledgeStore, MemoryStore, newId, nowIso, RevisionProposal, RevisionProposalStore, Session, SessionStore, StateStore, TextPatch, UserWritingProfile, WorkspaceStore, WritingWorkspace, WorkflowRun } from '@wa/core';
 import knowledgeSeedRules from '../rules/knowledge-seeds.json';
 import { SqliteJsonDb } from './sqliteJsonDb';
 
@@ -82,6 +82,14 @@ export class SqliteDialogueMessageStore implements DialogueMessageStore {
   close() { this.db.close(); }
 }
 
+export class SqliteDialogueBriefStore implements DialogueBriefStore {
+  private readonly db: SqliteJsonDb<DialogueBrief>;
+  constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'dialogue_briefs'); }
+  getBrief(articleId: string, userId: string) { return this.db.get(dialogueBriefId(articleId, userId)); }
+  saveBrief(brief: DialogueBrief) { return this.db.upsert({ ...brief, id: dialogueBriefId(brief.articleId, brief.userId), updatedAt: nowIso() }); }
+  close() { this.db.close(); }
+}
+
 export class SqliteKnowledgeStore implements KnowledgeStore {
   private readonly db: SqliteJsonDb<KnowledgeItem>;
   constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'knowledge'); }
@@ -89,6 +97,10 @@ export class SqliteKnowledgeStore implements KnowledgeStore {
   async listByRefs(sourceRefs: string[]) { await this.seedIfEmpty(); const refs = new Set(sourceRefs); return (await this.db.list()).filter((item) => refs.has(item.sourceRef)); }
   private async seedIfEmpty() { if ((await this.db.list()).length > 0) return; const now = nowIso(); const seeds = knowledgeSeedRules as Array<Omit<KnowledgeItem, 'createdAt'>>; for (const seed of seeds) await this.db.upsert({ ...seed, createdAt: now }); }
   close() { this.db.close(); }
+}
+
+function dialogueBriefId(articleId: string, userId: string): string {
+  return `brief_${articleId}_${userId}`;
 }
 
 export class SqliteEventTraceStore implements EventTraceStore {

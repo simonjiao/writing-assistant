@@ -1,10 +1,11 @@
-import { ArticleBlock, DialogueContextKind, OutlineItem, RevisionOperation, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
+import { ArticleBlock, DialogueBrief, DialogueContextKind, OutlineItem, RevisionOperation, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
 
 export interface DialogueCoordinatorInput {
   articleId: string;
   message: string;
   skipKnowledge?: boolean;
   conversation?: Array<{ role: 'user' | 'assistant'; content: string; proposalId?: string; createdAt: string }>;
+  conversationBrief?: DialogueBrief;
   pendingProposal?: { id: string; summary: string; message: string; operations: RevisionOperation[]; warnings: string[] };
   context: {
     kind: DialogueContextKind;
@@ -68,12 +69,13 @@ export class DialogueCoordinatorSkill implements Skill<DialogueCoordinatorInput,
             articleId: input.articleId,
             message,
             conversation: input.conversation ?? [],
+            conversationBrief: input.conversationBrief ? compactBrief(input.conversationBrief) : undefined,
             pendingProposal: input.pendingProposal,
             context: input.context,
-            taskCard: input.taskCard,
+            taskCard: input.taskCard ? compactTaskCard(input.taskCard) : undefined,
             outline: input.outline.map((item) => ({ id: item.id, title: item.title, goal: item.goal, order: item.order, status: item.status })),
             selectedOutlineItem: input.selectedOutlineItem,
-            selectedBlock: input.selectedBlock ? { id: input.selectedBlock.id, title: input.selectedBlock.title, text: input.selectedBlock.text, status: input.selectedBlock.status } : undefined,
+            selectedBlock: input.selectedBlock ? { id: input.selectedBlock.id, title: input.selectedBlock.title, text: compactText(input.selectedBlock.text, 1200), status: input.selectedBlock.status } : undefined,
             memory: context.memory,
             requiredOutputShape: {
               mode: 'answer | clarify | proposal',
@@ -92,6 +94,45 @@ export class DialogueCoordinatorSkill implements Skill<DialogueCoordinatorInput,
     if (!parsed) throw new Error(`Dialogue coordinator did not return valid JSON: ${response.content.slice(0, 300)}`);
     return normalizeOutput(parsed, input);
   }
+}
+
+function compactBrief(brief: DialogueBrief): DialogueBrief {
+  return {
+    ...brief,
+    activeRequirements: brief.activeRequirements.slice(-8).map((item) => ({ ...item, text: compactText(item.text) })),
+    evidenceNotes: brief.evidenceNotes.slice(-6).map((item) => ({ ...item, text: compactText(item.text) })),
+    recentUserIntents: brief.recentUserIntents.slice(-6).map((item) => ({ ...item, text: compactText(item.text) })),
+    unresolvedConflicts: brief.unresolvedConflicts.slice(-4).map((item) => ({
+      ...item,
+      text: compactText(item.text),
+      requirements: item.requirements.map((entry) => compactText(entry)).slice(0, 4),
+      sourceMessageIds: item.sourceMessageIds.slice(-4),
+    })),
+    supersededRequirements: brief.supersededRequirements.slice(-6).map((item) => ({ ...item, text: compactText(item.text) })),
+  };
+}
+
+function compactTaskCard(taskCard: WritingTaskCard) {
+  return {
+    topic: taskCard.topic,
+    writingGoal: compactText(taskCard.writingGoal, 240),
+    audience: taskCard.audience,
+    topRules: taskCard.topRules ? { languageEra: taskCard.topRules.languageEra, summary: taskCard.topRules.summary, writingStandards: taskCard.topRules.writingStandards.slice(0, 4) } : undefined,
+    scope: taskCard.scope,
+    structure: taskCard.structure,
+    style: taskCard.style,
+    constraints: {
+      mustInclude: taskCard.constraints.mustInclude.slice(-8),
+      mustAvoid: taskCard.constraints.mustAvoid.slice(-8),
+      citationRequired: taskCard.constraints.citationRequired,
+      sourcePolicy: compactText(taskCard.constraints.sourcePolicy, 240),
+    },
+    status: taskCard.status,
+  };
+}
+
+function compactText(value: string, limit = 180): string {
+  return value.replace(/\s+/g, ' ').trim().slice(0, limit);
 }
 
 function normalizeOutput(output: Partial<DialogueCoordinatorOutput>, input: DialogueCoordinatorInput): DialogueCoordinatorOutput {

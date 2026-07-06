@@ -166,6 +166,42 @@ export interface DialogueMessage {
   createdAt: string;
 }
 
+export type DialogueBriefItemKind = 'requirement' | 'avoidance' | 'source' | 'preference' | 'revision' | 'evidence' | 'intent';
+export type DialogueBriefItemStatus = 'active' | 'superseded';
+
+export interface DialogueBriefItem {
+  id: string;
+  kind: DialogueBriefItemKind;
+  text: string;
+  status: DialogueBriefItemStatus;
+  contextKind?: DialogueContextKind;
+  sourceMessageId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DialogueBriefConflict {
+  id: string;
+  text: string;
+  requirements: string[];
+  sourceMessageIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DialogueBrief {
+  id: string;
+  articleId: string;
+  userId: string;
+  activeRequirements: DialogueBriefItem[];
+  evidenceNotes: DialogueBriefItem[];
+  recentUserIntents: DialogueBriefItem[];
+  unresolvedConflicts: DialogueBriefConflict[];
+  supersededRequirements: DialogueBriefItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Session {
   id: string;
   userId: string;

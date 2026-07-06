@@ -5,6 +5,7 @@ import { AgentEvent, ArticleArtifact, ArticleBlock, DialogueContextKind, Dialogu
 import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
+import { addKnowledgeEvidenceToBrief, buildCompactDialogueConversation, compactDialogueBriefForPrompt, updateDialogueBriefForUserMessage } from './dialogueBrief';
 import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfileSummaries, recommendDomainProfiles, resolveDomainProfileSelection } from './domainProfiles';
 import { getWritingStandardDisplaySummary, getWritingStandardSummary, resolveWritingStandardSelection, WritingStandardSelectionRequest } from './writingStandards';
 
@@ -215,18 +216,23 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const context = resolveDialogueContext(access.article, body.context);
     if (!context.ok) return reply.code(context.statusCode).send({ error: context.error });
     if (route === 'clarify') route = await refineDialogueRoute(container, access.article, userId, body.sessionId, message, context.value.context, Boolean(pendingProposal));
-    await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'user', content: message, proposalId: pendingProposal?.id });
-    const conversation = await listDialogueMessages(container, access.article.id, userId, 12);
+    const userMessage = await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'user', content: message, proposalId: pendingProposal?.id });
+    const conversation = await listDialogueMessages(container, access.article.id, userId, 24);
     if (route === 'answer' || route === 'clarify' || route === 'discuss') {
+      if (shouldUpdateDialogueBrief(route, message, pendingProposal)) {
+        await updateDialogueBriefForUserMessage({ container, article: access.article, userId, sessionId: body.sessionId, message: userMessage, context: { kind: context.value.context.kind, title: context.value.context.title } });
+      }
       const assistantMessage = localDialogueReply(route, context.value.context, pendingProposal);
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id });
       return { mode: route, message: assistantMessage, messages: await listDialogueMessages(container, access.article.id, userId) };
     }
     if (route === 'needs-rag') {
-      const assistantMessage = await answerWithKnowledge(container, access.article, context.value.context, message);
-      await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id });
-      return { mode: 'answer', message: assistantMessage, messages: await listDialogueMessages(container, access.article.id, userId) };
+      const knowledgeAnswer = await answerWithKnowledge(container, access.article, context.value.context, message);
+      await addKnowledgeEvidenceToBrief({ container, articleId: access.article.id, userId, query: knowledgeAnswer.query, items: knowledgeAnswer.items });
+      await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: knowledgeAnswer.message, proposalId: pendingProposal?.id });
+      return { mode: 'answer', message: knowledgeAnswer.message, messages: await listDialogueMessages(container, access.article.id, userId) };
     }
+    const conversationBrief = await updateDialogueBriefForUserMessage({ container, article: access.article, userId, sessionId: body.sessionId, message: userMessage, context: { kind: context.value.context.kind, title: context.value.context.title } });
     let result: DialogueCoordinatorOutput;
     try {
       result = await container.runtime.invokeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
@@ -235,7 +241,8 @@ export function createApp(config: AppConfig, container: AppContainer) {
           articleId: access.article.id,
           message,
           skipKnowledge: true,
-          conversation: conversation.map((item) => ({ role: item.role, content: item.content, proposalId: item.proposalId, createdAt: item.createdAt })),
+          conversation: buildCompactDialogueConversation(conversation),
+          conversationBrief: compactDialogueBriefForPrompt(conversationBrief),
           pendingProposal: pendingProposal ? proposalForDialogue(pendingProposal) : undefined,
           context: context.value.context,
           taskCard: access.article.taskCard,
@@ -452,18 +459,24 @@ function routeDialogueMessage(message: string, pendingProposal?: RevisionProposa
   return 'clarify';
 }
 
+function shouldUpdateDialogueBrief(route: DialogueRoute, message: string, pendingProposal?: RevisionProposal): boolean {
+  if (route === 'propose') return true;
+  if (route === 'discuss' && pendingProposal && isModificationIntent(message)) return true;
+  return false;
+}
+
 function localDialogueReply(route: DialogueRoute, context: DialogueCoordinatorInput['context'], pendingProposal?: RevisionProposal): string {
   if (route === 'answer') return `这是关于「${context.title}」的只读说明，不会修改当前任务。若要改动，请直接说明要改成什么。`;
   if (route === 'discuss' && pendingProposal) return '已记录这条意见，暂不刷新当前修改方案。需要合并这些意见时，可以点击“更新方案”，或直接说“按以上意见更新方案”。';
   return `我还不能判断要修改「${context.title}」的哪一部分。请说明要修改、添加、删除，还是只是讨论想法。`;
 }
 
-async function answerWithKnowledge(container: AppContainer, article: ArticleArtifact, context: DialogueCoordinatorInput['context'], message: string): Promise<string> {
+async function answerWithKnowledge(container: AppContainer, article: ArticleArtifact, context: DialogueCoordinatorInput['context'], message: string): Promise<{ message: string; query: string; items: KnowledgeItem[] }> {
   const spec = knowledgeSearchSpec(article, message);
   const items = await container.stores.knowledgeStore.search(spec.query, spec.options);
-  if (!items.length) return '没有查到足够相关的资料。可以换一种问法，或明确要查的原文、脂批、章节或人物。';
+  if (!items.length) return { message: '没有查到足够相关的资料。可以换一种问法，或明确要查的原文、脂批、章节或人物。', query: spec.query, items };
   const lines = items.map((item, index) => `${index + 1}. ${knowledgeItemLabel(item)}`);
-  return [`查到 ${items.length} 条相关资料，可以作为后续修改或写作依据：`, ...lines, '如果要把这些资料合并进当前修改方案，请说“按这些资料更新方案”。'].join('\n');
+  return { message: [`查到 ${items.length} 条相关资料，可以作为后续修改或写作依据：`, ...lines, '如果要把这些资料合并进当前修改方案，请说“按这些资料更新方案”。'].join('\n'), query: spec.query, items };
 }
 
 function knowledgeSearchSpec(article: ArticleArtifact, message: string): { query: string; options: KnowledgeSearchOptions } {
@@ -560,7 +573,7 @@ function isProposalRefreshRequest(message: string): boolean {
 }
 
 function isModificationIntent(message: string): boolean {
-  return /(改|修改|调整|删|删除|加|添加|新增|重写|扩写|压缩|不要|避免|改成|改为|换成|补充|合并|拆分|包含|纳入|加入|写进|放进|体现|保留|漏掉|遗漏|参考|使用|采用|沿用|突出|强调|弱化|去掉|移除)/.test(message);
+  return /(改|修改|调整|删|删除|加|添加|新增|重写|扩写|压缩|不要|避免|改成|改为|换成|补充|合并|拆分|包含|纳入|加入|写进|放进|体现|保留|漏掉|遗漏|参考|使用|采用|沿用|突出|强调|弱化|去掉|移除|需要|必须|重点)/.test(message);
 }
 
 function isDialogueCoordinatorJsonFailure(error: unknown): boolean {

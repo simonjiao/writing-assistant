@@ -71,6 +71,9 @@ export class MockLLMProvider implements LLMProvider {
       const instruction = String(payload.instruction ?? '修订任务卡');
       return { content: JSON.stringify(mockTaskCardRevision(currentTaskCard, instruction)), raw: { provider: 'mock' } };
     }
+    if (request.jsonMode && system.includes('对话上下文摘要器')) {
+      return { content: JSON.stringify(mockDialogueBriefPatch(payload)), raw: { provider: 'mock' } };
+    }
     if (request.jsonMode && system.includes('轻量路由器')) {
       return { content: JSON.stringify(mockDialogueRoute(payload)), raw: { provider: 'mock' } };
     }
@@ -195,6 +198,47 @@ function mockDialogueRoute(payload: Record<string, any>) {
   return { route: 'clarify' };
 }
 
+function mockDialogueBriefPatch(payload: Record<string, any>) {
+  const message = String(payload.message ?? '').trim();
+  const activeTexts = Array.isArray(payload.currentBrief?.activeRequirements) ? payload.currentBrief.activeRequirements.map(String) : [];
+  const currentItem = mockBriefItem(message);
+  const supersededRequirements = currentItem
+    ? activeTexts.filter((item: string) => mockRequirementsConflict(item, currentItem.text))
+    : [];
+  return {
+    activeRequirements: currentItem ? [currentItem] : [],
+    evidenceNotes: [],
+    recentUserIntents: message ? [message] : [],
+    supersededRequirements,
+    conflicts: [],
+  };
+}
+
+function mockBriefItem(message: string): { kind: string; text: string } | undefined {
+  if (!mockIsModificationIntent(message) && !/(需要|必须|重点|资料|引用|来源|参考|脂批|批语)/.test(message)) return undefined;
+  const kind = /(不要|避免|别|不写|去掉|移除)/.test(message) ? 'avoidance' : (/(资料|引用|来源|参考|脂批|批语)/.test(message) ? 'source' : 'requirement');
+  return { kind, text: message.slice(0, 120) };
+}
+
+function mockRequirementsConflict(left: string, right: string): boolean {
+  if (mockPolarity(left) === mockPolarity(right)) return false;
+  const leftTerms = mockRequirementTerms(left);
+  const rightTerms = mockRequirementTerms(right);
+  return leftTerms.some((term) => rightTerms.includes(term));
+}
+
+function mockPolarity(text: string): 'negative' | 'positive' {
+  return /(不要|避免|别|不写|去掉|移除)/.test(text) ? 'negative' : 'positive';
+}
+
+function mockRequirementTerms(text: string): string[] {
+  return [...new Set(text
+    .replace(/不要|避免|别|不写|去掉|移除|需要|必须|重点|包含|加入|补充|写|写入|纳入|关于|可以|但是|然后|以及|还有|故事情节/g, ' ')
+    .split(/[\s，,。.!！?？、；;：:《》“”"']+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 2 && item.length <= 12))];
+}
+
 function mockNeedsKnowledgeSearch(message: string): boolean {
   const hasKnowledgeTarget = /(资料|文本|原文|出处|引用|脂批|批语|批注|评语|第[一二三四五六七八九十百0-9几哪]+回|哪[一几]回|证据|知识库|来源|根据文本)/.test(message);
   const hasExplicitSearchIntent = /(查|查找|检索|搜索|找|找出|列出|给出|有哪些|有哪|哪里|在哪|哪[一几]回|第几回|第[一二三四五六七八九十百0-9]+回)/.test(message);
@@ -202,7 +246,7 @@ function mockNeedsKnowledgeSearch(message: string): boolean {
 }
 
 function mockIsModificationIntent(message: string): boolean {
-  return /(改|修改|调整|删|删除|加|添加|新增|重写|扩写|压缩|不要|避免|改成|改为|换成|补充|合并|拆分|包含|纳入|加入|写进|放进|体现|保留|漏掉|遗漏|参考|使用|采用|沿用|突出|强调|弱化|去掉|移除)/.test(message);
+  return /(改|修改|调整|删|删除|加|添加|新增|重写|扩写|压缩|不要|避免|改成|改为|换成|补充|合并|拆分|包含|纳入|加入|写进|放进|体现|保留|漏掉|遗漏|参考|使用|采用|沿用|突出|强调|弱化|去掉|移除|需要|必须|重点)/.test(message);
 }
 
 function mockDialogueCoordination(payload: Record<string, any>) {
