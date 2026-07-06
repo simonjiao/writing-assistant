@@ -1,4 +1,4 @@
-import { ArticleBlock, KnowledgeItem, newId, nowIso, OutlineItem, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
+import { ArticleArtifact, ArticleBlock, KnowledgeItem, newId, nowIso, OutlineItem, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
 import { filterKnowledgeByTaskCardPolicy, normalizeTaskCardPolicies, validateGeneratedTextAgainstTaskCardPolicy } from './task-card-policy';
 import { findAvoidedTermsInText } from './writing-constraints';
 
@@ -37,6 +37,8 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
   async invoke({ input, context, llm }: Parameters<Skill<SectionWriterInput, SectionWriterOutput>['invoke']>[0]): Promise<SectionWriterOutput> {
     const taskCard = normalizeTaskCardPolicies(input.taskCard).taskCard;
     const knowledge = filterKnowledgeByTaskCardPolicy(context.knowledge, taskCard);
+    const writingContinuity = buildWritingContinuity(input, context.article, knowledge);
+    const sectionKnowledge = prioritizeSectionKnowledge(knowledge, writingContinuity);
     const writingBudget = buildSectionWritingBudget(taskCard, context.article?.outline.length ?? 1);
     const response = await llm.chat({
       jsonMode: true,
@@ -57,6 +59,10 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
             '每个自然段优先给出判断句，再解释这个判断，再用少量材料作证，最后回到本节论点。',
             '如果大纲或资料带有复述倾向，先把它转化为分析问题，再写成观点驱动的正文。',
             '本次只写当前章节，不写整篇文章；必须遵守 writingBudget 的当前章节字数范围。',
+            '必须把本节写成整篇文章的一环：承接 writingContinuity 中的前文推进，不要重新介绍已经写过的判断。',
+            '不要重复 writingContinuity.recentBlocks 中已有的观点、例证和批语；同一来源已被前文使用时，优先改用 unusedSourceRefs 中的来源。',
+            '提到非本节核心人物、事件或批语时，必须在同句或邻近句交代它与本节论点的关系，不能只抛出名字。',
+            '正文凡提到原文、回目、脂批、批语、引文或具体来源依据，对应 block.sourceRefs 必须绑定 knowledge 中的 sourceRef。',
             'taskCard.topRules.writingStandards 是顶部写作规则，优先级高于普通风格偏好、资料口吻和大纲措辞。',
             '如有 taskCard.topRules.replacementHints，必须优先采用 prefer 中的替代表达，不要使用 avoid 中的词。',
             '必须遵守 taskCard.constraints.mustAvoid；不得使用其中明示的禁用词、禁用说法，以及括号中“如/例如/比如”列出的词。',
@@ -70,7 +76,8 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
             taskCard,
             section: input.section,
             contextSummary: context.compactSummary,
-            knowledge,
+            knowledge: sectionKnowledge,
+            writingContinuity,
             writingBudget,
             sourceUsePolicy: {
               useSourcesAsEvidenceOnly: true,
@@ -90,7 +97,7 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
     });
     const parsed = safeJsonParse<SectionWriterRawOutput>(response.content);
     if (!parsed?.block?.text && !parsed?.blocks?.some((block) => block.text)) throw new Error(`Section writer did not return a valid block: ${response.content.slice(0, 300)}`);
-    return normalizeOutput(parsed, { ...input, taskCard }, knowledge, writingBudget);
+    return normalizeOutput(parsed, { ...input, taskCard }, sectionKnowledge, writingBudget, writingContinuity);
   }
 }
 
@@ -103,16 +110,26 @@ interface SectionWritingBudget {
   policy: string;
 }
 
-function normalizeOutput(output: SectionWriterRawOutput, input: SectionWriterInput, knowledge: KnowledgeItem[], writingBudget: SectionWritingBudget): SectionWriterOutput {
+interface WritingContinuity {
+  currentSection: { id: string; order: number; title: string; goal: string };
+  previousSections: Array<{ id: string; order: number; title: string }>;
+  nextSection?: { id: string; order: number; title: string };
+  recentBlocks: Array<{ sectionTitle: string; text: string; sourceRefs: string[] }>;
+  usedSourceRefs: Array<{ sourceRef: string; count: number; sections: string[] }>;
+  unusedSourceRefs: string[];
+  policy: string[];
+}
+
+function normalizeOutput(output: SectionWriterRawOutput, input: SectionWriterInput, knowledge: KnowledgeItem[], writingBudget: SectionWritingBudget, writingContinuity: WritingContinuity): SectionWriterOutput {
   const now = nowIso();
   const candidateSources = optionalStringArray(output.candidateSources, 'candidateSources') ?? [];
   const blocks = normalizeBlockOutputs(output, input).map((sourceBlock, index) => {
-    const sourceRefs = optionalStringArray(sourceBlock.sourceRefs, `blocks[${index}].sourceRefs`) ?? candidateSources;
+    const sourceRefs = uniqueStrings(optionalStringArray(sourceBlock.sourceRefs, `blocks[${index}].sourceRefs`) ?? candidateSources);
     return {
       id: sourceBlock.id ?? newId('blk'),
       type: 'section' as const,
       sectionId: input.section.id,
-      title: sourceBlock.title ?? input.section.title,
+      title: typeof sourceBlock.title === 'string' && sourceBlock.title.trim() ? sourceBlock.title.trim() : (index === 0 ? input.section.title : undefined),
       text: requireText(sourceBlock.text, `blocks[${index}].text`),
       sourceRefs,
       themeTags: optionalStringArray(sourceBlock.themeTags, `blocks[${index}].themeTags`) ?? input.section.themeTags,
@@ -125,7 +142,9 @@ function normalizeOutput(output: SectionWriterRawOutput, input: SectionWriterInp
   validateLengthBudget(combinedText, writingBudget);
   validateAvoidedTerms(combinedText, input.taskCard.constraints.mustAvoid);
   validateGeneratedTextAgainstTaskCardPolicy(combinedText, input.taskCard, knowledge, blocks.flatMap((block) => block.sourceRefs));
+  validateSourceReferences(blocks, input.taskCard, knowledge, writingContinuity);
   validateSourceUse(combinedText, knowledge);
+  validateArticleContinuity(combinedText, writingContinuity);
   const block = blocks[0];
   return {
     block,
@@ -133,6 +152,52 @@ function normalizeOutput(output: SectionWriterRawOutput, input: SectionWriterInp
     candidateSources: candidateSources.length ? candidateSources : [...new Set(blocks.flatMap((item) => item.sourceRefs))],
     summary: requireText(output.summary, 'summary'),
   };
+}
+
+function buildWritingContinuity(input: SectionWriterInput, article: ArticleArtifact | undefined, knowledge: KnowledgeItem[]): WritingContinuity {
+  const outline = [...(article?.outline ?? [])].sort((a, b) => a.order - b.order);
+  const currentIndex = outline.findIndex((item) => item.id === input.section.id);
+  const previousSections = (currentIndex > 0 ? outline.slice(0, currentIndex) : []).map((item) => ({ id: item.id, order: item.order, title: item.title }));
+  const next = currentIndex >= 0 ? outline[currentIndex + 1] : undefined;
+  const sectionTitleById = new Map(outline.map((item) => [item.id, item.title]));
+  const priorBlocks = (article?.blocks ?? []).filter((block) => block.sectionId !== input.section.id);
+  const recentBlocks = priorBlocks.slice(-4).map((block) => ({
+    sectionTitle: block.sectionId ? sectionTitleById.get(block.sectionId) ?? block.title ?? block.sectionId : block.title ?? '前文',
+    text: block.text.slice(0, 240),
+    sourceRefs: block.sourceRefs,
+  }));
+  const used = new Map<string, { sourceRef: string; count: number; sections: Set<string> }>();
+  for (const block of priorBlocks) {
+    const sectionTitle = block.sectionId ? sectionTitleById.get(block.sectionId) ?? block.sectionId : block.title ?? '前文';
+    for (const sourceRef of block.sourceRefs ?? []) {
+      const item = used.get(sourceRef) ?? { sourceRef, count: 0, sections: new Set<string>() };
+      item.count += 1;
+      item.sections.add(sectionTitle);
+      used.set(sourceRef, item);
+    }
+  }
+  const availableRefs = uniqueStrings(knowledge.map((item) => item.sourceRef));
+  return {
+    currentSection: { id: input.section.id, order: input.section.order, title: input.section.title, goal: input.section.goal },
+    previousSections,
+    nextSection: next ? { id: next.id, order: next.order, title: next.title } : undefined,
+    recentBlocks,
+    usedSourceRefs: [...used.values()].map((item) => ({ sourceRef: item.sourceRef, count: item.count, sections: [...item.sections].slice(0, 4) })).sort((a, b) => b.count - a.count),
+    unusedSourceRefs: availableRefs.filter((sourceRef) => !used.has(sourceRef)),
+    policy: [
+      '本节只推进当前章节目标，不重写前文已经完成的介绍或判断。',
+      '优先使用前文尚未使用的来源；必须复用来源时，要换一个分析角度，不能重复同一句批语或同一处情节。',
+      '引入旁支人物或事件时，先交代它和当前论点的关系，再分析其意义。',
+    ],
+  };
+}
+
+function prioritizeSectionKnowledge(knowledge: KnowledgeItem[], writingContinuity: WritingContinuity): KnowledgeItem[] {
+  const used = new Set(writingContinuity.usedSourceRefs.map((item) => item.sourceRef));
+  return [
+    ...knowledge.filter((item) => !used.has(item.sourceRef)),
+    ...knowledge.filter((item) => used.has(item.sourceRef)),
+  ];
 }
 
 function normalizeBlockOutputs(output: SectionWriterRawOutput, input: SectionWriterInput): Array<Partial<ArticleBlock>> {
@@ -195,6 +260,35 @@ function validateAvoidedTerms(text: string, mustAvoid: string[]): void {
   }
 }
 
+function validateSourceReferences(blocks: ArticleBlock[], taskCard: WritingTaskCard, knowledge: KnowledgeItem[], writingContinuity: WritingContinuity): void {
+  const availableRefs = new Set(knowledge.map((item) => item.sourceRef));
+  const usedRefs = new Set(writingContinuity.usedSourceRefs.map((item) => item.sourceRef));
+  const hasUnusedAvailable = writingContinuity.unusedSourceRefs.length > 0;
+  for (const block of blocks) {
+    const refs = uniqueStrings(block.sourceRefs ?? []);
+    const unknownRefs = knowledge.length ? refs.filter((sourceRef) => !availableRefs.has(sourceRef)) : [];
+    if (unknownRefs.length) throw new Error(`Section writer returned sourceRefs not present in knowledge: ${unknownRefs.join('、')}.`);
+    if ((taskCard.constraints.citationRequired || containsSourceSignal(block.text)) && !refs.length) {
+      throw new Error('Section writer referenced source-backed material without sourceRefs.');
+    }
+    if (refs.length && hasUnusedAvailable && refs.every((sourceRef) => usedRefs.has(sourceRef))) {
+      throw new Error('Section writer reused only previously used sourceRefs while unused sources were available.');
+    }
+  }
+}
+
+function validateArticleContinuity(text: string, writingContinuity: WritingContinuity): void {
+  const normalizedText = normalizeForOverlap(text);
+  if (normalizedText.length < 80) return;
+  for (const block of writingContinuity.recentBlocks) {
+    const normalizedPrevious = normalizeForOverlap(block.text);
+    if (normalizedPrevious.length < 80) continue;
+    if (hasSharedWindow(normalizedText, normalizedPrevious, 70)) {
+      throw new Error(`Section writer repeated too much previous prose from ${block.sectionTitle}.`);
+    }
+  }
+}
+
 function validateSourceUse(text: string, knowledge: KnowledgeItem[]): void {
   validateQuoteBalance(text);
   const normalizedText = normalizeForOverlap(text);
@@ -206,6 +300,10 @@ function validateSourceUse(text: string, knowledge: KnowledgeItem[]): void {
       throw new Error(`Section writer reused too much source text from ${item.sourceRef}.`);
     }
   }
+}
+
+function containsSourceSignal(text: string): boolean {
+  return /第[一二三四五六七八九十百零〇\d]+回|脂批|脂砚|脂评|批语|原文|回目|判词|引文|引语|书中(?:写|说|道)|作者(?:写|说|道)|[“「『][^”」』]{3,}[”」』]/.test(text);
 }
 
 function validateQuoteBalance(text: string): void {
@@ -247,4 +345,8 @@ function hasSharedWindow(a: string, b: string, windowSize: number): boolean {
     if (windows.has(b.slice(i, i + windowSize))) return true;
   }
   return false;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((item) => item.trim()).filter(Boolean))];
 }

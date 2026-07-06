@@ -45,6 +45,16 @@ const knowledge: KnowledgeItem[] = [{
   createdAt: new Date().toISOString(),
 }];
 
+const secondKnowledge: KnowledgeItem = {
+  id: 'k3',
+  title: '另一条测试资料',
+  content: '另一条材料用于支撑后续章节的新角度，避免每一节都重复同一条依据。',
+  sourceType: 'retriever',
+  sourceRef: 'test:k3',
+  themeTags: ['测试主题'],
+  createdAt: new Date().toISOString(),
+};
+
 const disallowedKnowledge: KnowledgeItem = {
   id: 'k2',
   title: '程高本后40回材料',
@@ -94,11 +104,15 @@ describe('SectionWriterSkill', () => {
       }, calls),
     });
     const system = calls[0].messages.find((message) => message.role === 'system')?.content ?? '';
-    const user = JSON.parse(calls[0].messages.find((message) => message.role === 'user')?.content ?? '{}') as { sourceUsePolicy?: { prohibitedModes?: string[] }; writingBudget?: { targetChars?: number; maxChars?: number } };
+    const user = JSON.parse(calls[0].messages.find((message) => message.role === 'user')?.content ?? '{}') as { sourceUsePolicy?: { prohibitedModes?: string[] }; writingBudget?: { targetChars?: number; maxChars?: number }; writingContinuity?: { currentSection?: { title?: string }; policy?: string[] } };
     expect(system).toContain('不是翻译、改写、转述、复述');
     expect(system).toContain('观点驱动');
+    expect(system).toContain('整篇文章的一环');
+    expect(system).toContain('block.sourceRefs 必须绑定');
     expect(user.sourceUsePolicy?.prohibitedModes).toEqual(['translation', 'paraphrase', 'retelling', 'source-summary']);
     expect(user.writingBudget).toMatchObject({ targetChars: 300, maxChars: 405 });
+    expect(user.writingContinuity?.currentSection?.title).toBe('测试章节');
+    expect(user.writingContinuity?.policy?.join('；')).toContain('前文尚未使用的来源');
     expect(calls[0].maxTokens).toBeUndefined();
   });
 
@@ -175,6 +189,56 @@ describe('SectionWriterSkill', () => {
     expect(output.block.text).toContain('正文重点仍在解释材料');
   });
 
+  it('rejects source-backed claims without sourceRefs', async () => {
+    const skill = new SectionWriterSkill();
+    await expect(skill.invoke({
+      input: { articleId: 'art_1', section, taskCard },
+      context: context(),
+      llm: llmReturning({
+        block: {
+          text: '脂批点出此处另有深意，本段据此展开分析，但没有绑定任何来源。',
+          sourceRefs: [],
+          themeTags: ['测试主题'],
+        },
+        summary: '已生成正文。',
+      }),
+    })).rejects.toThrow('without sourceRefs');
+  });
+
+  it('rejects reused-only sourceRefs when unused sources are available', async () => {
+    const skill = new SectionWriterSkill();
+    await expect(skill.invoke({
+      input: { articleId: 'art_1', section, taskCard },
+      context: {
+        knowledge: [...knowledge, secondKnowledge],
+        compactSummary: '',
+        article: {
+          outline: articleOutline,
+          blocks: [{
+            id: 'blk_old',
+            type: 'section',
+            sectionId: 'sec_0',
+            title: '前一节',
+            text: '前文已经使用过第一条测试资料说明论点。',
+            sourceRefs: ['test:k1'],
+            themeTags: ['测试主题'],
+            status: 'draft',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          }],
+        },
+      } as never,
+      llm: llmReturning({
+        block: {
+          text: '本段仍然只围绕旧材料展开判断，虽然还有新的材料可用。',
+          sourceRefs: ['test:k1'],
+          themeTags: ['测试主题'],
+        },
+        summary: '已生成正文。',
+      }),
+    })).rejects.toThrow('reused only previously used sourceRefs');
+  });
+
   it('does not require duplicate top-level candidateSources when block sourceRefs are present', async () => {
     const skill = new SectionWriterSkill();
     const output = await skill.invoke({
@@ -216,6 +280,8 @@ describe('SectionWriterSkill', () => {
     });
     expect(output.blocks).toHaveLength(2);
     expect(output.block.text).toContain('第一段');
+    expect(output.blocks[0].title).toBe('测试章节');
+    expect(output.blocks[1].title).toBeUndefined();
     expect(output.candidateSources).toEqual(['test:k1']);
   });
 

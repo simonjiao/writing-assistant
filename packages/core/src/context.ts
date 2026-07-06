@@ -58,10 +58,20 @@ export class DefaultContextBuilder implements ContextBuilder {
       session?.currentBlockId;
     const selectedBlock = article?.blocks.find((block) => block.id === blockId);
 
+    const sectionInput = readRecord(objectInput.section);
+    const sectionThemeTags = stringArray(sectionInput?.themeTags);
+    const sectionSourceHints = stringArray(sectionInput?.sourceHints);
+    const sectionQueryParts = [
+      typeof sectionInput?.title === 'string' ? sectionInput.title : undefined,
+      typeof sectionInput?.goal === 'string' ? sectionInput.goal : undefined,
+      ...sectionSourceHints,
+    ];
+
     const skipKnowledge = objectInput.skipKnowledge === true;
     const queryParts = skipKnowledge ? [] : [
       article?.taskCard?.topic,
       article?.taskCard?.writingGoal,
+      ...sectionQueryParts,
       selectedBlock?.text,
       typeof objectInput.instruction === 'string' ? objectInput.instruction : undefined,
       typeof objectInput.rawRequirement === 'string' ? objectInput.rawRequirement : undefined,
@@ -69,12 +79,13 @@ export class DefaultContextBuilder implements ContextBuilder {
 
     const knowledge = queryParts.length
       ? await this.deps.knowledgeStore.search(queryParts.join('\n'), {
-          limit: 6,
-          themeTags: selectedBlock?.themeTags,
+          limit: sectionInput ? 8 : 6,
+          themeTags: sectionThemeTags.length ? sectionThemeTags : selectedBlock?.themeTags,
+          keywordQueries: sectionSourceHints.length ? sectionSourceHints : undefined,
         })
       : [];
 
-    const scope = selectedBlock ? 'paragraph' : article ? 'article' : 'article';
+    const scope = selectedBlock ? 'paragraph' : sectionInput ? 'section' : article ? 'article' : 'article';
 
     return {
       userId: input.userId,
@@ -86,13 +97,14 @@ export class DefaultContextBuilder implements ContextBuilder {
       knowledge,
       scope,
       skillId: input.skillId,
-      compactSummary: this.compactSummary({ article, selectedBlock, memory, knowledge }),
+      compactSummary: this.compactSummary({ article, selectedBlock, section: sectionInput, memory, knowledge }),
     };
   }
 
   private compactSummary(input: {
     article?: ArticleArtifact;
     selectedBlock?: ArticleArtifact['blocks'][number];
+    section?: Record<string, unknown>;
     memory: UserWritingProfile;
     knowledge: KnowledgeItem[];
   }): string {
@@ -100,12 +112,21 @@ export class DefaultContextBuilder implements ContextBuilder {
       ? `Article: ${input.article.title}; outline=${input.article.outline.length}; blocks=${input.article.blocks.length}`
       : 'Article: none';
     const selected = input.selectedBlock ? `Selected block: ${input.selectedBlock.id}` : 'Selected block: none';
+    const section = input.section ? `Current section: ${String(input.section.title ?? '')}; goal=${String(input.section.goal ?? '')}` : 'Current section: none';
     const memory = `User preferences: ${[
       ...input.memory.stylePreferences,
       ...input.memory.structurePreferences,
       ...input.memory.editPreferences,
     ].join('；')}`;
     const knowledge = `Knowledge items: ${input.knowledge.map((item) => item.title).join('；')}`;
-    return [articleSummary, selected, memory, knowledge].join('\n');
+    return [articleSummary, selected, section, memory, knowledge].join('\n');
   }
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim()) : [];
 }
