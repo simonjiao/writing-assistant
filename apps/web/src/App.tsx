@@ -10,6 +10,7 @@ const navigationCollapsedStorageKey = 'writing-assistant.navigation-collapsed';
 const supportColumnCollapsedStorageKey = 'writing-assistant.support-column-collapsed';
 type SectionGenerationState = { sectionId: string; runId?: string; status: WorkflowRun['status'] | 'starting'; error?: string };
 type TaskCardTarget = 'current' | 'new';
+type DialogContext = { kind: 'new-task' | 'task-card' | 'outline' | 'paragraph'; label: string; title: string; detail: string };
 
 export function App() {
   const [sessionId, setSessionId] = useState<string>();
@@ -113,6 +114,7 @@ export function App() {
   useEffect(() => () => window.clearTimeout(progressDismissTimer.current), []);
 
   const selectedBlock = useMemo(() => visibleArticle?.blocks.find((block) => block.id === selectedBlockId), [visibleArticle, selectedBlockId]);
+  const selectedOutline = useMemo(() => visibleArticle?.outline.find((item) => item.id === selectedOutlineId), [visibleArticle, selectedOutlineId]);
   const unassignedBlocks = useMemo(() => {
     if (visibleArticle?.outline.length) return [];
     const outlineIds = new Set(visibleArticle?.outline.map((item) => item.id) ?? []);
@@ -133,6 +135,7 @@ export function App() {
   const taskCardFollowUpPrompts = useMemo(() => visibleArticle?.taskCard?.status === 'draft' ? taskCardPrompts(visibleArticle.taskCard) : [], [visibleArticle?.taskCard]);
   const hasWritingBlocks = Boolean(visibleArticle?.blocks.length);
   const outlineGenerated = Boolean(visibleArticle?.outline.length);
+  const dialogContext = useMemo(() => buildDialogContext(taskCardDialogTarget, visibleArticle, selectedOutline, selectedBlock), [taskCardDialogTarget, visibleArticle, selectedOutline, selectedBlock]);
 
   function applyRunResponse(response: RunResponse) {
     setLastRun(response);
@@ -343,7 +346,12 @@ export function App() {
       }
       return;
     }
-    await reviseTaskCard(message);
+    if (visibleArticle && selectedBlock) {
+      const response = await execute(() => api.startPatch(visibleArticle.id, selectedBlock.id, message, userId, sessionId));
+      if (response) setCurrentTaskMessage('');
+      return;
+    }
+    await reviseTaskCard(contextualizeDialogInstruction(message, dialogContext));
   }
   function submitTaskCardMessageWithKeyboard(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -432,7 +440,7 @@ export function App() {
             <div className="history-list">{articleSummaries.length ? articleSummaries.map((item) => <div className={visibleArticle?.id === item.id ? 'history-row active' : 'history-row'} key={item.id}><button className="history-item" disabled={busy} onClick={() => void openArticle(item.id)}><strong>{item.title}</strong><span>{taskStatusLabel(item.taskStatus)} · {item.outlineCount}纲 · {item.blockCount}节</span><span>{new Date(item.updatedAt).toLocaleString()}</span></button><button aria-label={`删除 ${item.title}`} className="history-delete" disabled={busy} title="删除任务" onClick={() => void deleteArticle(item.id)}>×</button></div>) : <div className="empty">当前工作台暂无历史任务。</div>}</div>
           </>}
         </aside>
-        {taskCardConfirmed ? <aside className="panel task-card-panel">
+        {taskCardConfirmed ? <aside className={dialogContext.kind === 'task-card' ? 'panel task-card-panel selected' : 'panel task-card-panel'} onClick={() => { setTaskCardTarget('current'); setSelectedBlockId(undefined); setSelectedOutlineId(undefined); }}>
           <h2>任务卡</h2>
           {visibleArticle.taskCard ? <TaskCardView taskCard={visibleArticle.taskCard} /> : null}
           {visibleArticle && canGenerateOutline && <button disabled={busy} onClick={() => execute(() => api.startOutline(visibleArticle.id, userId, sessionId))}>{visibleArticle.outline.length ? '重新生成大纲' : '生成大纲'}</button>}
@@ -466,15 +474,16 @@ export function App() {
           <div className="task-dialog-panel">
             {article?.taskCard ? <div className="task-dialog-toolbar">
               <div className="task-target-toggle" role="radiogroup" aria-label="任务卡目标">
-              <button type="button" role="radio" aria-checked={taskCardDialogTarget === 'current'} className={taskCardDialogTarget === 'current' ? 'active' : ''} disabled={busy} onClick={() => { setTaskCardTarget('current'); setSelectedBlockId(undefined); }}>{taskCardDialogTarget === 'new' ? '前一个任务' : '当前任务'}</button>
-              <button type="button" role="radio" aria-checked={taskCardDialogTarget === 'new'} className={taskCardDialogTarget === 'new' ? 'active' : ''} disabled={busy} onClick={() => { setTaskCardTarget('new'); setSelectedBlockId(undefined); setLastRun(undefined); setLiveEvents([]); setProgressVisible(false); }}>新任务</button>
+              <button type="button" role="radio" aria-checked={taskCardDialogTarget === 'current'} className={taskCardDialogTarget === 'current' ? 'active' : ''} disabled={busy} onClick={() => { setTaskCardTarget('current'); setSelectedBlockId(undefined); setSelectedOutlineId(undefined); }}>{taskCardDialogTarget === 'new' ? '前一个任务' : '当前任务'}</button>
+              <button type="button" role="radio" aria-checked={taskCardDialogTarget === 'new'} className={taskCardDialogTarget === 'new' ? 'active' : ''} disabled={busy} onClick={() => { setTaskCardTarget('new'); setSelectedBlockId(undefined); setSelectedOutlineId(undefined); setLastRun(undefined); setLiveEvents([]); setProgressVisible(false); }}>新任务</button>
               </div>
-              <span>{taskCardDialogTarget === 'new' ? '尚未创建' : article.taskCard.topic}</span>
+              <span>{dialogContext.title}</span>
             </div> : null}
             {taskCardDialogTarget === 'current' && taskCardFollowUpPrompts.length ? <TaskCardGuidance prompts={taskCardFollowUpPrompts} onChooseOption={chooseTaskCardPromptOption} /> : null}
             {taskCardDialogTarget === 'new' ? <NewTaskGuidance writingStandard={writingStandard} selectedLanguageEra={selectedLanguageEra} onSelectLanguageEra={setSelectedLanguageEra} domainProfiles={domainProfiles} recommendations={domainProfileRecommendations} selectedProfileId={selectedProfileId} selections={profileSelections} onSelectProfile={selectProfile} onUpdateGroup={updateProfileGroup} /> : null}
+            <DialogContextView context={dialogContext} />
             <div className="task-dialog-input-row">
-              <textarea value={activeTaskCardMessage} onChange={(event) => setActiveTaskCardMessage(event.target.value)} onKeyDown={submitTaskCardMessageWithKeyboard} placeholder={taskCardPlaceholder(taskCardDialogTarget, taskCardFollowUpPrompts)} />
+              <textarea value={activeTaskCardMessage} onChange={(event) => setActiveTaskCardMessage(event.target.value)} onKeyDown={submitTaskCardMessageWithKeyboard} placeholder={dialogPlaceholder(dialogContext)} />
               <button className={busy ? 'send-button processing' : 'send-button'} aria-label={busy ? '处理中' : '发送'} aria-busy={busy ? true : undefined} title={busy ? '处理中' : '发送'} disabled={busy || !canSubmitTaskCardMessage} onClick={() => void submitTaskCardMessage()}>↑</button>
             </div>
           </div>
@@ -522,6 +531,16 @@ function TaskCardGuidance(props: { prompts: TaskCardFollowUpPrompt[]; onChooseOp
         <div className="task-guidance-question">{prompt.question}</div>
         {prompt.options.length ? <div className="task-guidance-options">{prompt.options.map((option) => <button type="button" className="task-guidance-option" key={option} onClick={() => props.onChooseOption(prompt, option)}>{option}</button>)}</div> : null}
       </div>)}
+    </div>
+  );
+}
+
+function DialogContextView(props: { context: DialogContext }) {
+  return (
+    <div className={`dialog-context context-${props.context.kind}`}>
+      <span>{props.context.label}</span>
+      <strong>{props.context.title}</strong>
+      <p>{props.context.detail}</p>
     </div>
   );
 }
@@ -885,14 +904,34 @@ function taskCardPrompts(taskCard: WritingTaskCard): TaskCardFollowUpPrompt[] {
   return (taskCard.interactionMode.followUpQuestions ?? []).filter((question) => question.trim()).slice(0, 3).map((question, index) => ({ id: `question-${index + 1}`, question, options: [], allowCustom: true }));
 }
 
+function buildDialogContext(target: TaskCardTarget, article?: ArticleArtifact, outline?: ArticleArtifact['outline'][number], block?: ArticleBlock): DialogContext {
+  if (target === 'new' || !article?.taskCard) return { kind: 'new-task', label: '新任务', title: '尚未创建', detail: '当前输入会用于创建新的任务卡。' };
+  if (block) return { kind: 'paragraph', label: '当前段落', title: block.title || block.id, detail: summarizeText(block.text, 90) };
+  if (outline) return { kind: 'outline', label: '当前大纲', title: outline.title, detail: summarizeText(outline.goal, 90) };
+  return { kind: 'task-card', label: '当前任务卡', title: article.taskCard.topic, detail: summarizeText(article.taskCard.writingGoal, 90) };
+}
+
+function contextualizeDialogInstruction(instruction: string, context: DialogContext): string {
+  if (context.kind === 'new-task') return instruction;
+  return [`当前对话上下文：${context.label}`, `标题：${context.title}`, `摘要：${context.detail}`, '', `用户意见：${instruction}`].join('\n');
+}
+
 function appendPromptAnswer(current: string, question: string, answer: string): string {
   const line = `${question}：${answer}`;
   return current.trim() ? `${current.trim()}\n${line}` : line;
 }
 
-function taskCardPlaceholder(target: TaskCardTarget, _prompts: TaskCardFollowUpPrompt[]): string {
-  if (target === 'new') return '输入写作需求，创建新的任务卡。';
-  return '对当前任务的修改意见';
+function dialogPlaceholder(context: DialogContext): string {
+  if (context.kind === 'new-task') return '输入写作需求，创建新的任务卡。';
+  if (context.kind === 'paragraph') return '对当前段落的修改意见';
+  if (context.kind === 'outline') return '围绕当前大纲提出修改意见';
+  return '对当前任务卡的修改意见';
+}
+
+function summarizeText(value: string, maxLength: number): string {
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (!text) return '暂无摘要。';
+  return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
 }
 
 function singleSelection(value: string | string[] | undefined): string {

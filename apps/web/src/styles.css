@@ -255,6 +255,10 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   gap: 12px;
   max-height: calc(100vh - 84px);
 }
+.task-card-panel.selected {
+  border-color: #9ca3af;
+  box-shadow: 0 0 0 2px rgba(31, 41, 55, 0.08);
+}
 .empty { color: #8a8176; font-size: 14px; }
 .editor-panel {
   display: flex;
@@ -294,6 +298,36 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   color: #6f665b;
   font-size: 12px;
   text-align: right;
+}
+.dialog-context {
+  display: grid;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 1px solid #d8dde6;
+  border-radius: 10px;
+  background: #fffdf8;
+}
+.dialog-context span {
+  color: #6f665b;
+  font-size: 12px;
+}
+.dialog-context strong {
+  color: #18202a;
+  font-size: 14px;
+  line-height: 1.35;
+}
+.dialog-context p {
+  margin: 0;
+  color: #4d5966;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.dialog-context.context-paragraph {
+  border-color: #d8c8aa;
+  background: #fff8e7;
+}
+.dialog-context.context-outline {
+  border-color: #d8c8aa;
 }
 .task-target-toggle {
   justify-self: start;
