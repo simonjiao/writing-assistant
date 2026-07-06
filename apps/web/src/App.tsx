@@ -40,6 +40,7 @@ export function App() {
   const [liveEvents, setLiveEvents] = useState<AgentEvent[]>([]);
   const [progressVisible, setProgressVisible] = useState(false);
   const [editingOutline, setEditingOutline] = useState<{ id: string; title: string; goal: string }>();
+  const [selectedOutlineId, setSelectedOutlineId] = useState<string>();
   const [collapsedOutlineIds, setCollapsedOutlineIds] = useState<string[]>([]);
   const [collapsedBlockIds, setCollapsedBlockIds] = useState<string[]>([]);
   const [sectionGeneration, setSectionGeneration] = useState<SectionGenerationState>();
@@ -103,6 +104,7 @@ export function App() {
   useEffect(() => {
     setCollapsedOutlineIds([]);
     setCollapsedBlockIds([]);
+    setSelectedOutlineId(undefined);
     setSectionGeneration(undefined);
     setTaskCardTarget(article?.taskCard ? 'current' : 'new');
     setCurrentTaskMessage('');
@@ -443,16 +445,17 @@ export function App() {
             const isEditing = editingOutline?.id === item.id;
             const sectionBlocks = visibleArticle.blocks.filter((block) => block.sectionId === item.id);
             const outlineCollapsed = !isEditing && collapsedOutlineIds.includes(item.id);
+            const outlineSelected = selectedOutlineId === item.id || isEditing;
             return (
-              <div className={outlineCollapsed ? 'outline-item collapsed' : 'outline-item'} key={item.id}>
-                {isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div className="outline-main"><div className="outline-heading"><button type="button" className="collapse-button" aria-label={outlineCollapsed ? `展开 ${item.title}` : `折叠 ${item.title}`} title={outlineCollapsed ? '展开' : '折叠'} onClick={() => toggleOutlineCollapsed(item.id)}>{outlineCollapsed ? '>' : 'v'}</button><div className="outline-title"><strong>{item.title}</strong><span>{outlineStatusLabel(item.status)}{sectionBlocks.length ? ` · ${sectionBlocks.length} 段正文` : ''}</span></div></div>{outlineCollapsed ? null : <p>{item.goal}</p>}</div>}
-                <div className="outline-actions">{isEditing ? <><button disabled={busy || !editingOutline.title.trim() || !editingOutline.goal.trim()} onClick={() => void saveOutlineEdit()}>保存</button><button disabled={busy} onClick={() => setEditingOutline(undefined)}>取消</button></> : <><button disabled={busy} onClick={() => setEditingOutline({ id: item.id, title: item.title, goal: item.goal })}>编辑</button><button disabled={busy} onClick={() => void startSectionGeneration(item.id)}>{sectionBlocks.length ? '重新生成本节' : '生成本节'}</button></>}</div>
+              <div className={['outline-item', outlineCollapsed ? 'collapsed' : '', outlineSelected ? 'selected' : ''].filter(Boolean).join(' ')} key={item.id} onClick={() => { setSelectedOutlineId(item.id); setSelectedBlockId(undefined); }}>
+                {isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div className="outline-main"><div className="outline-heading"><button type="button" className="collapse-button" aria-label={outlineCollapsed ? `展开 ${item.title}` : `折叠 ${item.title}`} title={outlineCollapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); setSelectedOutlineId(item.id); toggleOutlineCollapsed(item.id); }}>{outlineCollapsed ? '>' : 'v'}</button><div className="outline-title"><strong>{item.title}</strong><span>{outlineStatusLabel(item.status)}{sectionBlocks.length ? ` · ${sectionBlocks.length} 段正文` : ''}</span></div></div>{outlineCollapsed ? null : <p>{item.goal}</p>}</div>}
+                <OutlineActionBar isEditing={isEditing} busy={busy} canSave={Boolean(editingOutline?.title.trim() && editingOutline.goal.trim())} hasSectionBlocks={Boolean(sectionBlocks.length)} onSave={() => void saveOutlineEdit()} onCancel={() => setEditingOutline(undefined)} onEdit={() => { setSelectedOutlineId(item.id); setEditingOutline({ id: item.id, title: item.title, goal: item.goal }); }} onGenerate={() => void startSectionGeneration(item.id)} />
                 {!outlineCollapsed && progressVisible && sectionGeneration?.sectionId === item.id ? <GenerationProgressView progress={sectionGeneration} events={liveEvents} /> : null}
-                {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={setSelectedBlockId} onToggleBlockCollapse={toggleBlockCollapsed} /> : null}
+                {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={(blockId) => { setSelectedBlockId(blockId); setSelectedOutlineId(undefined); }} onToggleBlockCollapse={toggleBlockCollapsed} /> : null}
               </div>
             );
           })}</div> : null}
-          <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => setSelectedBlockId(block.id)} onToggleCollapse={() => toggleBlockCollapsed(block.id)} />)}</div>
+          <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} />)}</div>
           {!outlineGenerated ? <div className="editor-support">
             {hasWritingBlocks ? <KnowledgeTagsCard selectedBlock={selectedBlock} /> : null}
             <RevisionLogCard article={visibleArticle} />
@@ -540,6 +543,28 @@ function NewTaskGuidance(props: {
       <div className="task-guidance-head"><strong>待确认项</strong><span>新任务设置</span></div>
       {props.writingStandard ? <div className="task-guidance-item"><WritingStandardControls standard={props.writingStandard} selectedLanguageEra={props.selectedLanguageEra} onSelectLanguageEra={props.onSelectLanguageEra} /></div> : null}
       {props.domainProfiles.length ? <div className="task-guidance-item"><DomainProfileControls profiles={props.domainProfiles} recommendations={props.recommendations} selectedProfileId={props.selectedProfileId} selections={props.selections} onSelectProfile={props.onSelectProfile} onUpdateGroup={props.onUpdateGroup} /></div> : null}
+    </div>
+  );
+}
+
+function OutlineActionBar(props: { isEditing: boolean; busy: boolean; canSave: boolean; hasSectionBlocks: boolean; onSave: () => void; onCancel: () => void; onEdit: () => void; onGenerate: () => void }) {
+  if (props.isEditing) {
+    return (
+      <div className="outline-toolbar editing" onClick={(event) => event.stopPropagation()}>
+        <button type="button" className="outline-tool primary" disabled={props.busy || !props.canSave} onClick={props.onSave}><span aria-hidden="true">✓</span>保存</button>
+        <button type="button" className="outline-tool" disabled={props.busy} onClick={props.onCancel}><span aria-hidden="true">×</span>取消</button>
+      </div>
+    );
+  }
+  return (
+    <div className="outline-toolbar" onClick={(event) => event.stopPropagation()}>
+      <button type="button" className="outline-tool" disabled={props.busy} onClick={props.onEdit}><span aria-hidden="true">✎</span>修改</button>
+      <button type="button" className="outline-tool" disabled title="需要接入大纲扩写流程"><span aria-hidden="true">↗</span>扩写</button>
+      <button type="button" className="outline-tool" disabled title="需要接入大纲压缩流程"><span aria-hidden="true">▣</span>压缩</button>
+      <button type="button" className="outline-tool" disabled title="需要接入解释流程"><span aria-hidden="true">＋</span>解释</button>
+      <button type="button" className="outline-tool" disabled={props.busy || !props.hasSectionBlocks} title={props.hasSectionBlocks ? '重新生成本节' : '本节生成后可重写'} onClick={props.onGenerate}><span aria-hidden="true">↻</span>重写</button>
+      <button type="button" className="outline-tool" disabled={props.busy || props.hasSectionBlocks} title={props.hasSectionBlocks ? '续写流程尚未接入' : '生成本节'} onClick={props.onGenerate}><span aria-hidden="true">▷</span>{props.hasSectionBlocks ? '继续' : '生成'}</button>
+      <button type="button" className="outline-tool" disabled title="更多操作稍后接入"><span aria-hidden="true">…</span>更多</button>
     </div>
   );
 }
