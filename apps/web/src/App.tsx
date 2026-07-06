@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
-import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleSummary, DialogueBriefStatus, DialogueContextKind, DialogueMessage, DialogueResponse, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RevisionOperation, RevisionProposal, RunResponse, TaskCardFollowUpPrompt, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, ArticleSummary, DialogueBriefStatus, DialogueContextKind, DialogueMessage, DialogueResponse, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RevisionOperation, RevisionProposal, RunResponse, TaskCardFollowUpPrompt, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
 
 const userId = 'demo-user';
 const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']);
@@ -12,6 +12,7 @@ type SectionGenerationState = { sectionId: string; runId?: string; status: Workf
 type TaskCardTarget = 'current' | 'new';
 type DialogContext = { kind: 'new-task' | 'task-card' | 'outline' | 'outline-item' | 'paragraph'; label: string; title: string; detail: string; contextText: string; outlineItemId?: string; blockId?: string };
 type TaskCardPromptAnswer = { prompt: TaskCardFollowUpPrompt; answer: string };
+type CommentDraft = { blockId: string; selectedText: string; comment: string };
 
 export function App() {
   const [sessionId, setSessionId] = useState<string>();
@@ -40,6 +41,8 @@ export function App() {
   const [lastRun, setLastRun] = useState<RunResponse>();
   const [selectedBlockId, setSelectedBlockId] = useState<string>();
   const [patchInstruction, setPatchInstruction] = useState('这段写得更含蓄、更有红楼梦的味道，但不要改变意思。');
+  const [commentDraft, setCommentDraft] = useState<CommentDraft>();
+  const [commentProcessingSummary, setCommentProcessingSummary] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [liveEvents, setLiveEvents] = useState<AgentEvent[]>([]);
@@ -160,6 +163,8 @@ export function App() {
     setDialogueResponse(undefined);
     setDialogueMessages([]);
     setDialogueBriefStatus(undefined);
+    setCommentDraft(undefined);
+    setCommentProcessingSummary(undefined);
     setProposalDirty(false);
     setOutlineRegenerationWarningOpen(false);
     void refreshDialogueProposals(article?.id).catch(() => setPendingProposals([]));
@@ -192,14 +197,18 @@ export function App() {
   const outlineGenerated = Boolean(visibleArticle?.outline.length);
   const dialogContext = useMemo(() => buildDialogContext(taskCardDialogTarget, visibleArticle, outlineWholeSelected, selectedOutline, selectedBlock), [taskCardDialogTarget, visibleArticle, outlineWholeSelected, selectedOutline, selectedBlock]);
   const activeDialogueProposal = dialogueResponse?.proposal?.status === 'pending' ? dialogueResponse.proposal : pendingProposals[0];
+  const workflowActive = Boolean(lastRun && activeStatuses.has(lastRun.run.status));
+  const statusBusy = busy || workflowActive;
+  const writeBusy = busy || workflowActive;
 
   function applyRunResponse(response: RunResponse) {
     setLastRun(response);
     setProgressVisible(true);
     window.clearTimeout(progressDismissTimer.current);
     if (response.article) {
-      setArticle(response.article);
-      setSelectedWorkspaceId(response.article.workspaceId);
+      const updatedArticle = response.article;
+      setArticle((current) => (!current || current.id === updatedArticle.id || taskCardDialogTarget === 'new') ? updatedArticle : current);
+      setSelectedWorkspaceId((current) => (!article || article.id === updatedArticle.id || taskCardDialogTarget === 'new') ? updatedArticle.workspaceId : current);
       void refreshArticleSummaries(response.article.workspaceId).catch((err) => setError(err instanceof Error ? err.message : String(err)));
     }
     if (response.run.workflowId === 'section-writing-workflow') {
@@ -213,7 +222,7 @@ export function App() {
     }
     else if (activeStatuses.has(response.run.status)) { activeRunId.current = response.run.id; scheduleRunRefresh(response.run.id, runRefreshIntervalMs); }
   }
-  function scheduleRunRefresh(runId: string, delayMs = 200) { window.clearTimeout(refreshTimer.current); refreshTimer.current = window.setTimeout(() => { void api.getRun(runId).then((response) => { if (activeRunId.current && activeRunId.current !== runId) return; applyRunResponse(response); }).catch((err) => { setError(err instanceof Error ? err.message : String(err)); if (activeRunId.current === runId) scheduleRunRefresh(runId, 1000); }); }, delayMs); }
+  function scheduleRunRefresh(runId: string, delayMs = 200) { window.clearTimeout(refreshTimer.current); refreshTimer.current = window.setTimeout(() => { void api.getRun(runId).then((response) => { if (activeRunId.current !== runId) return; applyRunResponse(response); }).catch((err) => { setError(err instanceof Error ? err.message : String(err)); if (activeRunId.current === runId) scheduleRunRefresh(runId, 1000); }); }, delayMs); }
   function scheduleProgressDismiss(run: WorkflowRun) {
     if (run.status !== 'completed' && run.status !== 'failed' && run.status !== 'cancelled' && run.status !== 'waiting') return;
     const delayMs = run.status === 'failed' ? 5000 : 2000;
@@ -222,8 +231,10 @@ export function App() {
       setSectionGeneration((current) => current?.runId === run.id ? undefined : current);
     }, delayMs);
   }
-  async function execute(action: () => Promise<RunResponse>) { setBusy(true); setError(undefined); setProgressVisible(true); window.clearTimeout(refreshTimer.current); window.clearTimeout(progressDismissTimer.current); try { const response = await action(); activeRunId.current = response.run.id; applyRunResponse(response); return response; } catch (err) { setError(err instanceof Error ? err.message : String(err)); setBusy(false); activeRunId.current = undefined; progressDismissTimer.current = window.setTimeout(() => setProgressVisible(false), 5000); } }
+  async function execute(action: () => Promise<RunResponse>) { setBusy(true); setError(undefined); setProgressVisible(true); window.clearTimeout(refreshTimer.current); window.clearTimeout(progressDismissTimer.current); try { const response = await action(); activeRunId.current = response.run.id; applyRunResponse(response); setBusy(false); return response; } catch (err) { setError(err instanceof Error ? err.message : String(err)); setBusy(false); activeRunId.current = undefined; progressDismissTimer.current = window.setTimeout(() => setProgressVisible(false), 5000); } }
   async function openArticle(articleId: string) {
+    activeRunId.current = undefined;
+    window.clearTimeout(refreshTimer.current);
     setBusy(true);
     setError(undefined);
     try {
@@ -288,7 +299,53 @@ export function App() {
   function toggleBlockCollapsed(blockId: string) {
     setCollapsedBlockIds((current) => toggleId(current, blockId));
   }
+  function captureCommentSelection(block: ArticleBlock) {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) return;
+    const selectedText = selection.toString().trim();
+    if (!selectedText || !block.text.includes(selectedText)) return;
+    setSelectedBlockId(block.id);
+    setSelectedOutlineId(undefined);
+    setOutlineWholeSelected(false);
+    setCommentDraft({ blockId: block.id, selectedText, comment: '' });
+    setCommentProcessingSummary(undefined);
+  }
+  async function submitArticleComment() {
+    if (!visibleArticle || !commentDraft?.comment.trim()) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const updated = await api.createArticleComment(visibleArticle.id, { userId, blockId: commentDraft.blockId, selectedText: commentDraft.selectedText, comment: commentDraft.comment });
+      setArticle(updated);
+      setCommentDraft(undefined);
+      await refreshArticleSummaries(updated.workspaceId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function processArticleComments() {
+    if (!visibleArticle) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const response = await api.processArticleComments(visibleArticle.id, { userId, sessionId });
+      setArticle(response.article);
+      const revised = response.results.filter((item) => item.action === 'revise' && item.changed).length;
+      const explained = response.results.filter((item) => item.action === 'explain').length;
+      const questions = response.results.filter((item) => item.action === 'ask').length;
+      setCommentProcessingSummary(response.results.length ? `已处理 ${response.results.length} 条：修订 ${revised} 条，解释 ${explained} 条，追问 ${questions} 条。` : '没有待处理批注。');
+      await refreshArticleSummaries(response.article.workspaceId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
   function openNewTaskPage() {
+    activeRunId.current = undefined;
+    window.clearTimeout(refreshTimer.current);
     setTaskCardTarget('new');
     setSelectedBlockId(undefined);
     setSelectedOutlineId(undefined);
@@ -344,6 +401,8 @@ export function App() {
     }
   }
   async function selectWorkspace(workspaceId: string) {
+    activeRunId.current = undefined;
+    window.clearTimeout(refreshTimer.current);
     setSelectedWorkspaceId(workspaceId);
     setArticle(undefined);
     setLastRun(undefined);
@@ -647,10 +706,10 @@ export function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar"><div><strong>Writing Assistant</strong><span className="muted">任务卡 · 大纲 · 正文 · 局部修改</span></div><div className="status">{busy ? `执行中：${status}` : status}</div></header>
+      <header className="topbar"><div><strong>Writing Assistant</strong><span className="muted">任务卡 · 大纲 · 正文 · 局部修改</span></div><div className="status">{statusBusy ? `执行中：${status}` : status}</div></header>
       {error && <div className="error">{error}</div>}
       <main className={['workspace', navigationCollapsed ? 'nav-collapsed' : '', taskCardConfirmed ? '' : 'task-card-column-hidden', outlineGenerated ? 'support-column-visible' : '', outlineGenerated && supportColumnCollapsed ? 'support-column-collapsed' : ''].filter(Boolean).join(' ')}>
-        <aside className={navigationCollapsed ? 'panel navigation-panel collapsed' : 'panel navigation-panel'} role={navigationCollapsed ? 'button' : undefined} tabIndex={navigationCollapsed && !busy ? 0 : undefined} aria-label={navigationCollapsed ? '展开左栏' : undefined} aria-disabled={navigationCollapsed && busy ? true : undefined} onClick={navigationCollapsed && !busy ? () => updateNavigationCollapsed(false) : undefined} onKeyDown={navigationCollapsed ? (event) => { if (!busy && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); updateNavigationCollapsed(false); } } : undefined}>
+        <aside className={navigationCollapsed ? 'panel navigation-panel collapsed' : 'panel navigation-panel'} role={navigationCollapsed ? 'button' : undefined} tabIndex={navigationCollapsed ? 0 : undefined} aria-label={navigationCollapsed ? '展开左栏' : undefined} onClick={navigationCollapsed ? () => updateNavigationCollapsed(false) : undefined} onKeyDown={navigationCollapsed ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateNavigationCollapsed(false); } } : undefined}>
           {navigationCollapsed ? <span className="column-collapse-handle" aria-hidden="true">{'>'}</span> : <>
             <div className="workspace-head">
               <h2>工作台</h2>
@@ -668,18 +727,18 @@ export function App() {
               <h2>任务</h2>
               <button aria-label="创建新任务" className="icon-button task-create-button" disabled={busy || !selectedWorkspaceId} title="创建新任务" onClick={openNewTaskPage}>+</button>
             </div>
-            <div className="history-list">{articleSummaries.length ? articleSummaries.map((item) => <div className={visibleArticle?.id === item.id ? 'history-row active' : 'history-row'} key={item.id}><button className="history-item" disabled={busy} onClick={() => void openArticle(item.id)}><strong>{item.title}</strong><span>{taskStatusLabel(item.taskStatus)} · {item.outlineCount}纲 · {item.blockCount}节</span><span>{new Date(item.updatedAt).toLocaleString()}</span></button><button aria-label={`删除 ${item.title}`} className="history-delete" disabled={busy} title="删除任务" onClick={() => void deleteArticle(item.id)}>×</button></div>) : <div className="empty">当前工作台暂无任务。</div>}</div>
+            <div className="history-list">{articleSummaries.length ? articleSummaries.map((item) => <div className={visibleArticle?.id === item.id ? 'history-row active' : 'history-row'} key={item.id}><button className="history-item" disabled={busy} onClick={() => void openArticle(item.id)}><strong>{item.title}</strong><span>{taskStatusLabel(item.taskStatus)} · {item.outlineCount}纲 · {item.blockCount}节</span><span>{new Date(item.updatedAt).toLocaleString()}</span></button><button aria-label={`删除 ${item.title}`} className="history-delete" disabled={writeBusy} title="删除任务" onClick={() => void deleteArticle(item.id)}>×</button></div>) : <div className="empty">当前工作台暂无任务。</div>}</div>
           </>}
         </aside>
         {taskCardConfirmed ? <aside className={dialogContext.kind === 'task-card' ? 'panel task-card-panel selected' : 'panel task-card-panel'} onClick={() => { setTaskCardTarget('current'); setSelectedBlockId(undefined); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }}>
           <h2>任务卡</h2>
           {visibleArticle.taskCard ? <TaskCardView taskCard={visibleArticle.taskCard} /> : null}
-          {visibleArticle && canGenerateOutline && <button disabled={busy} onClick={() => void requestOutlineGeneration()}>{visibleArticle.outline.length ? '重新生成大纲' : '生成大纲'}</button>}
-          {canStartWriting ? <button disabled={busy} onClick={() => void startWriting()}>开始写作</button> : null}
+          {visibleArticle && canGenerateOutline && <button disabled={writeBusy} onClick={() => void requestOutlineGeneration()}>{visibleArticle.outline.length ? '重新生成大纲' : '生成大纲'}</button>}
+          {canStartWriting ? <button disabled={writeBusy} onClick={() => void startWriting()}>开始写作</button> : null}
         </aside> : null}
         <section className="panel editor-panel">
           <div className="editor-scroll-content">
-          {taskCardDraft && visibleArticle?.taskCard ? <section className="draft-task-card-main"><div className="draft-task-card-head"><h2>任务卡草稿</h2><button disabled={busy} onClick={() => void confirmTaskCard()}>确认任务卡</button></div><TaskCardView taskCard={visibleArticle.taskCard} /></section> : null}
+          {taskCardDraft && visibleArticle?.taskCard ? <section className="draft-task-card-main"><div className="draft-task-card-head"><h2>任务卡草稿</h2><button disabled={writeBusy} onClick={() => void confirmTaskCard()}>确认任务卡</button></div><TaskCardView taskCard={visibleArticle.taskCard} /></section> : null}
           {visibleArticle?.outline.length ? <div className={outlineWholeSelected ? 'outline selected' : 'outline'}><h3 role="button" tabIndex={0} onClick={() => { setOutlineWholeSelected(true); setSelectedOutlineId(undefined); setSelectedBlockId(undefined); }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setOutlineWholeSelected(true); setSelectedOutlineId(undefined); setSelectedBlockId(undefined); } }}>大纲</h3>{visibleArticle.outline.map((item) => {
             const isEditing = editingOutline?.id === item.id;
             const sectionBlocks = visibleArticle.blocks.filter((block) => block.sectionId === item.id);
@@ -690,14 +749,15 @@ export function App() {
             return (
               <div className={['outline-item', outlineCollapsed ? 'collapsed' : '', outlineSelected ? 'selected' : ''].filter(Boolean).join(' ')} key={item.id} onClick={() => { setSelectedOutlineId(item.id); setOutlineWholeSelected(false); setSelectedBlockId(undefined); }}>
                 {isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div className="outline-main"><div className="outline-heading"><button type="button" className="collapse-button" aria-label={outlineCollapsed ? `展开 ${item.title}` : `折叠 ${item.title}`} title={outlineCollapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); setSelectedOutlineId(item.id); toggleOutlineCollapsed(item.id); }}>{outlineCollapsed ? '>' : 'v'}</button><div className="outline-title"><strong>{item.title}</strong><span className="outline-meta">{roleLabel ? <span className="outline-role">{roleLabel}</span> : null}{item.keySection ? <span className="outline-key">关键</span> : null}<span>{outlineStatusLabel(item.status)}{sectionBlocks.length ? ` · ${sectionBlocks.length} 段正文` : ''}</span></span></div></div>{outlineCollapsed ? null : <><p>{item.goal}</p>{specialHandling.length ? <ul className="outline-special">{specialHandling.map((handling) => <li key={handling}>{handling}</li>)}</ul> : null}</>}</div>}
-                <OutlineActionBar isEditing={isEditing} busy={busy} canSave={Boolean(editingOutline?.title.trim() && editingOutline.goal.trim())} hasSectionBlocks={Boolean(sectionBlocks.length)} onSave={() => void saveOutlineEdit()} onCancel={() => setEditingOutline(undefined)} onEdit={() => { setSelectedOutlineId(item.id); setEditingOutline({ id: item.id, title: item.title, goal: item.goal }); }} onGenerate={() => void startSectionGeneration(item.id)} />
+                <OutlineActionBar isEditing={isEditing} requestBusy={busy} writeBusy={writeBusy} canSave={Boolean(editingOutline?.title.trim() && editingOutline.goal.trim())} hasSectionBlocks={Boolean(sectionBlocks.length)} onSave={() => void saveOutlineEdit()} onCancel={() => setEditingOutline(undefined)} onEdit={() => { setSelectedOutlineId(item.id); setEditingOutline({ id: item.id, title: item.title, goal: item.goal }); }} onGenerate={() => void startSectionGeneration(item.id)} />
                 {!outlineCollapsed && progressVisible && sectionGeneration?.sectionId === item.id ? <GenerationProgressView progress={sectionGeneration} events={liveEvents} /> : null}
-                {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={(blockId) => { setSelectedBlockId(blockId); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleBlockCollapse={toggleBlockCollapsed} /> : null}
+                {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} comments={visibleArticle.comments ?? []} commentDraft={commentDraft} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={(blockId) => { setSelectedBlockId(blockId); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleBlockCollapse={toggleBlockCollapsed} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} busy={busy} /> : null}
               </div>
             );
           })}</div> : null}
-          <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} />)}</div>
+          <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} comments={visibleArticle?.comments ?? []} commentDraft={commentDraft} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} busy={busy} />)}</div>
           {!outlineGenerated ? <div className="editor-support">
+            {visibleArticle ? <CommentReviewCard article={visibleArticle} processingSummary={commentProcessingSummary} busy={writeBusy} onProcess={() => void processArticleComments()} /> : null}
             {visibleArticle ? <DialogueBriefCard status={dialogueBriefStatus} /> : null}
             {visibleArticle ? <KnowledgeTagsCard article={visibleArticle} selectedOutline={selectedOutline} outlineWholeSelected={outlineWholeSelected} selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
             <RevisionLogCard article={visibleArticle} />
@@ -717,13 +777,14 @@ export function App() {
             </div>
           </div>
         </section>
-        {outlineGenerated ? <aside className={supportColumnCollapsed ? 'panel right-support-panel collapsed' : 'panel right-support-panel'} role={supportColumnCollapsed ? 'button' : undefined} tabIndex={supportColumnCollapsed && !busy ? 0 : undefined} aria-label={supportColumnCollapsed ? '展开辅助列' : undefined} aria-disabled={supportColumnCollapsed && busy ? true : undefined} onClick={supportColumnCollapsed && !busy ? () => updateSupportColumnCollapsed(false) : undefined} onKeyDown={supportColumnCollapsed ? (event) => { if (!busy && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); updateSupportColumnCollapsed(false); } } : undefined}>
+        {outlineGenerated ? <aside className={supportColumnCollapsed ? 'panel right-support-panel collapsed' : 'panel right-support-panel'} role={supportColumnCollapsed ? 'button' : undefined} tabIndex={supportColumnCollapsed ? 0 : undefined} aria-label={supportColumnCollapsed ? '展开辅助列' : undefined} onClick={supportColumnCollapsed ? () => updateSupportColumnCollapsed(false) : undefined} onKeyDown={supportColumnCollapsed ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateSupportColumnCollapsed(false); } } : undefined}>
           {supportColumnCollapsed ? <span className="right-column-collapse-handle" aria-hidden="true">{'<'}</span> : <>
             <div className="right-support-head">
               <h2>辅助</h2>
               <button aria-label="收起辅助列" className="right-column-collapse-handle" disabled={busy} title="收起辅助列" onClick={() => updateSupportColumnCollapsed(true)}>&gt;</button>
             </div>
             <div className="right-support-content">
+              {visibleArticle ? <CommentReviewCard article={visibleArticle} processingSummary={commentProcessingSummary} busy={writeBusy} onProcess={() => void processArticleComments()} /> : null}
               {visibleArticle ? <DialogueBriefCard status={dialogueBriefStatus} /> : null}
               {visibleArticle ? <KnowledgeTagsCard article={visibleArticle} selectedOutline={selectedOutline} outlineWholeSelected={outlineWholeSelected} selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
               <RevisionLogCard article={visibleArticle} />
@@ -731,27 +792,106 @@ export function App() {
           </>}
         </aside> : null}
       </main>
-      {visibleArticle && selectedBlockId ? <footer className="chatbar"><div className="patch-box"><strong>局部修改</strong><input value={patchInstruction} onChange={(event) => setPatchInstruction(event.target.value)} placeholder="输入对选中段落的修改意见" /><button disabled={busy} onClick={() => execute(() => api.startPatch(visibleArticle.id, selectedBlockId, patchInstruction, userId, sessionId))}>生成 Patch</button>{lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-patch-confirm' && <button onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'accept' }))}>应用 Patch</button>}</div>{patchPreview && <div className="patch-preview"><strong>Patch 预览</strong><div className="diff-grid"><pre>{patchPreview.before}</pre><pre>{patchPreview.after}</pre></div><ul>{patchPreview.changeSummary.map((item) => <li key={item}>{item}</li>)}</ul></div>}</footer> : null}
+      {visibleArticle && selectedBlockId ? <footer className="chatbar"><div className="patch-box"><strong>局部修改</strong><input value={patchInstruction} onChange={(event) => setPatchInstruction(event.target.value)} placeholder="输入对选中段落的修改意见" /><button disabled={writeBusy} onClick={() => execute(() => api.startPatch(visibleArticle.id, selectedBlockId, patchInstruction, userId, sessionId))}>生成 Patch</button>{lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-patch-confirm' && <button disabled={writeBusy} onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'accept' }))}>应用 Patch</button>}</div>{patchPreview && <div className="patch-preview"><strong>Patch 预览</strong><div className="diff-grid"><pre>{patchPreview.before}</pre><pre>{patchPreview.after}</pre></div><ul>{patchPreview.changeSummary.map((item) => <li key={item}>{item}</li>)}</ul></div>}</footer> : null}
       {workspaceModalOpen && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="workspace-modal-title"><div className="modal-head"><h2 id="workspace-modal-title">新建工作台</h2><button aria-label="关闭" className="icon-button" disabled={busy} onClick={() => setWorkspaceModalOpen(false)}>×</button></div><div className="modal-body"><label>名称</label><input value={newWorkspaceName} autoFocus onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="新工作台名称" /><label>协作者</label><input value={newWorkspaceMembers} onChange={(event) => setNewWorkspaceMembers(event.target.value)} placeholder="协作者 userId，用逗号分隔" /></div><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setWorkspaceModalOpen(false)}>取消</button><button disabled={busy || !newWorkspaceName.trim()} onClick={() => void createWorkspace()}>创建</button></div></div></div>}
-      {outlineRegenerationWarningOpen && visibleArticle ? <div className="modal-backdrop" role="presentation"><div className="modal warning-modal" role="dialog" aria-modal="true" aria-labelledby="outline-regeneration-title"><div className="modal-head"><h2 id="outline-regeneration-title">重新生成大纲？</h2><button aria-label="关闭" className="icon-button" disabled={busy} onClick={() => setOutlineRegenerationWarningOpen(false)}>×</button></div><div className="modal-body"><p className="modal-warning-text">重新生成会替换当前 {visibleArticle.outline.length} 个大纲项，并清空已经生成的 {visibleArticle.blocks.length} 段正文。这个操作适合在任务卡发生较大变化、现有大纲已经不适用时使用。</p><p className="modal-secondary-text">如果只是调整某一节或少量内容，建议选中大纲项后通过对话提出修改意见。</p></div><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setOutlineRegenerationWarningOpen(false)}>取消</button><button className="danger-button" disabled={busy} onClick={() => void applyOutlineRegeneration()}>确认重新生成</button></div></div></div> : null}
+      {outlineRegenerationWarningOpen && visibleArticle ? <div className="modal-backdrop" role="presentation"><div className="modal warning-modal" role="dialog" aria-modal="true" aria-labelledby="outline-regeneration-title"><div className="modal-head"><h2 id="outline-regeneration-title">重新生成大纲？</h2><button aria-label="关闭" className="icon-button" disabled={busy} onClick={() => setOutlineRegenerationWarningOpen(false)}>×</button></div><div className="modal-body"><p className="modal-warning-text">重新生成会替换当前 {visibleArticle.outline.length} 个大纲项，并清空已经生成的 {visibleArticle.blocks.length} 段正文。这个操作适合在任务卡发生较大变化、现有大纲已经不适用时使用。</p><p className="modal-secondary-text">如果只是调整某一节或少量内容，建议选中大纲项后通过对话提出修改意见。</p></div><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setOutlineRegenerationWarningOpen(false)}>取消</button><button className="danger-button" disabled={writeBusy} onClick={() => void applyOutlineRegeneration()}>确认重新生成</button></div></div></div> : null}
     </div>
   );
 }
-function ArticleBlockView(props: { block: ArticleBlock; selected: boolean; collapsed: boolean; onSelect: () => void; onToggleCollapse: () => void }) {
-  return <article className={['block', props.selected ? 'selected' : '', props.collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} onClick={props.onSelect}><div className="block-head"><button type="button" className="collapse-button" aria-label={props.collapsed ? `展开 ${props.block.title}` : `折叠 ${props.block.title}`} title={props.collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleCollapse(); }}>{props.collapsed ? '>' : 'v'}</button><h3>{props.block.title}</h3><span>{props.block.text.length} 字</span></div>{props.collapsed ? null : <pre>{props.block.text}</pre>}</article>;
+function ArticleBlockView(props: { block: ArticleBlock; comments: ArticleComment[]; commentDraft?: CommentDraft; selected: boolean; collapsed: boolean; onSelect: () => void; onToggleCollapse: () => void; onCaptureSelection: (block: ArticleBlock) => void; onUpdateCommentDraft: (comment: string) => void; onSubmitComment: () => void; onCancelComment: () => void; busy: boolean }) {
+  const comments = commentsForBlock(props.comments, props.block.id);
+  return <article className={['block', props.selected ? 'selected' : '', props.collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} onClick={props.onSelect}><div className="block-head"><button type="button" className="collapse-button" aria-label={props.collapsed ? `展开 ${props.block.title}` : `折叠 ${props.block.title}`} title={props.collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleCollapse(); }}>{props.collapsed ? '>' : 'v'}</button><h3>{props.block.title}</h3><span>{props.block.text.length} 字</span></div>{props.collapsed ? null : <><pre onMouseUp={(event) => { event.stopPropagation(); props.onCaptureSelection(props.block); }}>{props.block.text}</pre><BlockCommentComposer blockId={props.block.id} draft={props.commentDraft} busy={props.busy} onChange={props.onUpdateCommentDraft} onSubmit={props.onSubmitComment} onCancel={props.onCancelComment} /><BlockCommentsView comments={comments} /></>}</article>;
 }
 
-function SectionBlocksView(props: { blocks: ArticleBlock[]; selectedBlockId?: string; collapsedBlockIds: string[]; onSelectBlock: (blockId: string) => void; onToggleBlockCollapse: (blockId: string) => void }) {
+function SectionBlocksView(props: { blocks: ArticleBlock[]; comments: ArticleComment[]; commentDraft?: CommentDraft; selectedBlockId?: string; collapsedBlockIds: string[]; onSelectBlock: (blockId: string) => void; onToggleBlockCollapse: (blockId: string) => void; onCaptureSelection: (block: ArticleBlock) => void; onUpdateCommentDraft: (comment: string) => void; onSubmitComment: () => void; onCancelComment: () => void; busy: boolean }) {
   const totalLength = props.blocks.reduce((sum, block) => sum + block.text.length, 0);
   return (
     <div className="section-blocks">
       <div className="section-blocks-head"><span>{props.blocks.length} 段正文</span><span>{totalLength} 字</span></div>
       {props.blocks.map((block, index) => {
         const collapsed = props.collapsedBlockIds.includes(block.id);
-        return <article className={['section-paragraph', props.selectedBlockId === block.id ? 'selected' : '', collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} key={block.id} onClick={() => props.onSelectBlock(block.id)}><div className="paragraph-head"><button type="button" className="collapse-button" aria-label={collapsed ? `展开第 ${index + 1} 段` : `折叠第 ${index + 1} 段`} title={collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleBlockCollapse(block.id); }}>{collapsed ? '>' : 'v'}</button><span>第 {index + 1} 段</span><span>{block.text.length} 字</span></div>{collapsed ? null : <pre>{block.text}</pre>}</article>;
+        const comments = commentsForBlock(props.comments, block.id);
+        return <article className={['section-paragraph', props.selectedBlockId === block.id ? 'selected' : '', collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} key={block.id} onClick={() => props.onSelectBlock(block.id)}><div className="paragraph-head"><button type="button" className="collapse-button" aria-label={collapsed ? `展开第 ${index + 1} 段` : `折叠第 ${index + 1} 段`} title={collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleBlockCollapse(block.id); }}>{collapsed ? '>' : 'v'}</button><span>第 {index + 1} 段</span><span>{block.text.length} 字</span></div>{collapsed ? null : <><pre onMouseUp={(event) => { event.stopPropagation(); props.onCaptureSelection(block); }}>{block.text}</pre><BlockCommentComposer blockId={block.id} draft={props.commentDraft} busy={props.busy} onChange={props.onUpdateCommentDraft} onSubmit={props.onSubmitComment} onCancel={props.onCancelComment} /><BlockCommentsView comments={comments} /></>}</article>;
       })}
     </div>
   );
+}
+
+function BlockCommentComposer(props: { blockId: string; draft?: CommentDraft; busy: boolean; onChange: (comment: string) => void; onSubmit: () => void; onCancel: () => void }) {
+  if (!props.draft || props.draft.blockId !== props.blockId) return null;
+  return (
+    <div className="comment-composer" onClick={(event) => event.stopPropagation()}>
+      <div className="comment-selection"><span>已选</span><p>{summarizeText(props.draft.selectedText, 120)}</p></div>
+      <textarea value={props.draft.comment} onChange={(event) => props.onChange(event.target.value)} placeholder="添加批注，例如：这里似乎使用了后40回内容" />
+      <div className="comment-composer-actions">
+        <button className="secondary-button compact" disabled={props.busy} onClick={props.onCancel}>取消</button>
+        <button disabled={props.busy || !props.draft.comment.trim()} onClick={props.onSubmit}>添加批注</button>
+      </div>
+    </div>
+  );
+}
+
+function BlockCommentsView(props: { comments: ArticleComment[] }) {
+  if (!props.comments.length) return null;
+  return (
+    <div className="block-comments" onClick={(event) => event.stopPropagation()}>
+      {props.comments.map((comment) => <ArticleCommentItem key={comment.id} comment={comment} />)}
+    </div>
+  );
+}
+
+function ArticleCommentItem(props: { comment: ArticleComment }) {
+  return (
+    <div className={`article-comment status-${props.comment.status}`}>
+      <div className="article-comment-head"><strong>{commentStatusLabel(props.comment.status)}</strong><span>{commentResolutionLabel(props.comment.resolutionKind)}</span></div>
+      <p className="commented-text">{summarizeText(props.comment.selectedText, 96)}</p>
+      <p>{props.comment.comment}</p>
+      {props.comment.response ? <p className="comment-response">{props.comment.response}</p> : null}
+    </div>
+  );
+}
+
+function CommentReviewCard(props: { article: ArticleArtifact; processingSummary?: string; busy: boolean; onProcess: () => void }) {
+  const comments = props.article.comments ?? [];
+  const open = comments.filter((comment) => comment.status === 'open');
+  const needsInput = comments.filter((comment) => comment.status === 'needs_input');
+  const recentResolved = comments.filter((comment) => comment.status === 'resolved').slice(-3).reverse();
+  return (
+    <section className="support-card comment-review-card">
+      <div className="comment-review-head"><h3>正文批注</h3><span>{open.length ? `${open.length} 条待处理` : '无待处理'}</span></div>
+      {props.processingSummary ? <div className="comment-processing-summary">{props.processingSummary}</div> : null}
+      {open.length ? <CommentMiniList title="待处理" comments={open.slice(0, 4)} /> : <div className="empty">选中正文可添加批注。</div>}
+      {needsInput.length ? <CommentMiniList title="需要追问" comments={needsInput.slice(0, 3)} /> : null}
+      {recentResolved.length ? <CommentMiniList title="最近处理" comments={recentResolved} /> : null}
+      <button disabled={props.busy || !open.length} onClick={props.onProcess}>处理批注</button>
+    </section>
+  );
+}
+
+function CommentMiniList(props: { title: string; comments: ArticleComment[] }) {
+  return (
+    <div className="comment-mini-section">
+      <h4>{props.title}</h4>
+      <ul>{props.comments.map((comment) => <li key={comment.id}><span>{commentStatusLabel(comment.status)}</span>{summarizeText(comment.comment, 56)}</li>)}</ul>
+    </div>
+  );
+}
+
+function commentsForBlock(comments: ArticleComment[], blockId: string): ArticleComment[] {
+  return comments.filter((comment) => comment.blockId === blockId).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+function commentStatusLabel(status: ArticleComment['status']): string {
+  if (status === 'resolved') return '已处理';
+  if (status === 'needs_input') return '需追问';
+  return '待处理';
+}
+
+function commentResolutionLabel(kind?: ArticleComment['resolutionKind']): string {
+  if (kind === 'revision') return '已修订';
+  if (kind === 'explanation') return '已解释';
+  if (kind === 'question') return '追问';
+  return '批注';
 }
 
 function TaskCardGuidance(props: { prompts: TaskCardFollowUpPrompt[]; taskCard: WritingTaskCard; message: string; clearedPromptIds: string[]; onChooseOption: (prompt: TaskCardFollowUpPrompt, option: string) => void; onClearAnswer: (prompt: TaskCardFollowUpPrompt) => void }) {
@@ -908,23 +1048,23 @@ function compactAnswerValue(answer: string): string {
   return summarizeText(answer.trim(), 18);
 }
 
-function OutlineActionBar(props: { isEditing: boolean; busy: boolean; canSave: boolean; hasSectionBlocks: boolean; onSave: () => void; onCancel: () => void; onEdit: () => void; onGenerate: () => void }) {
+function OutlineActionBar(props: { isEditing: boolean; requestBusy: boolean; writeBusy: boolean; canSave: boolean; hasSectionBlocks: boolean; onSave: () => void; onCancel: () => void; onEdit: () => void; onGenerate: () => void }) {
   if (props.isEditing) {
     return (
       <div className="outline-toolbar editing" onClick={(event) => event.stopPropagation()}>
-        <button type="button" className="outline-tool primary" disabled={props.busy || !props.canSave} onClick={props.onSave}><span aria-hidden="true">✓</span>保存</button>
-        <button type="button" className="outline-tool" disabled={props.busy} onClick={props.onCancel}><span aria-hidden="true">×</span>取消</button>
+        <button type="button" className="outline-tool primary" disabled={props.writeBusy || !props.canSave} onClick={props.onSave}><span aria-hidden="true">✓</span>保存</button>
+        <button type="button" className="outline-tool" disabled={props.requestBusy} onClick={props.onCancel}><span aria-hidden="true">×</span>取消</button>
       </div>
     );
   }
   return (
     <div className="outline-toolbar" onClick={(event) => event.stopPropagation()}>
-      <button type="button" className="outline-tool" disabled={props.busy} onClick={props.onEdit}><span aria-hidden="true">✎</span>修改</button>
+      <button type="button" className="outline-tool" disabled={props.requestBusy} onClick={props.onEdit}><span aria-hidden="true">✎</span>修改</button>
       <button type="button" className="outline-tool" disabled title="需要接入大纲扩写流程"><span aria-hidden="true">↗</span>扩写</button>
       <button type="button" className="outline-tool" disabled title="需要接入大纲压缩流程"><span aria-hidden="true">▣</span>压缩</button>
       <button type="button" className="outline-tool" disabled title="需要接入解释流程"><span aria-hidden="true">＋</span>解释</button>
-      <button type="button" className="outline-tool" disabled={props.busy || !props.hasSectionBlocks} title={props.hasSectionBlocks ? '重新生成本节' : '本节生成后可重写'} onClick={props.onGenerate}><span aria-hidden="true">↻</span>重写</button>
-      <button type="button" className="outline-tool" disabled={props.busy || props.hasSectionBlocks} title={props.hasSectionBlocks ? '续写流程尚未接入' : '生成本节'} onClick={props.onGenerate}><span aria-hidden="true">▷</span>{props.hasSectionBlocks ? '继续' : '生成'}</button>
+      <button type="button" className="outline-tool" disabled={props.writeBusy || !props.hasSectionBlocks} title={props.hasSectionBlocks ? '重新生成本节' : '本节生成后可重写'} onClick={props.onGenerate}><span aria-hidden="true">↻</span>重写</button>
+      <button type="button" className="outline-tool" disabled={props.writeBusy || props.hasSectionBlocks} title={props.hasSectionBlocks ? '续写流程尚未接入' : '生成本节'} onClick={props.onGenerate}><span aria-hidden="true">▷</span>{props.hasSectionBlocks ? '继续' : '生成'}</button>
       <button type="button" className="outline-tool" disabled title="更多操作稍后接入"><span aria-hidden="true">…</span>更多</button>
     </div>
   );

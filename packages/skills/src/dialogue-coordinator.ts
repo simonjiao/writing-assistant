@@ -58,7 +58,7 @@ export class DialogueCoordinatorSkill implements Skill<DialogueCoordinatorInput,
             '如果用户表达了修改意图但目标不明确，mode 是 clarify，operations 必须是 []。',
             '如果用户明确要求修改、调整、添加、删除、重写、压缩、扩写，mode 是 proposal，返回待确认 operations；此时也不直接写入。',
             '如果 pendingProposal 存在，说明用户明确要求刷新当前方案；需要输出一个吸收 conversation 和 pendingProposal 的新 proposal。',
-            'operation 必须服从当前 context：task-card 使用 revise-task-card；outline 使用 revise-outline；outline-item 使用 revise-outline-item；block 使用 patch-block。',
+            'operation 必须服从当前 context：task-card 只能使用 revise-task-card；outline 只能使用 revise-outline；outline-item 只能使用 revise-outline-item；block 只能使用 patch-block。',
             '不要把解释类输入包装成修改方案。用户明确确认前，任何 proposal 都只是计划。',
             'message 和 summary 要短；operation.instruction 只写可执行修订要求，不展开成长篇说明。',
           ].join('\n'),
@@ -81,9 +81,8 @@ export class DialogueCoordinatorSkill implements Skill<DialogueCoordinatorInput,
               mode: 'answer | clarify | proposal',
               message: 'string; 面向用户的一句话或短段回复',
               summary: 'string; proposal 时概括这次拟修改',
-              operations: [
-                { type: 'revise-task-card | revise-outline | revise-outline-item | patch-block', instruction: 'string; 给具体修订器的明确指令' },
-              ],
+              expectedOperationType: expectedOperationType(input.context.kind),
+              operations: [{ type: expectedOperationType(input.context.kind), instruction: 'string; 给具体修订器的明确指令' }],
               warnings: 'string[]; 影响范围、删除或已有正文风险',
             },
           }),
@@ -158,17 +157,26 @@ function normalizeOperation(operation: unknown, input: DialogueCoordinatorInput)
   if (!operation || typeof operation !== 'object') throw new Error('Dialogue coordinator returned invalid operation.');
   const source = operation as Record<string, unknown>;
   const instruction = requireText(source.instruction, 'operation.instruction');
-  if (source.type === 'revise-task-card') return { type: 'revise-task-card', instruction };
-  if (source.type === 'revise-outline') return { type: 'revise-outline', instruction };
-  if (source.type === 'revise-outline-item') {
+  const type = expectedOperationType(input.context.kind);
+  if (type === 'revise-task-card') return { type, instruction };
+  if (type === 'revise-outline') return { type, instruction };
+  if (type === 'revise-outline-item') {
     const outlineItemId = requireText(source.outlineItemId ?? input.context.outlineItemId, 'operation.outlineItemId');
-    return { type: 'revise-outline-item', outlineItemId, instruction };
+    return { type, outlineItemId, instruction };
   }
-  if (source.type === 'patch-block') {
-    const blockId = requireText(source.blockId ?? input.context.blockId, 'operation.blockId');
-    return { type: 'patch-block', blockId, instruction };
+  if (type === 'patch-block') {
+    const blockId = requireText(source.blockId ?? input.context.blockId ?? input.selectedBlock?.id, 'operation.blockId');
+    return { type, blockId, instruction };
   }
-  throw new Error(`Dialogue coordinator returned unsupported operation type: ${String(source.type)}`);
+  throw new Error(`Dialogue coordinator returned unsupported context kind: ${String(input.context.kind)}`);
+}
+
+function expectedOperationType(kind: DialogueContextKind): RevisionOperation['type'] {
+  if (kind === 'task-card') return 'revise-task-card';
+  if (kind === 'outline') return 'revise-outline';
+  if (kind === 'outline-item') return 'revise-outline-item';
+  if (kind === 'block') return 'patch-block';
+  throw new Error(`Dialogue coordinator returned unsupported context kind: ${String(kind)}`);
 }
 
 function requireMode(value: unknown): DialogueCoordinatorOutput['mode'] {

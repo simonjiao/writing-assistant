@@ -3,7 +3,10 @@ export interface WritingTaskCard { id: string; topic: string; writingGoal: strin
 export type OutlineRhetoricalRole = 'opening' | 'development' | 'turn' | 'conclusion';
 export interface OutlineItem { id: string; title: string; goal: string; order: number; expectedBlocks: number; rhetoricalRole?: OutlineRhetoricalRole; keySection?: boolean; specialHandling?: string[]; sourceHints: string[]; themeTags: string[]; status: 'draft' | 'confirmed' | 'written' }
 export interface ArticleBlock { id: string; type: string; sectionId?: string; title?: string; text: string; sourceRefs: string[]; themeTags: string[]; status: string }
-export interface ArticleArtifact { id: string; userId: string; workspaceId: string; title: string; taskCard?: WritingTaskCard; outline: OutlineItem[]; blocks: ArticleBlock[]; versions: Array<{ id: string; reason: string; author: string; createdAt: string }> }
+export type ArticleCommentStatus = 'open' | 'resolved' | 'needs_input';
+export type ArticleCommentResolutionKind = 'revision' | 'explanation' | 'question';
+export interface ArticleComment { id: string; articleId: string; blockId: string; selectedText: string; comment: string; selectionStart?: number; selectionEnd?: number; status: ArticleCommentStatus; resolutionKind?: ArticleCommentResolutionKind; response?: string; replacementText?: string; createdAt: string; updatedAt: string; resolvedAt?: string }
+export interface ArticleArtifact { id: string; userId: string; workspaceId: string; title: string; taskCard?: WritingTaskCard; outline: OutlineItem[]; blocks: ArticleBlock[]; comments?: ArticleComment[]; versions: Array<{ id: string; reason: string; author: string; createdAt: string }> }
 export interface ArticleSummary { id: string; workspaceId: string; title: string; taskStatus?: 'draft' | 'confirmed'; outlineCount: number; blockCount: number; updatedAt: string; deletedAt?: string }
 export type DialogueContextKind = 'task-card' | 'outline' | 'outline-item' | 'block';
 export type RevisionOperation =

@@ -1,0 +1,99 @@
+import { ArticleBlock, ArticleComment, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
+
+export type ArticleCommentResolutionAction = 'revise' | 'explain' | 'ask';
+
+export interface ArticleCommentResolverInput {
+  articleId: string;
+  comment: ArticleComment;
+  block: ArticleBlock;
+  taskCard?: WritingTaskCard;
+  adjacentBlocks?: Array<Pick<ArticleBlock, 'id' | 'title' | 'text'>>;
+}
+
+export interface ArticleCommentResolverOutput {
+  action: ArticleCommentResolutionAction;
+  response: string;
+  replacementText?: string;
+}
+
+export class ArticleCommentResolverSkill implements Skill<ArticleCommentResolverInput, ArticleCommentResolverOutput> {
+  manifest = {
+    id: 'article-comment-resolver',
+    name: 'Article Comment Resolver',
+    version: '0.1.0',
+    description: '根据正文选区批注决定修订、解释或追问。',
+    policies: {
+      selectedTextOnly: true,
+      preserveSourcePolicy: true,
+      batchFriendly: true,
+    },
+  };
+
+  async invoke({ input, llm }: Parameters<Skill<ArticleCommentResolverInput, ArticleCommentResolverOutput>['invoke']>[0]): Promise<ArticleCommentResolverOutput> {
+    const response = await llm.chat({
+      jsonMode: true,
+      temperature: 0.18,
+      maxTokens: 800,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            '你是正文批注处理器，只处理用户在已生成正文中选中的一小段文字。',
+            '你必须在 revise、explain、ask 三种动作中选择一种。',
+            'revise：批注意图是指出事实、来源、语言、重复、连贯性或风格问题，且可以只替换 selectedText 来解决。',
+            'explain：用户只是要求解释、说明原因，或批注不是修改要求。',
+            'ask：批注意图不清、需要用户提供取舍，或仅替换 selectedText 会破坏上下文。',
+            '若任务卡来源策略禁止后40回、程高本续书或未授权材料，任何疑似使用这些材料的批注都应优先 revise，移除或改写为前80回和脂批可支撑的表达。',
+            'revise 时只能给出 replacementText，用来替换 selectedText；不要返回整段，不要改未选中的上下文。',
+            'replacementText 必须是可直接放回正文的中文正文片段，不要包含内部标记、JSON 说明或 Markdown。',
+            '只输出 JSON object：action、response、replacementText。',
+          ].join('\n'),
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            articleId: input.articleId,
+            userComment: input.comment.comment,
+            selectedText: input.comment.selectedText,
+            currentBlock: {
+              id: input.block.id,
+              title: input.block.title,
+              text: input.block.text,
+              sourceRefs: input.block.sourceRefs,
+              themeTags: input.block.themeTags,
+            },
+            adjacentBlocks: input.adjacentBlocks ?? [],
+            taskCard: input.taskCard,
+            requiredOutputShape: {
+              action: 'revise | explain | ask',
+              response: 'string; 面向用户的简短处理说明',
+              replacementText: 'string; action=revise 时必填；仅替换 selectedText 的正文片段',
+            },
+          }),
+        },
+      ],
+    });
+    const parsed = safeJsonParse<Partial<ArticleCommentResolverOutput>>(response.content);
+    if (!parsed) throw new Error(`Article comment resolver did not return valid JSON: ${response.content.slice(0, 300)}`);
+    return normalizeOutput(parsed);
+  }
+}
+
+function normalizeOutput(output: Partial<ArticleCommentResolverOutput>): ArticleCommentResolverOutput {
+  const action = normalizeAction(output.action);
+  const response = requireText(output.response, 'response');
+  if (action === 'revise') {
+    return { action, response, replacementText: requireText(output.replacementText, 'replacementText') };
+  }
+  return { action, response, replacementText: typeof output.replacementText === 'string' ? output.replacementText.trim() : undefined };
+}
+
+function normalizeAction(value: unknown): ArticleCommentResolutionAction {
+  if (value === 'revise' || value === 'explain' || value === 'ask') return value;
+  throw new Error(`Article comment resolver returned invalid action: ${String(value)}`);
+}
+
+function requireText(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`Article comment resolver returned empty ${field}.`);
+  return value.trim();
+}

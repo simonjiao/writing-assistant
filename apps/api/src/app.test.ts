@@ -121,6 +121,51 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('creates article comments and batch processes them into text revisions', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'comment-user', name: '批注工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'comment-user', workspaceId: workspace.id, title: '司棋人物文章' });
+    article.blocks = [{
+      id: 'blk-comment-1',
+      type: 'paragraph',
+      sectionId: 'outline-1',
+      title: '同侪人物文章',
+      text: '迎春的判词与《喜冤家》曲文，预示她终被中山狼所噬；司棋虽有批书人为之心动，亦不免触柱而亡。',
+      sourceRefs: [],
+      themeTags: [],
+      status: 'draft',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    }];
+    await container.stores.artifactStore.updateArticle(article);
+
+    const selectedText = article.blocks[0].text;
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/comments`,
+      payload: { userId: 'comment-user', blockId: 'blk-comment-1', selectedText, comment: '这里似乎是后40回内容，不要引用程高本续书。' },
+    });
+    expect(created.statusCode).toBe(200);
+    expect(created.json().comments[0].status).toBe('open');
+
+    const processed = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/comments/process`,
+      payload: { userId: 'comment-user' },
+    });
+    expect(processed.statusCode).toBe(200);
+    const body = processed.json();
+    expect(body.results[0].action).toBe('revise');
+    expect(body.results[0].changed).toBe(true);
+    expect(body.article.comments[0].status).toBe('resolved');
+    expect(body.article.comments[0].resolutionKind).toBe('revision');
+    expect(body.article.comments[0].response).toContain('前80回');
+    expect(body.article.blocks[0].text).not.toContain('触柱而亡');
+    await app.close();
+  });
+
   it('runs workflows through the local async queue', async () => {
     const config = testConfig({ workflowExecutionMode: 'async' });
     const container = createContainer(config);
@@ -790,6 +835,52 @@ describe('api app', () => {
     expect(body.message).toContain('方案没有生成成功');
     expect(await container.stores.revisionProposalStore.listPendingProposals(article.id, 'dialogue-json-failure-user')).toHaveLength(0);
     expect(body.messages.map((message: { role: string }) => message.role)).toEqual(['user', 'assistant']);
+    await app.close();
+  });
+
+  it('returns a readable dialogue response when coordinator output violates the context contract', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
+    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+      if (skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator returned empty operation.blockId.');
+      return originalInvokeSkill(skillId as never, input as never, meta as never);
+    }) as typeof container.runtime.invokeSkill;
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-dialogue-contract-failure',
+      topic: '司棋人物文章',
+      writingGoal: '撰写司棋人物文章。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: ['司棋'], themes: ['司棋'] },
+      structure: { articleType: 'analysis', expectedLength: '1500字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-contract-user', name: '对话契约工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-contract-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: {
+        userId: 'dialogue-contract-user',
+        message: '现在生成的整篇文章，评论和抒情语句有些强烈，需要限制，多用书中情节，人物表现等，辅以一两句评价。',
+        context: { kind: 'task-card' },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.mode).toBe('clarify');
+    expect(body.message).toContain('方案没有生成成功');
+    expect(await container.stores.revisionProposalStore.listPendingProposals(article.id, 'dialogue-contract-user')).toHaveLength(0);
+    expect(body.messages.map((message: { contextKind: string; role: string }) => `${message.contextKind}:${message.role}`)).toEqual(['task-card:user', 'task-card:assistant']);
     await app.close();
   });
 

@@ -90,11 +90,31 @@ export interface ArticleBlock {
 export interface Citation { id: string; label: string; sourceRef: string; note?: string }
 export interface ThemeTag { id: string; label: string; scope: 'article' | 'section' | 'paragraph'; targetId?: string }
 
+export type ArticleCommentStatus = 'open' | 'resolved' | 'needs_input';
+export type ArticleCommentResolutionKind = 'revision' | 'explanation' | 'question';
+
+export interface ArticleComment {
+  id: string;
+  articleId: string;
+  blockId: string;
+  selectedText: string;
+  comment: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+  status: ArticleCommentStatus;
+  resolutionKind?: ArticleCommentResolutionKind;
+  response?: string;
+  replacementText?: string;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string;
+}
+
 export interface ArticleVersion {
   id: string;
   reason: string;
   author: 'user' | 'agent' | 'system';
-  snapshot: { taskCard?: WritingTaskCard; outline: OutlineItem[]; blocks: ArticleBlock[]; citations: Citation[]; themeTags: ThemeTag[] };
+  snapshot: { taskCard?: WritingTaskCard; outline: OutlineItem[]; blocks: ArticleBlock[]; citations: Citation[]; themeTags: ThemeTag[]; comments?: ArticleComment[] };
   createdAt: string;
 }
 
@@ -108,6 +128,7 @@ export interface ArticleArtifact {
   blocks: ArticleBlock[];
   citations: Citation[];
   themeTags: ThemeTag[];
+  comments?: ArticleComment[];
   versions: ArticleVersion[];
   createdAt: string;
   updatedAt: string;

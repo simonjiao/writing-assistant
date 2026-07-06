@@ -2,6 +2,7 @@ export * from './task-card-builder';
 export * from './dialogue-brief-updater';
 export * from './dialogue-coordinator';
 export * from './dialogue-router';
+export * from './article-comment-resolver';
 export * from './task-card-reviser';
 export * from './outline-planner';
 export * from './outline-item-reviser';

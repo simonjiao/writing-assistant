@@ -74,6 +74,9 @@ export class MockLLMProvider implements LLMProvider {
     if (request.jsonMode && system.includes('对话上下文摘要器')) {
       return { content: JSON.stringify(mockDialogueBriefPatch(payload)), raw: { provider: 'mock' } };
     }
+    if (request.jsonMode && system.includes('正文批注处理器')) {
+      return { content: JSON.stringify(mockArticleCommentResolution(payload)), raw: { provider: 'mock' } };
+    }
     if (request.jsonMode && system.includes('轻量路由器')) {
       return { content: JSON.stringify(mockDialogueRoute(payload)), raw: { provider: 'mock' } };
     }
@@ -173,6 +176,41 @@ function mockTaskCardRevision(currentTaskCard: ReturnType<typeof mockTaskCard>['
     missingQuestions: [],
     followUpPrompts: [],
     changedFields,
+  };
+}
+
+function mockArticleCommentResolution(payload: Record<string, any>) {
+  const userComment = String(payload.userComment ?? payload.comment?.comment ?? '');
+  const selectedText = String(payload.selectedText ?? payload.comment?.selectedText ?? '');
+  const combined = `${userComment}\n${selectedText}`;
+  if (/为什么|为何|解释|说明/.test(userComment) && !/改|删|不要|避免|后\s*40|程高|续书/.test(userComment)) {
+    return {
+      action: 'explain',
+      response: '这条批注更像是在要求解释，我先给出说明，没有改动正文。',
+    };
+  }
+  if (/不清楚|看不懂|什么意思|哪一个|哪个/.test(userComment) && !/改|删|不要|避免/.test(userComment)) {
+    return {
+      action: 'ask',
+      response: '这条批注需要进一步确认：是要删去这句，还是改成更明确的事实说明？',
+    };
+  }
+  if (/后\s*40|后四十|程高|续书|中山狼|触柱|喜冤家/.test(combined)) {
+    return {
+      action: 'revise',
+      response: '已按批注避开后40回和程高本续书材料，改为只保留前80回与脂批可支撑的判断。',
+      replacementText: '迎春的薄命暗示可由前文判词与曲文点到为止；司棋则以脂批可证的刚烈与不肯委曲，显出另一种被礼法逼迫的处境。',
+    };
+  }
+  return {
+    action: 'revise',
+    response: '已按批注生成局部订正。',
+    replacementText: selectedText
+      .replace(/价值观/g, '立身取向')
+      .replace(/责任观/g, '担当之心')
+      .replace(/维度/g, '层面')
+      .replace(/机制/g, '关节')
+      .replace(/结构性/g, '根柢上的'),
   };
 }
 

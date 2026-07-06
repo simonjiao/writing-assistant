@@ -1,9 +1,9 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply } from 'fastify';
-import { AgentEvent, ArticleArtifact, ArticleBlock, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, KnowledgeItem, KnowledgeSearchOptions, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WritingTaskCard, WritingWorkspace } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, KnowledgeItem, KnowledgeSearchOptions, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WritingTaskCard, WritingWorkspace } from '@wa/core';
 import { normalizeTaskCardPolicies } from '@wa/skills';
-import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, TaskCardReviserOutput } from '@wa/skills';
+import type { ArticleCommentResolverInput, ArticleCommentResolverOutput, DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
 import { addKnowledgeEvidenceToBrief, buildCompactDialogueConversation, compactDialogueBriefForPrompt, enqueueDialogueBriefUpdate, ensureDialogueBriefSettled, getDialogueBriefStatus, getOrCreateDialogueBrief } from './dialogueBrief';
@@ -80,6 +80,51 @@ export function createApp(config: AppConfig, container: AppContainer) {
     return query.view === 'summary' ? articles.map(articleSummary) : articles.map(withWritingStandardSummary);
   });
   app.get('/api/articles/:articleId', async (request, reply) => { const { articleId } = request.params as { articleId: string }; const query = request.query as { userId?: string }; const userId = readUserId(query.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); return withWritingStandardSummary(access.article); });
+  app.post('/api/articles/:articleId/comments', async (request, reply) => {
+    const { articleId } = request.params as { articleId: string };
+    const body = (request.body ?? {}) as { userId?: string; blockId?: string; selectedText?: string; comment?: string };
+    const userId = readUserId(body.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const access = await requireArticleAccess(container, userId, articleId);
+    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
+    const blockId = body.blockId?.trim();
+    const selectedText = body.selectedText?.trim();
+    const note = body.comment?.trim();
+    if (!blockId) return reply.code(400).send({ error: 'blockId is required.' });
+    if (!selectedText) return reply.code(400).send({ error: 'selectedText is required.' });
+    if (!note) return reply.code(400).send({ error: 'comment is required.' });
+    const block = access.article.blocks.find((item) => item.id === blockId);
+    if (!block) return reply.code(404).send({ error: 'Article block not found.' });
+    const selectionStart = block.text.indexOf(selectedText);
+    if (selectionStart < 0) return reply.code(400).send({ error: 'Selected text is no longer present in the block.' });
+    const now = nowIso();
+    const comment: ArticleComment = {
+      id: newId('cmt'),
+      articleId: access.article.id,
+      blockId,
+      selectedText,
+      comment: note,
+      selectionStart,
+      selectionEnd: selectionStart + selectedText.length,
+      status: 'open',
+      createdAt: now,
+      updatedAt: now,
+    };
+    access.article.comments = [...(access.article.comments ?? []), comment];
+    const updated = await container.stores.artifactStore.updateArticle(access.article);
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: access.article.id, blockId, commentId: comment.id, reason: 'article-comment-created', userId }, createdAt: nowIso() });
+    return withWritingStandardSummary(updated);
+  });
+  app.post('/api/articles/:articleId/comments/process', async (request, reply) => {
+    const { articleId } = request.params as { articleId: string };
+    const body = (request.body ?? {}) as { userId?: string; sessionId?: string; commentIds?: string[] };
+    const userId = readUserId(body.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const access = await requireArticleAccess(container, userId, articleId);
+    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
+    const result = await processArticleComments(container, access.article, userId, body.sessionId, body.commentIds);
+    return { article: withWritingStandardSummary(result.article), results: result.results };
+  });
   app.delete('/api/articles/:articleId', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
     const body = (request.body ?? {}) as { userId?: string };
@@ -262,7 +307,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
         { userId, sessionId: body.sessionId, articleId: access.article.id },
       );
     } catch (error) {
-      if (!isDialogueCoordinatorJsonFailure(error)) throw error;
+      if (!isDialogueCoordinatorRecoverableFailure(error)) throw error;
       const assistantMessage = '这次修改范围较大，方案没有生成成功。请把要改的大纲项、要新增的情节或要删除的部分拆成更明确的一两条再发。';
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id });
       return { mode: 'clarify', message: assistantMessage, messages: await listDialogueMessages(container, access.article.id, userId) };
@@ -654,8 +699,8 @@ function isModificationIntent(message: string): boolean {
   return /(改|修改|调整|删|删除|加|添加|新增|重写|扩写|压缩|不要|避免|改成|改为|换成|补充|合并|拆分|包含|纳入|加入|写进|放进|体现|保留|漏掉|遗漏|参考|使用|采用|沿用|突出|强调|弱化|去掉|移除|需要|必须|重点)/.test(message);
 }
 
-function isDialogueCoordinatorJsonFailure(error: unknown): boolean {
-  return error instanceof Error && /Dialogue coordinator did not return valid JSON/.test(error.message);
+function isDialogueCoordinatorRecoverableFailure(error: unknown): boolean {
+  return error instanceof Error && /Dialogue coordinator (did not return valid JSON|returned invalid|returned empty|returned unsupported|returned proposal without operations)/.test(error.message);
 }
 
 async function applyRevisionProposal(container: AppContainer, proposalId: string, userId: string, sessionId?: string) {
@@ -732,6 +777,111 @@ async function applyRevisionOperation(container: AppContainer, article: ArticleA
   const run = await container.engine.startWorkflow('patch-workflow', { articleId: article.id, blockId: operation.blockId, instruction: operation.instruction }, { userId, sessionId, articleId: article.id, workspaceId: article.workspaceId });
   if (sessionId) await container.stores.sessionStore.updateSession(sessionId, { currentArticleId: article.id, currentWorkspaceId: article.workspaceId, currentBlockId: operation.blockId });
   return { article, runPayload: await enrichRun(container, run.id) };
+}
+
+type ArticleCommentProcessResult = {
+  commentId: string;
+  blockId: string;
+  action: ArticleCommentResolverOutput['action'];
+  status: ArticleComment['status'];
+  message: string;
+  changed: boolean;
+};
+
+async function processArticleComments(container: AppContainer, article: ArticleArtifact, userId: string, sessionId?: string, commentIds?: string[]): Promise<{ article: ArticleArtifact; results: ArticleCommentProcessResult[] }> {
+  const targetIds = new Set((commentIds ?? []).map((id) => id.trim()).filter(Boolean));
+  const comments = article.comments ?? [];
+  const targets = comments.filter((comment) => (targetIds.size ? targetIds.has(comment.id) : comment.status === 'open'));
+  if (!targets.length) return { article, results: [] };
+  let revisedCount = 0;
+  const results: ArticleCommentProcessResult[] = [];
+  for (const comment of targets) {
+    const block = article.blocks.find((item) => item.id === comment.blockId);
+    if (!block) {
+      updateComment(comment, { status: 'needs_input', resolutionKind: 'question', response: '这条批注关联的段落已经不存在，需要重新选择正文后再批注。' });
+      results.push({ commentId: comment.id, blockId: comment.blockId, action: 'ask', status: comment.status, message: comment.response ?? '', changed: false });
+      continue;
+    }
+    try {
+      const output = await container.runtime.invokeSkill<ArticleCommentResolverInput, ArticleCommentResolverOutput>(
+        'article-comment-resolver',
+        {
+          articleId: article.id,
+          comment,
+          block,
+          taskCard: article.taskCard,
+          adjacentBlocks: adjacentBlocksForArticle(article.blocks, block.id),
+        },
+        { userId, sessionId, articleId: article.id, blockId: block.id },
+      );
+      const applied = applyArticleCommentResolution(article, comment, output);
+      if (applied.changed) revisedCount += 1;
+      results.push({ commentId: comment.id, blockId: comment.blockId, action: output.action, status: comment.status, message: comment.response ?? output.response, changed: applied.changed });
+    } catch (error) {
+      updateComment(comment, { status: 'needs_input', resolutionKind: 'question', response: `这条批注没有处理成功，需要人工确认：${error instanceof Error ? error.message : String(error)}` });
+      results.push({ commentId: comment.id, blockId: comment.blockId, action: 'ask', status: comment.status, message: comment.response ?? '', changed: false });
+    }
+  }
+  const updated = await container.stores.artifactStore.updateArticle(article);
+  if (revisedCount) {
+    await container.stores.artifactStore.commitVersion(article.id, `处理正文批注：${revisedCount} 处修订`, 'agent');
+  }
+  await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'article-comments-processed', processedCount: results.length, revisedCount, userId }, createdAt: nowIso() });
+  return { article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated, results };
+}
+
+function applyArticleCommentResolution(article: ArticleArtifact, comment: ArticleComment, output: ArticleCommentResolverOutput): { changed: boolean } {
+  if (output.action === 'explain') {
+    updateComment(comment, { status: 'resolved', resolutionKind: 'explanation', response: output.response });
+    return { changed: false };
+  }
+  if (output.action === 'ask') {
+    updateComment(comment, { status: 'needs_input', resolutionKind: 'question', response: output.response });
+    return { changed: false };
+  }
+  const replacementText = output.replacementText?.trim();
+  if (!replacementText) {
+    updateComment(comment, { status: 'needs_input', resolutionKind: 'question', response: '处理器没有给出可替换文本，需要人工确认。' });
+    return { changed: false };
+  }
+  const block = article.blocks.find((item) => item.id === comment.blockId);
+  if (!block) {
+    updateComment(comment, { status: 'needs_input', resolutionKind: 'question', response: '这条批注关联的段落已经不存在，需要重新选择正文后再批注。' });
+    return { changed: false };
+  }
+  const range = locateCommentSelection(block.text, comment);
+  if (!range) {
+    updateComment(comment, { status: 'needs_input', resolutionKind: 'question', response: '选中文本已经变化，无法自动替换；请重新选择最新正文添加批注。' });
+    return { changed: false };
+  }
+  const text = `${block.text.slice(0, range.start)}${replacementText}${block.text.slice(range.end)}`;
+  article.blocks = article.blocks.map((item) => item.id === block.id ? { ...item, text, status: 'draft', updatedAt: nowIso() } : item);
+  updateComment(comment, { status: 'resolved', resolutionKind: 'revision', response: output.response, replacementText });
+  return { changed: true };
+}
+
+function updateComment(comment: ArticleComment, patch: Partial<ArticleComment>): void {
+  const now = nowIso();
+  Object.assign(comment, {
+    ...patch,
+    updatedAt: now,
+    resolvedAt: patch.status === 'resolved' ? now : comment.resolvedAt,
+  });
+}
+
+function locateCommentSelection(text: string, comment: ArticleComment): { start: number; end: number } | undefined {
+  const directIndex = text.indexOf(comment.selectedText);
+  if (directIndex >= 0) return { start: directIndex, end: directIndex + comment.selectedText.length };
+  if (typeof comment.selectionStart === 'number' && typeof comment.selectionEnd === 'number' && text.slice(comment.selectionStart, comment.selectionEnd) === comment.selectedText) {
+    return { start: comment.selectionStart, end: comment.selectionEnd };
+  }
+  return undefined;
+}
+
+function adjacentBlocksForArticle(blocks: ArticleBlock[], blockId: string): Array<Pick<ArticleBlock, 'id' | 'title' | 'text'>> {
+  const index = blocks.findIndex((block) => block.id === blockId);
+  if (index < 0) return [];
+  return blocks.slice(Math.max(0, index - 1), index + 2).filter((block) => block.id !== blockId).map((block) => ({ id: block.id, title: block.title, text: block.text.slice(0, 600) }));
 }
 
 function defaultWorkspaceId(userId: string): string {
