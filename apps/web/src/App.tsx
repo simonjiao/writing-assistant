@@ -7,6 +7,7 @@ const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']
 const activeStatuses = new Set(['queued', 'running']);
 const runRefreshIntervalMs = 1000;
 const navigationCollapsedStorageKey = 'writing-assistant.navigation-collapsed';
+const supportColumnCollapsedStorageKey = 'writing-assistant.support-column-collapsed';
 type SectionGenerationState = { sectionId: string; runId?: string; status: WorkflowRun['status'] | 'starting'; error?: string };
 type TaskCardTarget = 'current' | 'new';
 
@@ -23,6 +24,7 @@ export function App() {
   const [newWorkspaceMembers, setNewWorkspaceMembers] = useState('');
   const [workspaceModalOpen, setWorkspaceModalOpen] = useState(false);
   const [navigationCollapsed, setNavigationCollapsed] = useState(() => readNavigationCollapsedPreference());
+  const [supportColumnCollapsed, setSupportColumnCollapsed] = useState(() => readSupportColumnCollapsedPreference());
   const [domainProfiles, setDomainProfiles] = useState<DomainProfileSummary[]>([]);
   const [domainProfileRecommendations, setDomainProfileRecommendations] = useState<DomainProfileRecommendation[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>();
@@ -128,6 +130,7 @@ export function App() {
   const canSubmitTaskCardMessage = Boolean(activeTaskCardMessage.trim() && (taskCardDialogTarget === 'current' || selectedWorkspaceId));
   const taskCardFollowUpPrompts = useMemo(() => visibleArticle?.taskCard?.status === 'draft' ? taskCardPrompts(visibleArticle.taskCard) : [], [visibleArticle?.taskCard]);
   const hasWritingBlocks = Boolean(visibleArticle?.blocks.length);
+  const outlineGenerated = Boolean(visibleArticle?.outline.length);
 
   function applyRunResponse(response: RunResponse) {
     setLastRun(response);
@@ -235,6 +238,15 @@ export function App() {
     setNavigationCollapsed(collapsed);
     try {
       window.localStorage.setItem(navigationCollapsedStorageKey, collapsed ? 'true' : 'false');
+    } catch {
+      // Local storage can be unavailable in restricted browser modes; in-memory state still works.
+    }
+  }
+
+  function updateSupportColumnCollapsed(collapsed: boolean) {
+    setSupportColumnCollapsed(collapsed);
+    try {
+      window.localStorage.setItem(supportColumnCollapsedStorageKey, collapsed ? 'true' : 'false');
     } catch {
       // Local storage can be unavailable in restricted browser modes; in-memory state still works.
     }
@@ -399,7 +411,7 @@ export function App() {
     <div className="app-shell">
       <header className="topbar"><div><strong>Writing Assistant</strong><span className="muted">任务卡 · 大纲 · 正文 · 局部修改</span></div><div className="status">{busy ? `执行中：${status}` : status}</div></header>
       {error && <div className="error">{error}</div>}
-      <main className={['workspace', navigationCollapsed ? 'nav-collapsed' : '', taskCardConfirmed ? '' : 'task-card-column-hidden'].filter(Boolean).join(' ')}>
+      <main className={['workspace', navigationCollapsed ? 'nav-collapsed' : '', taskCardConfirmed ? '' : 'task-card-column-hidden', outlineGenerated ? 'support-column-visible' : '', outlineGenerated && supportColumnCollapsed ? 'support-column-collapsed' : ''].filter(Boolean).join(' ')}>
         <aside className={navigationCollapsed ? 'panel navigation-panel collapsed' : 'panel navigation-panel'} role={navigationCollapsed ? 'button' : undefined} tabIndex={navigationCollapsed && !busy ? 0 : undefined} aria-label={navigationCollapsed ? '展开左栏' : undefined} aria-disabled={navigationCollapsed && busy ? true : undefined} onClick={navigationCollapsed && !busy ? () => updateNavigationCollapsed(false) : undefined} onKeyDown={navigationCollapsed ? (event) => { if (!busy && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); updateNavigationCollapsed(false); } } : undefined}>
           {navigationCollapsed ? <span className="column-collapse-handle" aria-hidden="true">{'>'}</span> : <>
             <div className="workspace-head">
@@ -441,11 +453,12 @@ export function App() {
             );
           })}</div> : null}
           <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => setSelectedBlockId(block.id)} onToggleCollapse={() => toggleBlockCollapsed(block.id)} />)}</div>
-          <div className="editor-support">
-            {hasWritingBlocks ? <section className="support-card"><h3>知识 / 引用 / 标签</h3>{selectedBlock ? <div><p className="mono">{selectedBlock.id}</p><h4>引用来源</h4>{selectedBlock.sourceRefs.length ? selectedBlock.sourceRefs.map((ref) => <span className="tag" key={ref}>{ref}</span>) : <div className="empty">暂无引用绑定</div>}<h4>主题标签</h4>{selectedBlock.themeTags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div> : <div className="empty">选择一个段落后显示对应来源和标签。</div>}</section> : null}
-            <section className="support-card"><h3>修订日志</h3><RevisionLogView article={visibleArticle} /></section>
+          {!outlineGenerated ? <div className="editor-support">
+            {hasWritingBlocks ? <KnowledgeTagsCard selectedBlock={selectedBlock} /> : null}
+            <RevisionLogCard article={visibleArticle} />
             {visibleArticle && progressVisible ? <section className="support-card"><h3>执行进度</h3><ProgressTimeline events={liveEvents} run={lastRun?.run} /></section> : null}
-          </div>
+          </div> : null}
+          {outlineGenerated && visibleArticle && progressVisible ? <div className="editor-progress-support"><section className="support-card"><h3>执行进度</h3><ProgressTimeline events={liveEvents} run={lastRun?.run} /></section></div> : null}
           </div>
           <div className="task-dialog-panel">
             {article?.taskCard ? <div className="task-dialog-toolbar">
@@ -463,6 +476,18 @@ export function App() {
             </div>
           </div>
         </section>
+        {outlineGenerated ? <aside className={supportColumnCollapsed ? 'panel right-support-panel collapsed' : 'panel right-support-panel'} role={supportColumnCollapsed ? 'button' : undefined} tabIndex={supportColumnCollapsed && !busy ? 0 : undefined} aria-label={supportColumnCollapsed ? '展开辅助列' : undefined} aria-disabled={supportColumnCollapsed && busy ? true : undefined} onClick={supportColumnCollapsed && !busy ? () => updateSupportColumnCollapsed(false) : undefined} onKeyDown={supportColumnCollapsed ? (event) => { if (!busy && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); updateSupportColumnCollapsed(false); } } : undefined}>
+          {supportColumnCollapsed ? <span className="right-column-collapse-handle" aria-hidden="true">{'<'}</span> : <>
+            <div className="right-support-head">
+              <h2>辅助</h2>
+              <button aria-label="收起辅助列" className="right-column-collapse-handle" disabled={busy} title="收起辅助列" onClick={() => updateSupportColumnCollapsed(true)}>&gt;</button>
+            </div>
+            <div className="right-support-content">
+              {hasWritingBlocks ? <KnowledgeTagsCard selectedBlock={selectedBlock} /> : null}
+              <RevisionLogCard article={visibleArticle} />
+            </div>
+          </>}
+        </aside> : null}
       </main>
       {visibleArticle && selectedBlockId ? <footer className="chatbar"><div className="patch-box"><strong>局部修改</strong><input value={patchInstruction} onChange={(event) => setPatchInstruction(event.target.value)} placeholder="输入对选中段落的修改意见" /><button disabled={busy} onClick={() => execute(() => api.startPatch(visibleArticle.id, selectedBlockId, patchInstruction, userId, sessionId))}>生成 Patch</button>{lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-patch-confirm' && <button onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'accept' }))}>应用 Patch</button>}</div>{patchPreview && <div className="patch-preview"><strong>Patch 预览</strong><div className="diff-grid"><pre>{patchPreview.before}</pre><pre>{patchPreview.after}</pre></div><ul>{patchPreview.changeSummary.map((item) => <li key={item}>{item}</li>)}</ul></div>}</footer> : null}
       {workspaceModalOpen && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="workspace-modal-title"><div className="modal-head"><h2 id="workspace-modal-title">新建工作台</h2><button aria-label="关闭" className="icon-button" disabled={busy} onClick={() => setWorkspaceModalOpen(false)}>×</button></div><div className="modal-body"><label>名称</label><input value={newWorkspaceName} autoFocus onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="新工作台名称" /><label>协作者</label><input value={newWorkspaceMembers} onChange={(event) => setNewWorkspaceMembers(event.target.value)} placeholder="协作者 userId，用逗号分隔" /></div><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setWorkspaceModalOpen(false)}>取消</button><button disabled={busy || !newWorkspaceName.trim()} onClick={() => void createWorkspace()}>创建</button></div></div></div>}
@@ -540,6 +565,25 @@ function RevisionLogView(props: { article?: ArticleArtifact }) {
       {versions.map((version) => <div className="version-item" key={version.id}><strong>{revisionReasonLabel(version.reason, props.article)}</strong><span>{revisionAuthorLabel(version.author)} · {new Date(version.createdAt).toLocaleString()}</span></div>)}
     </div>
   );
+}
+
+function KnowledgeTagsCard(props: { selectedBlock?: ArticleBlock }) {
+  return (
+    <section className="support-card">
+      <h3>知识 / 引用 / 标签</h3>
+      {props.selectedBlock ? <div>
+        <p className="mono">{props.selectedBlock.id}</p>
+        <h4>引用来源</h4>
+        {props.selectedBlock.sourceRefs.length ? props.selectedBlock.sourceRefs.map((ref) => <span className="tag" key={ref}>{ref}</span>) : <div className="empty">暂无引用绑定</div>}
+        <h4>主题标签</h4>
+        {props.selectedBlock.themeTags.length ? props.selectedBlock.themeTags.map((tag) => <span className="tag" key={tag}>{tag}</span>) : <div className="empty">暂无主题标签。</div>}
+      </div> : <div className="empty">选择一个段落后显示对应来源和标签。</div>}
+    </section>
+  );
+}
+
+function RevisionLogCard(props: { article?: ArticleArtifact }) {
+  return <section className="support-card"><h3>修订日志</h3><RevisionLogView article={props.article} /></section>;
 }
 
 function ProgressTimeline(props: { events: AgentEvent[]; run?: WorkflowRun }) {
@@ -761,6 +805,14 @@ function userFacingRunError(message?: string): string {
 function readNavigationCollapsedPreference(): boolean {
   try {
     return window.localStorage.getItem(navigationCollapsedStorageKey) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function readSupportColumnCollapsedPreference(): boolean {
+  try {
+    return window.localStorage.getItem(supportColumnCollapsedStorageKey) === 'true';
   } catch {
     return false;
   }
