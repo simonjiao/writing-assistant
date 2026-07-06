@@ -56,12 +56,17 @@ export interface WritingTaskCard {
   updatedAt: string;
 }
 
+export type OutlineRhetoricalRole = 'opening' | 'development' | 'turn' | 'conclusion';
+
 export interface OutlineItem {
   id: string;
   title: string;
   goal: string;
   order: number;
   expectedBlocks: number;
+  rhetoricalRole?: OutlineRhetoricalRole;
+  keySection?: boolean;
+  specialHandling?: string[];
   sourceHints: string[];
   themeTags: string[];
   status: 'draft' | 'confirmed' | 'written';

@@ -716,8 +716,40 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .outline-title strong {
   line-height: 1.35;
 }
+.outline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+.outline-item .outline-role,
+.outline-item .outline-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #eee7d8;
+  color: #4c4033;
+  font-weight: 700;
+}
+.outline-item .outline-key {
+  background: #e6eef0;
+  color: #37545a;
+}
 .outline-item p { margin: 6px 0; color: #4d5966; }
 .outline-item span { color: #7c7266; font-size: 12px; }
+.outline-special {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #5a5045;
+  font-size: 13px;
+  line-height: 1.5;
+}
 .outline-toolbar {
   display: flex;
   flex-wrap: wrap;

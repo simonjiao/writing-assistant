@@ -8,6 +8,9 @@ const currentOutlineItem: OutlineItem = {
   goal: '旧目标。',
   order: 2,
   expectedBlocks: 2,
+  rhetoricalRole: 'turn',
+  keySection: true,
+  specialHandling: ['这里是全文关键转折，必须先修正误解再推进判断。'],
   sourceHints: ['旧来源'],
   themeTags: ['旧标签'],
   status: 'confirmed',
@@ -68,6 +71,9 @@ describe('OutlineItemReviserSkill', () => {
     expect(output.outlineItem.id).toBe(currentOutlineItem.id);
     expect(output.outlineItem.order).toBe(currentOutlineItem.order);
     expect(output.outlineItem.status).toBe(currentOutlineItem.status);
+    expect(output.outlineItem.rhetoricalRole).toBe('turn');
+    expect(output.outlineItem.keySection).toBe(true);
+    expect(output.outlineItem.specialHandling).toEqual(['这里是全文关键转折，必须先修正误解再推进判断。']);
     expect(output.outlineItem.title).toBe('新标题');
     expect(output.outlineItem.goal).toContain('有规劝');
     expect(output.changedFields).toEqual(['title', 'goal']);
@@ -76,6 +82,8 @@ describe('OutlineItemReviserSkill', () => {
     expect(system).toContain('只能修改 currentOutlineItem');
     expect(system).toContain('不要修改任务卡');
     expect(system).toContain('不要生成正文');
+    expect(system).toContain('起承转合');
+    expect(system).toContain('关键段落');
   });
 
   it('rejects incomplete outline item revisions', async () => {

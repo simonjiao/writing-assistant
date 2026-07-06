@@ -67,6 +67,9 @@ describe('DefaultContextBuilder', () => {
           id: 'sec_1',
           title: '花荫下的私情',
           goal: '说明司棋与潘又安一事不能只作浅薄理解。',
+          rhetoricalRole: 'turn',
+          keySection: true,
+          specialHandling: ['这是全文关键转折，先纠正误解再展开判断。'],
           sourceHints: ['第71回鸳鸯撞见司棋与潘又安私会'],
           themeTags: ['司棋', '潘又安'],
         },
@@ -76,12 +79,52 @@ describe('DefaultContextBuilder', () => {
     expect(context.scope).toBe('section');
     expect(calls[0].query).toContain('花荫下的私情');
     expect(calls[0].query).toContain('说明司棋与潘又安');
+    expect(calls[0].query).toContain('turn');
+    expect(calls[0].query).toContain('关键段落');
+    expect(calls[0].query).toContain('这是全文关键转折');
     expect(calls[0].query).toContain('第71回鸳鸯撞见');
     expect(calls[0].options).toMatchObject({
-      limit: 8,
+      limit: 12,
       themeTags: ['司棋', '潘又安'],
-      keywordQueries: ['第71回鸳鸯撞见司棋与潘又安私会'],
+      keywordQueries: ['司棋 第71回鸳鸯撞见司棋与潘又安私会'],
     });
     expect(context.compactSummary).toContain('Current section: 花荫下的私情');
+  });
+
+  it('keeps task characters in retrieval tags when section tags are abstract', async () => {
+    const calls: Array<{ query: string; options: { limit?: number; themeTags?: string[]; keywordQueries?: string[] } | undefined }> = [];
+    const builder = new DefaultContextBuilder({
+      sessionStore: { async getSession() { return undefined; } } as never,
+      stateStore: { async getRun() { return undefined; } } as never,
+      memoryStore: { async getUserProfile() { return memory; } } as never,
+      artifactStore: { async getArticle() { return article; } } as never,
+      knowledgeStore: {
+        async search(query, options) {
+          calls.push({ query, options });
+          return [];
+        },
+        async listByRefs() { return []; },
+      },
+    });
+
+    await builder.build({
+      userId: 'u1',
+      skillId: 'section-writer',
+      articleId: article.id,
+      input: {
+        articleId: article.id,
+        section: {
+          id: 'sec_1',
+          title: '司棋的刚烈性情',
+          goal: '分析司棋不肯受慢待的性情。',
+          sourceHints: ['第61回司棋索要鸡蛋'],
+          themeTags: ['性格', '刚烈'],
+        },
+      },
+    });
+
+    expect(calls[0].query).toContain('司棋');
+    expect(calls[0].options?.themeTags).toEqual(['性格', '刚烈', '司棋']);
+    expect(calls[0].options?.keywordQueries).toEqual(['司棋 第61回司棋索要鸡蛋']);
   });
 });

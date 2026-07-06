@@ -22,6 +22,8 @@ interface SectionWriterRawOutput {
   summary?: unknown;
 }
 
+type SectionWriterLlm = Parameters<Skill<SectionWriterInput, SectionWriterOutput>['invoke']>[0]['llm'];
+
 export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWriterOutput> {
   manifest = {
     id: 'section-writer',
@@ -38,7 +40,8 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
     const taskCard = normalizeTaskCardPolicies(input.taskCard).taskCard;
     const knowledge = filterKnowledgeByTaskCardPolicy(context.knowledge, taskCard);
     const writingContinuity = buildWritingContinuity(input, context.article, knowledge);
-    const sectionKnowledge = prioritizeSectionKnowledge(knowledge, writingContinuity);
+    const sectionKnowledge = prioritizeSectionKnowledge(knowledge, writingContinuity, input.section);
+    const evidenceBoundSection = buildEvidenceBoundSection(input.section, sectionKnowledge, taskCard);
     const writingBudget = buildSectionWritingBudget(taskCard, input.section, context.article);
     const response = await llm.chat({
       jsonMode: true,
@@ -51,6 +54,12 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
             '你的任务是原创写作和论证展开，不是翻译、改写、转述、复述或资料整理。',
             '只输出 JSON：blocks、summary；blocks 必须是 ArticleBlock 数组，每个 block.sourceRefs 必须是 string[]，没有可用来源时输出 []。',
             'section.expectedBlocks 是正文块数量参考；如果只需要一个正文块，blocks 输出长度为 1 的数组。',
+            'section.rhetoricalRole 控制本节在全文中的起承转合位置，必须按 opening、development、turn、conclusion 的职责写。',
+            'opening 要直接建立核心问题、第一判断或文章入口，不要铺陈背景、复述故事或提前写结论。',
+            'development 要承接前节判断并继续推进，不要重新开题。',
+            'turn 要写出论证转折、比较、纠偏或更深一层解释，不能只是换个材料重复前文。',
+            'conclusion 要收束全文判断并回应主题张力，不要机械总结各节，也不要塞入新的大段材料。',
+            'section.keySection=true 时，本节是全文关键段落，必须优先执行 section.specialHandling，不得写成普通铺垫段。',
             '每个 block.text 必须是完整正文，不能留空。',
             '所有 blocks 的正文总字数不得超过 writingBudget.maxChars；宁可凝练，不要超预算。',
             '资料和原文只能作为证据，不得把整段原文、资料摘要或近似复述当作正文主体。',
@@ -63,6 +72,7 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
             '不要重复 writingContinuity.recentBlocks 中已有的观点、例证和批语；同一来源已被前文使用时，优先改用 unusedSourceRefs 中的来源。',
             '提到非本节核心人物、事件或批语时，必须在同句或邻近句交代它与本节论点的关系，不能只抛出名字。',
             '正文凡提到原文、回目、脂批、批语、引文或具体来源依据，对应 block.sourceRefs 必须绑定 knowledge 中的 sourceRef。',
+            'section.sourceHints 只是检索后仍有 knowledge 支撑的提示，不是独立证据；不得把无来源支撑的 sourceHints 当作事实写入正文。',
             'taskCard.topRules.writingStandards 是顶部写作规则，优先级高于普通风格偏好、资料口吻和大纲措辞。',
             '如有 taskCard.topRules.replacementHints，必须优先采用 prefer 中的替代表达，不要使用 avoid 中的词。',
             '必须遵守 taskCard.constraints.mustAvoid；不得使用其中明示的禁用词、禁用说法，以及括号中“如/例如/比如”列出的词。',
@@ -72,10 +82,15 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
         },
         {
           role: 'user',
-          content: JSON.stringify({
-            taskCard,
-            section: input.section,
-            contextSummary: context.compactSummary,
+	          content: JSON.stringify({
+	            taskCard,
+	            section: evidenceBoundSection.section,
+	            sourceHintsPolicy: {
+	              sourceHintsAreEvidenceOnlyWhenSupportedByKnowledge: true,
+	              unsupportedSourceHints: evidenceBoundSection.unsupportedSourceHints,
+	              rule: 'unsupportedSourceHints 不得作为事实、引文、脂批内容或来源依据写入正文。',
+	            },
+	            contextSummary: context.compactSummary,
             knowledge: sectionKnowledge,
             writingContinuity,
             writingBudget,
@@ -121,7 +136,7 @@ interface SectionWritingBudget {
 }
 
 interface WritingContinuity {
-  currentSection: { id: string; order: number; title: string; goal: string };
+  currentSection: { id: string; order: number; title: string; goal: string; rhetoricalRole?: OutlineItem['rhetoricalRole']; keySection?: boolean; specialHandling: string[] };
   previousSections: Array<{ id: string; order: number; title: string }>;
   nextSection?: { id: string; order: number; title: string };
   recentBlocks: Array<{ sectionTitle: string; text: string; sourceRefs: string[] }>;
@@ -136,13 +151,19 @@ class SectionLengthBudgetError extends Error {
   }
 }
 
+class SectionSourceReferenceError extends Error {
+  constructor() {
+    super('Section writer referenced source-backed material without sourceRefs.');
+  }
+}
+
 function parseSectionWriterResponse(content: string): SectionWriterRawOutput {
   const parsed = safeJsonParse<SectionWriterRawOutput>(content);
   if (!parsed?.block?.text && !parsed?.blocks?.some((block) => block.text)) throw new Error(`Section writer did not return a valid block: ${content.slice(0, 300)}`);
   return parsed;
 }
 
-async function reviseOverlongSection(input: { input: SectionWriterInput; parsed: SectionWriterRawOutput; knowledge: KnowledgeItem[]; writingBudget: SectionWritingBudget; writingContinuity: WritingContinuity; lengthError: SectionLengthBudgetError; llm: Parameters<Skill<SectionWriterInput, SectionWriterOutput>['invoke']>[0]['llm'] }): Promise<SectionWriterRawOutput> {
+async function reviseOverlongSection(input: { input: SectionWriterInput; parsed: SectionWriterRawOutput; knowledge: KnowledgeItem[]; writingBudget: SectionWritingBudget; writingContinuity: WritingContinuity; lengthError: SectionLengthBudgetError; llm: SectionWriterLlm }): Promise<SectionWriterRawOutput> {
   const response = await input.llm.chat({
     jsonMode: true,
     temperature: 0.25,
@@ -180,23 +201,7 @@ async function reviseOverlongSection(input: { input: SectionWriterInput; parsed:
 }
 
 function normalizeOutput(output: SectionWriterRawOutput, input: SectionWriterInput, knowledge: KnowledgeItem[], writingBudget: SectionWritingBudget, writingContinuity: WritingContinuity): SectionWriterOutput {
-  const now = nowIso();
-  const candidateSources = optionalStringArray(output.candidateSources, 'candidateSources') ?? [];
-  const blocks = normalizeBlockOutputs(output, input).map((sourceBlock, index) => {
-    const sourceRefs = uniqueStrings(optionalStringArray(sourceBlock.sourceRefs, `blocks[${index}].sourceRefs`) ?? candidateSources);
-    return {
-      id: sourceBlock.id ?? newId('blk'),
-      type: 'section' as const,
-      sectionId: input.section.id,
-      title: typeof sourceBlock.title === 'string' && sourceBlock.title.trim() ? sourceBlock.title.trim() : (index === 0 ? input.section.title : undefined),
-      text: requireText(sourceBlock.text, `blocks[${index}].text`),
-      sourceRefs,
-      themeTags: optionalStringArray(sourceBlock.themeTags, `blocks[${index}].themeTags`) ?? input.section.themeTags,
-      status: 'draft' as const,
-      createdAt: sourceBlock.createdAt ?? now,
-      updatedAt: now,
-    };
-  });
+  const { blocks, candidateSources } = buildArticleBlocks(output, input, knowledge);
   const combinedText = blocks.map((block) => block.text).join('\n\n');
   validateLengthBudget(combinedText, writingBudget);
   validateAvoidedTerms(combinedText, input.taskCard.constraints.mustAvoid);
@@ -211,6 +216,140 @@ function normalizeOutput(output: SectionWriterRawOutput, input: SectionWriterInp
     candidateSources: candidateSources.length ? candidateSources : [...new Set(blocks.flatMap((item) => item.sourceRefs))],
     summary: requireText(output.summary, 'summary'),
   };
+}
+
+function buildArticleBlocks(output: SectionWriterRawOutput, input: SectionWriterInput, knowledge: KnowledgeItem[]): { blocks: ArticleBlock[]; candidateSources: string[] } {
+  const now = nowIso();
+  const candidateSources = optionalStringArray(output.candidateSources, 'candidateSources') ?? [];
+  const blocks = normalizeBlockOutputs(output, input).map((sourceBlock, index) => {
+    const text = requireText(sourceBlock.text, `blocks[${index}].text`);
+    const explicitRefs = optionalStringArray(sourceBlock.sourceRefs, `blocks[${index}].sourceRefs`);
+    const sourceRefs = uniqueStrings(resolveBlockSourceRefs(explicitRefs, candidateSources, text, input, knowledge));
+    return {
+      id: sourceBlock.id ?? newId('blk'),
+      type: 'section' as const,
+      sectionId: input.section.id,
+      title: typeof sourceBlock.title === 'string' && sourceBlock.title.trim() ? sourceBlock.title.trim() : (index === 0 ? input.section.title : undefined),
+      text,
+      sourceRefs,
+      themeTags: optionalStringArray(sourceBlock.themeTags, `blocks[${index}].themeTags`) ?? input.section.themeTags,
+      status: 'draft' as const,
+      createdAt: sourceBlock.createdAt ?? now,
+      updatedAt: now,
+    };
+  });
+  return { blocks, candidateSources };
+}
+
+function resolveBlockSourceRefs(explicitRefs: string[] | undefined, candidateSources: string[], text: string, input: SectionWriterInput, knowledge: KnowledgeItem[]): string[] {
+  const needsRefs = needsSourceRefs(text, input.taskCard);
+  if (explicitRefs?.length) {
+    return needsRefs ? uniqueStrings([...explicitRefs, ...inferSourceRefsForBlock(text, input.section, knowledge)]) : explicitRefs;
+  }
+  if (candidateSources.length && (explicitRefs === undefined || needsRefs)) return candidateSources;
+  if (needsRefs) return inferSourceRefsForBlock(text, input.section, knowledge);
+  return [];
+}
+
+function inferSourceRefsForBlock(text: string, section: OutlineItem, knowledge: KnowledgeItem[]): string[] {
+  const query = [text, section.title, section.goal, section.rhetoricalRole, section.keySection ? '关键段落' : undefined, ...(section.specialHandling ?? []), ...section.sourceHints, ...section.themeTags].filter(Boolean).join('\n');
+  return knowledge
+    .map((item) => ({ item, score: sourceBindingScore(item, query, text) }))
+    .filter(({ score }) => score >= 4)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map(({ item }) => item.sourceRef);
+}
+
+function sourceBindingScore(item: KnowledgeItem, query: string, blockText: string): number {
+  const itemText = [item.title, item.content, item.sourceRef, item.themeTags.join(' ')].join('\n');
+  const queryNgrams = ngramSet(normalizeForOverlap(query), 2);
+  const itemNgrams = ngramSet(normalizeForOverlap(itemText), 2);
+  let score = Math.min(6, countSharedItems(queryNgrams, itemNgrams) * 0.6);
+  const queryChapters = extractChapterNumbers(query);
+  const itemChapters = extractKnowledgeChapterNumbers(item);
+  if (queryChapters.length && itemChapters.length) {
+    score += queryChapters.some((chapter) => itemChapters.includes(chapter)) ? 8 : -4;
+  }
+  if (mentionsCommentary(blockText)) score += isCommentaryKnowledge(item) ? 5 : -2;
+  if (mentionsPrimaryText(blockText) && isPrimaryTextKnowledge(item)) score += 2;
+  return score;
+}
+
+function ngramSet(value: string, size: number): Set<string> {
+  const result = new Set<string>();
+  if (value.length < size) return result;
+  for (let index = 0; index <= value.length - size; index += 1) result.add(value.slice(index, index + size));
+  return result;
+}
+
+function countSharedItems(a: Set<string>, b: Set<string>): number {
+  let count = 0;
+  for (const item of a) {
+    if (b.has(item)) count += 1;
+  }
+  return count;
+}
+
+function extractKnowledgeChapterNumbers(item: KnowledgeItem): number[] {
+  return uniqueNumbers([
+    ...extractChapterNumbers(item.title),
+    ...extractChapterNumbers(item.content),
+    ...extractChapterNumbers(item.sourceRef),
+    ...extractSourceRefChapterNumbers(item.sourceRef),
+  ]);
+}
+
+function extractSourceRefChapterNumbers(sourceRef: string): number[] {
+  return [...sourceRef.matchAll(/(?:^|[.:/_-])c(\d{1,3})(?:[.:/_-]|$)/gi)]
+    .map((match) => Number(match[1]))
+    .filter((item) => Number.isFinite(item) && item > 0);
+}
+
+function extractChapterNumbers(value: string): number[] {
+  return uniqueNumbers([...value.matchAll(/第([一二三四五六七八九十百零〇\d]{1,8})回/g)]
+    .map((match) => parseChapterNumber(match[1]))
+    .filter((item): item is number => typeof item === 'number' && Number.isFinite(item) && item > 0));
+}
+
+function parseChapterNumber(value: string): number | undefined {
+  if (/^\d+$/.test(value)) return Number(value);
+  return parseChineseNumber(value);
+}
+
+function parseChineseNumber(value: string): number | undefined {
+  const normalized = value.replace(/[零〇]/g, '');
+  if (!normalized) return undefined;
+  const hundredParts = normalized.split('百');
+  if (hundredParts.length > 1) {
+    const hundreds = hundredParts[0] ? chineseDigit(hundredParts[0]) : 1;
+    const remainder = parseChineseUnder100(hundredParts.slice(1).join('百')) ?? 0;
+    return hundreds ? hundreds * 100 + remainder : undefined;
+  }
+  return parseChineseUnder100(normalized);
+}
+
+function parseChineseUnder100(value: string): number | undefined {
+  if (!value) return 0;
+  if (value.includes('十')) {
+    const [tensRaw, onesRaw = ''] = value.split('十');
+    const tens = tensRaw ? chineseDigit(tensRaw) : 1;
+    const ones = onesRaw ? chineseDigit(onesRaw) : 0;
+    return tens === undefined || ones === undefined ? undefined : tens * 10 + ones;
+  }
+  return chineseDigit(value);
+}
+
+function chineseDigit(value: string): number | undefined {
+  const digits: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  if (value.length === 1) return digits[value];
+  const chars = [...value];
+  if (chars.every((char) => digits[char] !== undefined)) return Number(chars.map((char) => digits[char]).join(''));
+  return undefined;
+}
+
+function uniqueNumbers(values: number[]): number[] {
+  return [...new Set(values)];
 }
 
 function buildWritingContinuity(input: SectionWriterInput, article: ArticleArtifact | undefined, knowledge: KnowledgeItem[]): WritingContinuity {
@@ -237,7 +376,15 @@ function buildWritingContinuity(input: SectionWriterInput, article: ArticleArtif
   }
   const availableRefs = uniqueStrings(knowledge.map((item) => item.sourceRef));
   return {
-    currentSection: { id: input.section.id, order: input.section.order, title: input.section.title, goal: input.section.goal },
+    currentSection: {
+      id: input.section.id,
+      order: input.section.order,
+      title: input.section.title,
+      goal: input.section.goal,
+      rhetoricalRole: input.section.rhetoricalRole,
+      keySection: input.section.keySection,
+      specialHandling: input.section.specialHandling ?? [],
+    },
     previousSections,
     nextSection: next ? { id: next.id, order: next.order, title: next.title } : undefined,
     recentBlocks,
@@ -245,18 +392,55 @@ function buildWritingContinuity(input: SectionWriterInput, article: ArticleArtif
     unusedSourceRefs: availableRefs.filter((sourceRef) => !used.has(sourceRef)),
     policy: [
       '本节只推进当前章节目标，不重写前文已经完成的介绍或判断。',
+      currentSectionPolicy(input.section),
       '优先使用前文尚未使用的来源；必须复用来源时，要换一个分析角度，不能重复同一句批语或同一处情节。',
       '引入旁支人物或事件时，先交代它和当前论点的关系，再分析其意义。',
-    ],
+    ].filter(Boolean),
   };
 }
 
-function prioritizeSectionKnowledge(knowledge: KnowledgeItem[], writingContinuity: WritingContinuity): KnowledgeItem[] {
+function prioritizeSectionKnowledge(knowledge: KnowledgeItem[], writingContinuity: WritingContinuity, section: OutlineItem): KnowledgeItem[] {
   const used = new Set(writingContinuity.usedSourceRefs.map((item) => item.sourceRef));
+  const query = [section.title, section.goal, section.rhetoricalRole, section.keySection ? '关键段落' : undefined, ...(section.specialHandling ?? []), ...section.sourceHints, ...section.themeTags].filter(Boolean).join('\n');
+  return knowledge
+    .map((item, index) => ({
+      item,
+      index,
+      score: sourceBindingScore(item, query, query) + (used.has(item.sourceRef) ? 0 : 0.5) + (isNavigationalKnowledge(item) ? -6 : 0),
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map(({ item }) => item);
+}
+
+function buildEvidenceBoundSection(section: OutlineItem, knowledge: KnowledgeItem[], taskCard: WritingTaskCard): { section: OutlineItem; unsupportedSourceHints: string[] } {
+  const supportedSourceHints = section.sourceHints.filter((hint) => sourceHintSupportedByKnowledge(hint, knowledge, taskCard));
+  return {
+    section: { ...section, sourceHints: supportedSourceHints },
+    unsupportedSourceHints: section.sourceHints.filter((hint) => !supportedSourceHints.includes(hint)),
+  };
+}
+
+function currentSectionPolicy(section: OutlineItem): string {
+  const rolePolicies: Partial<Record<NonNullable<OutlineItem['rhetoricalRole']>, string>> = {
+    opening: '本节是开头：先立题、设问或提出核心判断，避免背景铺陈。',
+    development: '本节是承接：接住前一层判断继续推进，避免另起炉灶。',
+    turn: '本节是转折：必须写出比较、纠偏或论证层次的变化。',
+    conclusion: '本节是结尾：收束判断并回扣全文，不要机械复述前文。',
+  };
   return [
-    ...knowledge.filter((item) => !used.has(item.sourceRef)),
-    ...knowledge.filter((item) => used.has(item.sourceRef)),
-  ];
+    section.rhetoricalRole ? rolePolicies[section.rhetoricalRole] : undefined,
+    section.keySection ? '本节是关键段落：特殊处理要求优先于一般展开方式。' : undefined,
+    ...(section.specialHandling ?? []).map((item) => `本节特殊处理：${item}`),
+  ].filter(Boolean).join(' ');
+}
+
+function sourceHintSupportedByKnowledge(hint: string, knowledge: KnowledgeItem[], taskCard: WritingTaskCard): boolean {
+  return knowledge.some((item) => {
+    const itemText = normalizeForOverlap([item.title, item.content, item.sourceRef, item.themeTags.join(' ')].join('\n'));
+    const taskCharacters = (taskCard.scope.characters ?? []).map(normalizeForOverlap).filter(Boolean);
+    if (taskCharacters.length && !taskCharacters.some((character) => itemText.includes(character))) return false;
+    return sourceBindingScore(item, hint, hint) >= 8;
+  });
 }
 
 function normalizeBlockOutputs(output: SectionWriterRawOutput, input: SectionWriterInput): Array<Partial<ArticleBlock>> {
@@ -352,9 +536,7 @@ function validateSourceReferences(blocks: ArticleBlock[], taskCard: WritingTaskC
     const refs = uniqueStrings(block.sourceRefs ?? []);
     const unknownRefs = knowledge.length ? refs.filter((sourceRef) => !availableRefs.has(sourceRef)) : [];
     if (unknownRefs.length) throw new Error(`Section writer returned sourceRefs not present in knowledge: ${unknownRefs.join('、')}.`);
-    if ((taskCard.constraints.citationRequired || containsSourceSignal(block.text)) && !refs.length) {
-      throw new Error('Section writer referenced source-backed material without sourceRefs.');
-    }
+    if (needsSourceRefs(block.text, taskCard) && !refs.length) throw new SectionSourceReferenceError();
     if (refs.length && hasUnusedAvailable && refs.every((sourceRef) => usedRefs.has(sourceRef))) {
       throw new Error('Section writer reused only previously used sourceRefs while unused sources were available.');
     }
@@ -388,6 +570,33 @@ function validateSourceUse(text: string, knowledge: KnowledgeItem[]): void {
 
 function containsSourceSignal(text: string): boolean {
   return /第[一二三四五六七八九十百零〇\d]+回|脂批|脂砚|脂评|批语|原文|回目|判词|引文|引语|书中(?:写|说|道)|作者(?:写|说|道)|[“「『][^”」』]{3,}[”」』]/.test(text);
+}
+
+function needsSourceRefs(text: string, taskCard: WritingTaskCard): boolean {
+  return taskCard.constraints.citationRequired || containsSourceSignal(text);
+}
+
+function mentionsCommentary(text: string): boolean {
+  return /脂批|脂砚|脂评|批语/.test(text);
+}
+
+function mentionsPrimaryText(text: string): boolean {
+  return /第[一二三四五六七八九十百零〇\d]+回|原文|回目|书中(?:写|说|道)|作者(?:写|说|道)|[“「『][^”」』]{3,}[”」』]/.test(text);
+}
+
+function isCommentaryKnowledge(item: KnowledgeItem): boolean {
+  const marker = [item.sourceRef, item.title, item.themeTags.join(' ')].join('\n');
+  return /comm|zhipi|commentary|脂批|脂砚|脂评|批语/i.test(marker);
+}
+
+function isPrimaryTextKnowledge(item: KnowledgeItem): boolean {
+  const marker = [item.sourceRef, item.title, item.themeTags.join(' ')].join('\n');
+  return /primary_text|base_text|正文|原文|hlm120|qian80/i.test(marker);
+}
+
+function isNavigationalKnowledge(item: KnowledgeItem): boolean {
+  const marker = [item.sourceRef, item.title, item.themeTags.join(' ')].join('\n');
+  return /navigation_only|entity_relation|theme_associated_with|debug_candidate|focus_mismatch|do_not_answer_as_fact/i.test(marker);
 }
 
 function validateQuoteBalance(text: string): void {

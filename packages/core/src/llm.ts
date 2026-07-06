@@ -85,12 +85,12 @@ export class MockLLMProvider implements LLMProvider {
       return { content: JSON.stringify(mockOutline(taskCard?.topic ?? '测试主题', taskCard?.scope?.themes ?? [])), raw: { provider: 'mock' } };
     }
     if (request.jsonMode && system.includes('大纲项修订器')) {
-      const currentOutlineItem = payload.currentOutlineItem as { id?: string; title?: string; goal?: string; order?: number; expectedBlocks?: number; sourceHints?: string[]; themeTags?: string[]; status?: string } | undefined;
+      const currentOutlineItem = payload.currentOutlineItem as { id?: string; title?: string; goal?: string; order?: number; expectedBlocks?: number; rhetoricalRole?: string; keySection?: boolean; specialHandling?: string[]; sourceHints?: string[]; themeTags?: string[]; status?: string } | undefined;
       const instruction = String(payload.instruction ?? '修订大纲项');
       return { content: JSON.stringify(mockOutlineItemRevision(currentOutlineItem, instruction)), raw: { provider: 'mock' } };
     }
     if (request.jsonMode && system.includes('大纲整体修订器')) {
-      const currentOutline = payload.currentOutline as Array<{ id?: string; title?: string; goal?: string; order?: number; expectedBlocks?: number; sourceHints?: string[]; themeTags?: string[]; status?: string }> | undefined;
+      const currentOutline = payload.currentOutline as Array<{ id?: string; title?: string; goal?: string; order?: number; expectedBlocks?: number; rhetoricalRole?: string; keySection?: boolean; specialHandling?: string[]; sourceHints?: string[]; themeTags?: string[]; status?: string }> | undefined;
       const instruction = String(payload.instruction ?? '修订大纲');
       return { content: JSON.stringify(mockOutlineRevision(currentOutline, instruction)), raw: { provider: 'mock' } };
     }
@@ -179,10 +179,10 @@ function mockTaskCardRevision(currentTaskCard: ReturnType<typeof mockTaskCard>['
 function mockOutline(topic: string, themes: string[]) {
   return {
     outline: [
-      { title: '提出中心问题', goal: `界定“${topic}”的写作对象和核心问题。`, order: 1, expectedBlocks: 2, sourceHints: [], themeTags: themes },
-      { title: '梳理关键关系', goal: '说明主要对象之间的关系如何展开。', order: 2, expectedBlocks: 2, sourceHints: [], themeTags: themes },
-      { title: '展开核心论证', goal: '围绕任务卡重点形成文章主体判断。', order: 3, expectedBlocks: 3, sourceHints: [], themeTags: themes },
-      { title: '收束全文立意', goal: '回扣写作目标，形成结论。', order: 4, expectedBlocks: 1, sourceHints: [], themeTags: themes },
+      { title: '提出中心问题', goal: `界定“${topic}”的写作对象和核心问题。`, order: 1, expectedBlocks: 1, rhetoricalRole: 'opening', keySection: false, specialHandling: ['开头先提出文章要解决的问题，不铺陈故事背景。'], sourceHints: [], themeTags: themes },
+      { title: '承接关系层次', goal: '说明主要对象之间的关系如何展开。', order: 2, expectedBlocks: 2, rhetoricalRole: 'development', keySection: false, specialHandling: ['承接开头的核心问题，推进第一层解释。'], sourceHints: [], themeTags: themes },
+      { title: '转入核心论证', goal: '围绕任务卡重点形成文章主体判断。', order: 3, expectedBlocks: 3, rhetoricalRole: 'turn', keySection: true, specialHandling: ['作为全文关键段落，写出论证转折和核心判断，避免复述材料。'], sourceHints: [], themeTags: themes },
+      { title: '收束全文立意', goal: '回扣写作目标，形成结论。', order: 4, expectedBlocks: 1, rhetoricalRole: 'conclusion', keySection: false, specialHandling: ['结尾回扣主题张力，不机械重复前文。'], sourceHints: [], themeTags: themes },
     ],
     summary: 'Mock outline generated.',
   };
@@ -294,8 +294,8 @@ function mockDialogueCoordination(payload: Record<string, any>) {
   return { mode: 'proposal', message: '我会先准备任务卡修改方案，确认后再写入。', summary: '修订任务卡', operations: [{ type: 'revise-task-card', instruction }], warnings: [] };
 }
 
-function mockOutlineItemRevision(currentOutlineItem: { id?: string; title?: string; goal?: string; order?: number; expectedBlocks?: number; sourceHints?: string[]; themeTags?: string[]; status?: string } | undefined, instruction: string) {
-  const base = currentOutlineItem ?? { id: 'sec_mock', title: '测试大纲', goal: '测试大纲目标。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'draft' };
+function mockOutlineItemRevision(currentOutlineItem: { id?: string; title?: string; goal?: string; order?: number; expectedBlocks?: number; rhetoricalRole?: string; keySection?: boolean; specialHandling?: string[]; sourceHints?: string[]; themeTags?: string[]; status?: string } | undefined, instruction: string) {
+  const base = currentOutlineItem ?? { id: 'sec_mock', title: '测试大纲', goal: '测试大纲目标。', order: 1, expectedBlocks: 1, rhetoricalRole: 'development', keySection: false, specialHandling: ['按本节目标推进。'], sourceHints: [], themeTags: [], status: 'draft' };
   const titleMatch = instruction.match(/(?:标题|题目)(?:改成|改为|调整为|设为|是)[:：\s]*([^，,。.!！?？]+)/);
   const title = titleMatch?.[1]?.trim() || base.title || '测试大纲';
   const changedFields = [
@@ -308,6 +308,9 @@ function mockOutlineItemRevision(currentOutlineItem: { id?: string; title?: stri
       title,
       goal: instruction.includes('目标') || instruction.includes('不要') || instruction.includes('不是') ? `${base.goal ?? ''} ${instruction}`.trim() : base.goal,
       expectedBlocks: base.expectedBlocks ?? 1,
+      rhetoricalRole: base.rhetoricalRole ?? 'development',
+      keySection: base.keySection ?? false,
+      specialHandling: base.specialHandling ?? ['按本节目标推进。'],
       sourceHints: base.sourceHints ?? [],
       themeTags: base.themeTags ?? [],
     },
@@ -316,7 +319,7 @@ function mockOutlineItemRevision(currentOutlineItem: { id?: string; title?: stri
   };
 }
 
-function mockOutlineRevision(currentOutline: Array<{ id?: string; title?: string; goal?: string; order?: number; expectedBlocks?: number; sourceHints?: string[]; themeTags?: string[]; status?: string }> | undefined, instruction: string) {
+function mockOutlineRevision(currentOutline: Array<{ id?: string; title?: string; goal?: string; order?: number; expectedBlocks?: number; rhetoricalRole?: string; keySection?: boolean; specialHandling?: string[]; sourceHints?: string[]; themeTags?: string[]; status?: string }> | undefined, instruction: string) {
   const outline = currentOutline?.length ? currentOutline : mockOutline('测试主题', []).outline;
   const titleMatch = instruction.match(/(?:第一节|第一项|开头|第1节).{0,8}(?:标题|题目)?(?:改成|改为|调整为|设为)[:：\s]*([^，,。.!！?？]+)/);
   return {
@@ -325,6 +328,9 @@ function mockOutlineRevision(currentOutline: Array<{ id?: string; title?: string
       title: index === 0 && titleMatch ? titleMatch[1].trim() : (item.title ?? `大纲 ${index + 1}`),
       goal: index === 0 && (instruction.includes('不要') || instruction.includes('调整')) ? `${item.goal ?? ''} ${instruction}`.trim() : (item.goal ?? '大纲目标。'),
       expectedBlocks: item.expectedBlocks ?? 1,
+      rhetoricalRole: item.rhetoricalRole ?? (index === 0 ? 'opening' : (index === outline.length - 1 ? 'conclusion' : (index === 2 ? 'turn' : 'development'))),
+      keySection: item.keySection ?? (index > 0 && index < outline.length - 1 && index === 2),
+      specialHandling: item.specialHandling ?? (index === 0 ? ['开头先提出核心问题。'] : (index === outline.length - 1 ? ['结尾回扣全文判断。'] : ['按本节目标推进。'])),
       sourceHints: item.sourceHints ?? [],
       themeTags: item.themeTags ?? [],
       status: 'status' in item ? item.status ?? 'draft' : 'draft',

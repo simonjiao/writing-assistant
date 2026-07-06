@@ -1,4 +1,4 @@
-import { newId, OutlineItem, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
+import { newId, OutlineItem, OutlineRhetoricalRole, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
 
 export interface OutlineReviserInput {
   articleId: string;
@@ -45,6 +45,8 @@ export class OutlineReviserSkill implements Skill<OutlineReviserInput, OutlineRe
             'outline 必须是完整 OutlineItem[]。保留仍然对应原章节的 id；新增条目可以不带 id，由系统补齐。',
             '如果要删除或大幅移动已有正文的章节，必须在 warnings 中说明。',
             '修订后仍要服从 taskCard 的主题、目标、约束和写作标准。',
+            '修订后必须保留清楚的起承转合：第一项 rhetoricalRole=opening，最后一项 rhetoricalRole=conclusion，中间用 development 或 turn。',
+            '至少一个中间项必须 keySection=true，并用 specialHandling 写清为什么关键、如何处理材料、如何避免复述。',
           ].join('\n'),
         },
         {
@@ -62,6 +64,9 @@ export class OutlineReviserSkill implements Skill<OutlineReviserInput, OutlineRe
                 goal: 'string; 非空；不要写成正文',
                 order: 'number; 系统会按返回顺序重排',
                 expectedBlocks: 'number; 正数',
+                rhetoricalRole: 'opening | development | turn | conclusion',
+                keySection: 'boolean',
+                specialHandling: 'string[]',
                 sourceHints: 'string[]',
                 themeTags: 'string[]',
                 status: 'draft | confirmed | written',
@@ -96,11 +101,15 @@ function normalizeOutput(output: Partial<OutlineReviserOutput>, currentOutline: 
       goal: requireText(item.goal, 'outline.goal'),
       order: index + 1,
       expectedBlocks: requirePositiveNumber(item.expectedBlocks ?? current?.expectedBlocks ?? 1, 'outline.expectedBlocks'),
+      rhetoricalRole: requireRhetoricalRole(item.rhetoricalRole ?? current?.rhetoricalRole, 'outline.rhetoricalRole'),
+      keySection: requireBoolean(item.keySection ?? current?.keySection, 'outline.keySection'),
+      specialHandling: requireStringArray(item.specialHandling ?? current?.specialHandling, 'outline.specialHandling'),
       sourceHints: requireStringArray(item.sourceHints ?? current?.sourceHints ?? [], 'outline.sourceHints'),
       themeTags: requireStringArray(item.themeTags ?? current?.themeTags ?? [], 'outline.themeTags'),
       status: requireStatus(item.status ?? current?.status ?? 'draft'),
     };
   });
+  validateOutlineStructure(outline);
   return {
     outline,
     summary: requireText(output.summary, 'summary'),
@@ -119,6 +128,16 @@ function requirePositiveNumber(value: unknown, field: string): number {
   return value;
 }
 
+function requireBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean') throw new Error(`Outline reviser returned invalid ${field}.`);
+  return value;
+}
+
+function requireRhetoricalRole(value: unknown, field: string): OutlineRhetoricalRole {
+  if (value === 'opening' || value === 'development' || value === 'turn' || value === 'conclusion') return value;
+  throw new Error(`Outline reviser returned invalid ${field}.`);
+}
+
 function requireStringArray(value: unknown, field: string): string[] {
   if (!Array.isArray(value)) throw new Error(`Outline reviser returned invalid ${field}.`);
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim());
@@ -127,4 +146,15 @@ function requireStringArray(value: unknown, field: string): string[] {
 function requireStatus(value: unknown): OutlineItem['status'] {
   if (value === 'draft' || value === 'confirmed' || value === 'written') return value;
   throw new Error(`Outline reviser returned invalid outline.status: ${String(value)}`);
+}
+
+function validateOutlineStructure(outline: OutlineItem[]): void {
+  if (outline[0]?.rhetoricalRole !== 'opening') throw new Error('Outline reviser must keep first section as opening.');
+  if (outline[outline.length - 1]?.rhetoricalRole !== 'conclusion') throw new Error('Outline reviser must keep last section as conclusion.');
+  if (!outline.slice(1, -1).some((item) => item.keySection)) throw new Error('Outline reviser must keep at least one middle keySection.');
+  for (const item of outline) {
+    if ((item.rhetoricalRole === 'opening' || item.rhetoricalRole === 'conclusion' || item.keySection) && !item.specialHandling?.length) {
+      throw new Error('Outline reviser must keep specialHandling for opening, conclusion and key sections.');
+    }
+  }
 }

@@ -685,9 +685,11 @@ export function App() {
             const sectionBlocks = visibleArticle.blocks.filter((block) => block.sectionId === item.id);
             const outlineCollapsed = !isEditing && collapsedOutlineIds.includes(item.id);
             const outlineSelected = selectedOutlineId === item.id || isEditing;
+            const roleLabel = outlineRoleLabel(item.rhetoricalRole);
+            const specialHandling = item.specialHandling ?? [];
             return (
               <div className={['outline-item', outlineCollapsed ? 'collapsed' : '', outlineSelected ? 'selected' : ''].filter(Boolean).join(' ')} key={item.id} onClick={() => { setSelectedOutlineId(item.id); setOutlineWholeSelected(false); setSelectedBlockId(undefined); }}>
-                {isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div className="outline-main"><div className="outline-heading"><button type="button" className="collapse-button" aria-label={outlineCollapsed ? `展开 ${item.title}` : `折叠 ${item.title}`} title={outlineCollapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); setSelectedOutlineId(item.id); toggleOutlineCollapsed(item.id); }}>{outlineCollapsed ? '>' : 'v'}</button><div className="outline-title"><strong>{item.title}</strong><span>{outlineStatusLabel(item.status)}{sectionBlocks.length ? ` · ${sectionBlocks.length} 段正文` : ''}</span></div></div>{outlineCollapsed ? null : <p>{item.goal}</p>}</div>}
+                {isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div className="outline-main"><div className="outline-heading"><button type="button" className="collapse-button" aria-label={outlineCollapsed ? `展开 ${item.title}` : `折叠 ${item.title}`} title={outlineCollapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); setSelectedOutlineId(item.id); toggleOutlineCollapsed(item.id); }}>{outlineCollapsed ? '>' : 'v'}</button><div className="outline-title"><strong>{item.title}</strong><span className="outline-meta">{roleLabel ? <span className="outline-role">{roleLabel}</span> : null}{item.keySection ? <span className="outline-key">关键</span> : null}<span>{outlineStatusLabel(item.status)}{sectionBlocks.length ? ` · ${sectionBlocks.length} 段正文` : ''}</span></span></div></div>{outlineCollapsed ? null : <><p>{item.goal}</p>{specialHandling.length ? <ul className="outline-special">{specialHandling.map((handling) => <li key={handling}>{handling}</li>)}</ul> : null}</>}</div>}
                 <OutlineActionBar isEditing={isEditing} busy={busy} canSave={Boolean(editingOutline?.title.trim() && editingOutline.goal.trim())} hasSectionBlocks={Boolean(sectionBlocks.length)} onSave={() => void saveOutlineEdit()} onCancel={() => setEditingOutline(undefined)} onEdit={() => { setSelectedOutlineId(item.id); setEditingOutline({ id: item.id, title: item.title, goal: item.goal }); }} onGenerate={() => void startSectionGeneration(item.id)} />
                 {!outlineCollapsed && progressVisible && sectionGeneration?.sectionId === item.id ? <GenerationProgressView progress={sectionGeneration} events={liveEvents} /> : null}
                 {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={(blockId) => { setSelectedBlockId(blockId); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleBlockCollapse={toggleBlockCollapsed} /> : null}
@@ -1154,6 +1156,11 @@ function outlineStatusLabel(value: string): string {
   return labels[value] ?? value;
 }
 
+function outlineRoleLabel(value: ArticleArtifact['outline'][number]['rhetoricalRole']): string {
+  const labels: Record<string, string> = { opening: '起', development: '承', turn: '转', conclusion: '合' };
+  return value ? labels[value] ?? value : '';
+}
+
 function taskStatusLabel(value?: string): string {
   const labels: Record<string, string> = { draft: '任务卡草稿', confirmed: '任务卡已确认' };
   return value ? labels[value] ?? value : '未生成任务卡';
@@ -1254,6 +1261,7 @@ function userFacingRunError(message?: string): string {
   if (message.includes('exceeded current section length budget')) return '生成内容超出本节字数限制，已阻止保存。';
   if (message.includes('quote-heavy prose')) return '生成内容引用比例过高，已阻止保存。';
   if (message.includes('reused too much source text')) return '生成内容过多复用了资料原文，已阻止保存。';
+  if (message.includes('referenced source-backed material without sourceRefs')) return '生成内容缺少来源绑定，已阻止保存。';
   return '生成失败，请调整任务卡或稍后重试。';
 }
 
@@ -1552,6 +1560,8 @@ function formatOutlineContext(outline: ArticleArtifact['outline'][number]): stri
   return [
     `大纲标题：${outline.title}`,
     `写作目标：${outline.goal}`,
+    `结构位置：${outlineRoleLabel(outline.rhetoricalRole) || '未指定'}${outline.keySection ? '；关键段落' : ''}`,
+    `特殊处理：${joinList(outline.specialHandling) || '无'}`,
     `预计正文块数：${outline.expectedBlocks}`,
     `来源线索：${joinList(outline.sourceHints) || '无'}`,
     `主题标签：${joinList(outline.themeTags) || '无'}`,
@@ -1560,7 +1570,7 @@ function formatOutlineContext(outline: ArticleArtifact['outline'][number]): stri
 }
 
 function formatWholeOutlineContext(outline: ArticleArtifact['outline']): string {
-  return outline.map((item) => `${item.order}. ${item.title}：${item.goal}`).join('\n');
+  return outline.map((item) => `${item.order}. ${outlineRoleLabel(item.rhetoricalRole) || '未定'}${item.keySection ? '·关键' : ''} ${item.title}：${item.goal}${item.specialHandling?.length ? `；处理：${joinList(item.specialHandling)}` : ''}`).join('\n');
 }
 
 function formatParagraphContext(block: ArticleBlock): string {

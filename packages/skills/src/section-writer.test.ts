@@ -23,6 +23,9 @@ const section: OutlineItem = {
   goal: '围绕材料形成分析判断。',
   order: 1,
   expectedBlocks: 1,
+  rhetoricalRole: 'opening',
+  keySection: false,
+  specialHandling: ['开头先提出核心问题，不铺陈背景。'],
   sourceHints: [],
   themeTags: ['测试主题'],
   status: 'draft',
@@ -30,9 +33,9 @@ const section: OutlineItem = {
 
 const articleOutline: OutlineItem[] = [
   section,
-  { ...section, id: 'sec_2', title: '第二节', order: 2 },
-  { ...section, id: 'sec_3', title: '第三节', order: 3 },
-  { ...section, id: 'sec_4', title: '第四节', order: 4 },
+  { ...section, id: 'sec_2', title: '第二节', order: 2, rhetoricalRole: 'development', specialHandling: ['承接开头继续推进。'] },
+  { ...section, id: 'sec_3', title: '第三节', order: 3, rhetoricalRole: 'turn', keySection: true, specialHandling: ['关键段落写出转折。'] },
+  { ...section, id: 'sec_4', title: '第四节', order: 4, rhetoricalRole: 'conclusion', specialHandling: ['结尾收束全文。'] },
 ];
 
 const knowledge: KnowledgeItem[] = [{
@@ -117,15 +120,22 @@ describe('SectionWriterSkill', () => {
       }, calls),
     });
     const system = calls[0].messages.find((message) => message.role === 'system')?.content ?? '';
-    const user = JSON.parse(calls[0].messages.find((message) => message.role === 'user')?.content ?? '{}') as { sourceUsePolicy?: { prohibitedModes?: string[] }; writingBudget?: { targetChars?: number; maxChars?: number }; writingContinuity?: { currentSection?: { title?: string }; policy?: string[] } };
+    const user = JSON.parse(calls[0].messages.find((message) => message.role === 'user')?.content ?? '{}') as { sourceUsePolicy?: { prohibitedModes?: string[] }; writingBudget?: { targetChars?: number; maxChars?: number }; writingContinuity?: { currentSection?: { title?: string; rhetoricalRole?: string; specialHandling?: string[] }; policy?: string[] } };
     expect(system).toContain('不是翻译、改写、转述、复述');
     expect(system).toContain('观点驱动');
     expect(system).toContain('整篇文章的一环');
+    expect(system).toContain('section.rhetoricalRole 控制本节在全文中的起承转合位置');
+    expect(system).toContain('opening 要直接建立核心问题');
+    expect(system).toContain('turn 要写出论证转折');
+    expect(system).toContain('conclusion 要收束全文判断');
     expect(system).toContain('block.sourceRefs 必须绑定');
     expect(user.sourceUsePolicy?.prohibitedModes).toEqual(['translation', 'paraphrase', 'retelling', 'source-summary']);
     expect(user.writingBudget).toMatchObject({ targetChars: 300, maxChars: 470, allocationBasis: expect.stringContaining('expectedBlocks') });
     expect(user.writingContinuity?.currentSection?.title).toBe('测试章节');
+    expect(user.writingContinuity?.currentSection?.rhetoricalRole).toBe('opening');
+    expect(user.writingContinuity?.currentSection?.specialHandling).toEqual(['开头先提出核心问题，不铺陈背景。']);
     expect(user.writingContinuity?.policy?.join('；')).toContain('前文尚未使用的来源');
+    expect(user.writingContinuity?.policy?.join('；')).toContain('本节是开头');
     expect(calls[0].maxTokens).toBeUndefined();
   });
 
@@ -189,6 +199,42 @@ describe('SectionWriterSkill', () => {
     expect(user.knowledge?.map((item) => item.sourceRef)).toEqual(['test:k1']);
   });
 
+  it('does not pass unsupported source hints as writing evidence', async () => {
+    const skill = new SectionWriterSkill();
+    const calls: Array<{ messages: Array<{ role: string; content: string }>; maxTokens?: number }> = [];
+    const chapterKnowledge: KnowledgeItem = {
+      id: 'k61',
+      title: '第061回｜司棋索要鸡蛋',
+      content: '第61回写司棋要一碗嫩炖鸡蛋，厨房推托，莲花儿与柳家的争执升级。',
+      sourceType: 'retriever',
+      sourceRef: 'test:c061',
+      themeTags: ['base_text'],
+      createdAt: new Date().toISOString(),
+    };
+    await skill.invoke({
+      input: {
+        articleId: 'art_1',
+        section: {
+          ...section,
+          sourceHints: ['第61回司棋派小丫头怒砸厨房、打砸物品', '脂批云“司棋事从书画中翻出”'],
+        },
+        taskCard: { ...taskCard, scope: { ...taskCard.scope, characters: ['司棋'] } },
+      },
+      context: { knowledge: [chapterKnowledge], compactSummary: '', article: { outline: articleOutline, blocks: [] } } as never,
+      llm: capturingLlm({
+        block: {
+          text: '第六十一回中，司棋因厨房炖蛋一事动怒，本段据此分析她不肯受慢待的性情。',
+          sourceRefs: ['test:c061'],
+          themeTags: ['测试主题'],
+        },
+        summary: '已生成正文。',
+      }, calls),
+    });
+    const user = JSON.parse(calls[0].messages.find((message) => message.role === 'user')?.content ?? '{}') as { section?: { sourceHints?: string[] }; sourceHintsPolicy?: { unsupportedSourceHints?: string[] } };
+    expect(user.section?.sourceHints).toEqual(['第61回司棋派小丫头怒砸厨房、打砸物品']);
+    expect(user.sourceHintsPolicy?.unsupportedSourceHints).toEqual(['脂批云“司棋事从书画中翻出”']);
+  });
+
   it('rejects generated prose that references the later 40 chapters under a pre-80 policy', async () => {
     const skill = new SectionWriterSkill();
     await expect(skill.invoke({
@@ -247,6 +293,106 @@ describe('SectionWriterSkill', () => {
         summary: '已生成正文。',
       }),
     })).rejects.toThrow('without sourceRefs');
+  });
+
+  it('uses top-level candidateSources when source-backed prose needs refs', async () => {
+    const skill = new SectionWriterSkill();
+    const output = await skill.invoke({
+      input: { articleId: 'art_1', section, taskCard },
+      context: context(),
+      llm: llmReturning({
+        block: {
+          text: '脂批点出此处另有深意，本段据此展开分析，并回到章节自身的论点。',
+          sourceRefs: [],
+          themeTags: ['测试主题'],
+        },
+        candidateSources: ['test:k1'],
+        summary: '已生成正文。',
+      }),
+    });
+    expect(output.block.sourceRefs).toEqual(['test:k1']);
+  });
+
+  it('infers sourceRefs from retrieved section knowledge without a second model call', async () => {
+    const skill = new SectionWriterSkill();
+    const calls: Array<{ messages: Array<{ role: string; content: string }>; maxTokens?: number }> = [];
+    const chapterKnowledge: KnowledgeItem = {
+      id: 'k61',
+      title: '第061回｜司棋索要鸡蛋',
+      content: '第61回写司棋要一碗嫩炖鸡蛋，厨房推托，莲花儿与柳家的争执升级。',
+      sourceType: 'retriever',
+      sourceRef: 'test:c061',
+      themeTags: ['base_text'],
+      createdAt: new Date().toISOString(),
+    };
+    const output = await skill.invoke({
+      input: {
+        articleId: 'art_1',
+        section: {
+          ...section,
+          sourceHints: ['第61回司棋派小丫头怒砸厨房、打砸物品'],
+        },
+        taskCard,
+      },
+      context: { knowledge: [chapterKnowledge], compactSummary: '', article: { outline: articleOutline, blocks: [] } } as never,
+      llm: capturingLlm({
+        block: {
+          text: '第六十一回中，司棋因厨房炖蛋一事动怒，本段据此分析她不肯受慢待的性情。',
+          sourceRefs: [],
+          themeTags: ['测试主题'],
+        },
+        summary: '已生成正文。',
+      }, calls),
+    });
+    expect(output.block.sourceRefs).toEqual(['test:c061']);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('augments explicit commentary refs with matched primary text refs', async () => {
+    const skill = new SectionWriterSkill();
+    const output = await skill.invoke({
+      input: {
+        articleId: 'art_1',
+        section: {
+          ...section,
+          sourceHints: ['第74回司棋抄检时并无畏惧惭愧之意'],
+        },
+        taskCard,
+      },
+      context: {
+        knowledge: [
+          {
+            id: 'k74-text',
+            title: '第074回｜正文片段',
+            content: '凤姐见司棋低头不语，也并无畏惧惭愧之意，倒觉可异。',
+            sourceType: 'retriever',
+            sourceRef: 'test:c074:text',
+            themeTags: ['base_text'],
+            createdAt: new Date().toISOString(),
+          },
+          {
+            id: 'k74-commentary',
+            title: '第074回｜批语',
+            content: '紙就好。餘為司棋心動。',
+            sourceType: 'retriever',
+            sourceRef: 'test:c074:commentary',
+            themeTags: ['commentary'],
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        compactSummary: '',
+        article: { outline: articleOutline, blocks: [] },
+      } as never,
+      llm: llmReturning({
+        block: {
+          text: '第七十四回抄检时，司棋“并无畏惧惭愧之意”，脂批亦为司棋心动，本段据此分析她的刚烈。',
+          sourceRefs: ['test:c074:commentary'],
+          themeTags: ['测试主题'],
+        },
+        summary: '已生成正文。',
+      }),
+    });
+    expect(output.block.sourceRefs).toEqual(['test:c074:commentary', 'test:c074:text']);
   });
 
   it('rejects reused-only sourceRefs when unused sources are available', async () => {

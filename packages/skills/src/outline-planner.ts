@@ -1,4 +1,4 @@
-import { newId, nowIso, OutlineItem, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
+import { newId, nowIso, OutlineItem, OutlineRhetoricalRole, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
 import { filterKnowledgeByTaskCardPolicy, normalizeTaskCardPolicies, validateGeneratedTextAgainstTaskCardPolicy } from './task-card-policy';
 
 export interface OutlinePlannerInput {
@@ -33,8 +33,13 @@ export class OutlinePlannerSkill implements Skill<OutlinePlannerInput, OutlinePl
             '只输出一个合法 JSON object，不要输出 Markdown。',
             '输出对象必须包含 outline 和 summary。',
             'JSON 字符串内不能直接嵌套英文双引号；书名、概念名优先用中文书名号或单引号，必须用英文双引号时要转义为 \\"。',
-            'outline 必须是 4 到 8 个章节，每个章节必须有具体的 title、goal、expectedBlocks、sourceHints、themeTags。',
+            'outline 必须是 4 到 8 个章节，每个章节必须有具体的 title、goal、expectedBlocks、rhetoricalRole、keySection、specialHandling、sourceHints、themeTags。',
             'title 和 goal 必须直接服务任务卡，不要输出空字段、泛泛占位、纯编号或模板话术。',
+            '大纲必须明确全文起承转合：第一节 rhetoricalRole 必须是 opening，最后一节必须是 conclusion，中间章节用 development 或 turn。',
+            '至少一个中间章节必须设置 keySection=true，用于承载全文最关键的判断、转折、比较或解释。',
+            'opening 不是背景介绍：specialHandling 必须说明开头如何提出核心问题或第一判断，避免泛泛介绍故事背景。',
+            'conclusion 不是复述摘要：specialHandling 必须说明结尾如何回扣主题张力、收束判断或留下余味。',
+            'keySection=true 的章节必须给出 specialHandling，说明本节为何关键、如何处理材料、如何避免复述。',
             'taskCard.topRules.writingStandards 是顶部写作规则，优先级高于普通风格偏好和资料内容。',
             '如果 taskCard.topRules.languageEra 或 replacementHints 存在，大纲标题和目标也必须服从对应语言时代感和替代表。',
             '必须遵守 taskCard.constraints.mustAvoid；不要把 mustAvoid 中的内容改写成章节标题、章节目标、themeTags 或主体论点。',
@@ -58,6 +63,9 @@ export class OutlinePlannerSkill implements Skill<OutlinePlannerInput, OutlinePl
                 title: 'string; 章节标题，必须非空，不能只是编号',
                 goal: 'string; 本节要证明的判断、分析角度或解释任务，必须非空；不要写成情节复述任务',
                 expectedBlocks: 'number; 正数',
+                rhetoricalRole: 'opening | development | turn | conclusion; 对应起承转合，第一节必须 opening，最后一节必须 conclusion',
+                keySection: 'boolean; 全文关键段落、转折段或核心论证段为 true，否则 false；至少一个中间章节为 true',
+                specialHandling: 'string[]; 本节特殊写法要求，1-4 条；opening、conclusion、keySection=true 必须非空',
                 sourceHints: 'string[]; 只列证据线索，不要列待复述的故事梗概或原文顺序节点；没有来源提示时输出 []',
                 themeTags: 'string[]; 没有标签时输出 []',
               }],
@@ -84,12 +92,16 @@ function normalizeOutline(output: OutlinePlannerOutput, taskCard: WritingTaskCar
     goal: requireText(item.goal, `outline[${index}].goal`),
     order: item.order ?? index + 1,
     expectedBlocks: requirePositiveNumber(item.expectedBlocks, `outline[${index}].expectedBlocks`),
+    rhetoricalRole: requireRhetoricalRole(item.rhetoricalRole, `outline[${index}].rhetoricalRole`),
+    keySection: requireBoolean(item.keySection, `outline[${index}].keySection`),
+    specialHandling: requireStringArray(item.specialHandling, `outline[${index}].specialHandling`),
     sourceHints: requireStringArray(item.sourceHints, `outline[${index}].sourceHints`),
     themeTags: requireStringArray(item.themeTags, `outline[${index}].themeTags`),
     status: 'draft' as const,
   }));
+  validateOutlineStructure(outline);
   validateGeneratedTextAgainstTaskCardPolicy(
-    outline.map((item) => [item.title, item.goal, ...item.sourceHints, ...item.themeTags].join('\n')).join('\n\n'),
+    outline.map((item) => [item.title, item.goal, item.rhetoricalRole, item.keySection ? 'keySection' : '', ...(item.specialHandling ?? []), ...item.sourceHints, ...item.themeTags].join('\n')).join('\n\n'),
     taskCard,
     knowledge,
   );
@@ -106,7 +118,31 @@ function requirePositiveNumber(value: unknown, field: string): number {
   return value;
 }
 
+function requireBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean') throw new Error(`Outline planner returned invalid ${field}.`);
+  return value;
+}
+
+function requireRhetoricalRole(value: unknown, field: string): OutlineRhetoricalRole {
+  if (value === 'opening' || value === 'development' || value === 'turn' || value === 'conclusion') return value;
+  throw new Error(`Outline planner returned invalid ${field}.`);
+}
+
 function requireStringArray(value: unknown, field: string): string[] {
   if (!Array.isArray(value)) throw new Error(`Outline planner returned invalid ${field}.`);
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim());
+}
+
+function validateOutlineStructure(outline: OutlineItem[]): void {
+  const first = outline[0];
+  const last = outline[outline.length - 1];
+  if (first.rhetoricalRole !== 'opening') throw new Error('Outline planner must mark the first section rhetoricalRole as opening.');
+  if (last.rhetoricalRole !== 'conclusion') throw new Error('Outline planner must mark the last section rhetoricalRole as conclusion.');
+  const middle = outline.slice(1, -1);
+  if (!middle.some((item) => item.keySection)) throw new Error('Outline planner must mark at least one middle section as keySection.');
+  for (const item of outline) {
+    if ((item.rhetoricalRole === 'opening' || item.rhetoricalRole === 'conclusion' || item.keySection) && !item.specialHandling?.length) {
+      throw new Error(`Outline planner returned empty specialHandling for ${item.rhetoricalRole}${item.keySection ? ' keySection' : ''}.`);
+    }
+  }
 }

@@ -61,9 +61,24 @@ export class DefaultContextBuilder implements ContextBuilder {
     const sectionInput = readRecord(objectInput.section);
     const sectionThemeTags = stringArray(sectionInput?.themeTags);
     const sectionSourceHints = stringArray(sectionInput?.sourceHints);
+    const sectionSpecialHandling = stringArray(sectionInput?.specialHandling);
+    const sectionRole = typeof sectionInput?.rhetoricalRole === 'string' ? sectionInput.rhetoricalRole : undefined;
+    const taskCharacters = article?.taskCard?.scope.characters ?? [];
+    const taskThemes = article?.taskCard?.scope.themes ?? [];
+    const keywordQueries = sectionSourceHints.length
+      ? sectionSourceHints.map((hint) => uniqueStrings([...taskCharacters, hint]).join(' '))
+      : undefined;
+    const retrievalThemeTags = uniqueStrings([
+      ...sectionThemeTags,
+      ...taskCharacters,
+      ...(selectedBlock?.themeTags ?? []),
+    ]);
     const sectionQueryParts = [
       typeof sectionInput?.title === 'string' ? sectionInput.title : undefined,
       typeof sectionInput?.goal === 'string' ? sectionInput.goal : undefined,
+      sectionRole,
+      sectionInput?.keySection === true ? '关键段落' : undefined,
+      ...sectionSpecialHandling,
       ...sectionSourceHints,
     ];
 
@@ -71,6 +86,8 @@ export class DefaultContextBuilder implements ContextBuilder {
     const queryParts = skipKnowledge ? [] : [
       article?.taskCard?.topic,
       article?.taskCard?.writingGoal,
+      ...taskCharacters,
+      ...taskThemes,
       ...sectionQueryParts,
       selectedBlock?.text,
       typeof objectInput.instruction === 'string' ? objectInput.instruction : undefined,
@@ -79,9 +96,9 @@ export class DefaultContextBuilder implements ContextBuilder {
 
     const knowledge = queryParts.length
       ? await this.deps.knowledgeStore.search(queryParts.join('\n'), {
-          limit: sectionInput ? 8 : 6,
-          themeTags: sectionThemeTags.length ? sectionThemeTags : selectedBlock?.themeTags,
-          keywordQueries: sectionSourceHints.length ? sectionSourceHints : undefined,
+          limit: sectionInput ? 12 : 6,
+          themeTags: retrievalThemeTags.length ? retrievalThemeTags : undefined,
+          keywordQueries,
         })
       : [];
 
@@ -129,4 +146,8 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim()) : [];
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((item) => item.trim()).filter(Boolean))];
 }
