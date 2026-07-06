@@ -542,7 +542,9 @@ function isQuestionLike(message: string): boolean {
 }
 
 function needsKnowledgeSearch(message: string): boolean {
-  return /(查|检索|搜索|资料|原文|出处|引用|脂批|批语|第[一二三四五六七八九十百0-9]+回|证据|知识库|来源|根据文本)/.test(message);
+  const hasKnowledgeTarget = /(资料|文本|原文|出处|引用|脂批|批语|批注|评语|第[一二三四五六七八九十百0-9几哪]+回|哪[一几]回|证据|知识库|来源|根据文本)/.test(message);
+  const hasExplicitSearchIntent = /(查|查找|检索|搜索|找|找出|列出|给出|有哪些|有哪|哪里|在哪|哪[一几]回|第几回|第[一二三四五六七八九十百0-9]+回)/.test(message);
+  return hasKnowledgeTarget && hasExplicitSearchIntent;
 }
 
 function isProposalRefreshRequest(message: string): boolean {
@@ -550,7 +552,7 @@ function isProposalRefreshRequest(message: string): boolean {
 }
 
 function isModificationIntent(message: string): boolean {
-  return /(改|修改|调整|删|删除|加|添加|新增|重写|扩写|压缩|不要|避免|改成|改为|换成|补充|合并|拆分)/.test(message);
+  return /(改|修改|调整|删|删除|加|添加|新增|重写|扩写|压缩|不要|避免|改成|改为|换成|补充|合并|拆分|包含|纳入|加入|写进|放进|体现|保留|漏掉|遗漏|参考|使用|采用|沿用|突出|强调|弱化|去掉|移除)/.test(message);
 }
 
 async function applyRevisionProposal(container: AppContainer, proposalId: string, userId: string, sessionId?: string) {

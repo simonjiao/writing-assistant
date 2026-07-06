@@ -748,6 +748,94 @@ describe('api app', () => {
     await retriever.close();
   });
 
+  it('routes source inclusion instructions to proposals without RAG', async () => {
+    const retriever = await startTonglingyuRetrieverServer();
+    const config = testConfig({ ragProvider: 'tonglingyu', ragBaseURL: retriever.baseURL, ragSearchPath: '/retrieve' });
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-dialogue-source-instruction',
+      topic: '司棋人物文章',
+      writingGoal: '撰写一篇综合全面介绍《红楼梦》人物司棋的文章。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: ['司棋'], themes: ['司棋'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-source-user', name: '对话资料约束工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-source-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-source-user', message: '写作中需要包含司棋的脂批内容，可以改写，但不要漏掉了', context: { kind: 'task-card' } },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.mode).toBe('proposal');
+    expect(body.proposal.operations[0]).toMatchObject({ type: 'revise-task-card', instruction: '写作中需要包含司棋的脂批内容，可以改写，但不要漏掉了' });
+    expect(retriever.lastRequest()).toBeUndefined();
+    await app.close();
+    await retriever.close();
+  });
+
+  it('keeps source inclusion follow-ups on pending proposals as discussion without RAG', async () => {
+    const retriever = await startTonglingyuRetrieverServer();
+    const config = testConfig({ ragProvider: 'tonglingyu', ragBaseURL: retriever.baseURL, ragSearchPath: '/retrieve' });
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-dialogue-source-discussion',
+      topic: '司棋人物文章',
+      writingGoal: '撰写一篇综合全面介绍《红楼梦》人物司棋的文章。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: ['司棋'], themes: ['司棋'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-source-discussion-user', name: '对话资料讨论工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-source-discussion-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    const proposal = await container.stores.revisionProposalStore.createProposal({
+      articleId: article.id,
+      userId: 'dialogue-source-discussion-user',
+      contextKind: 'task-card',
+      summary: '修订任务卡',
+      message: '我会先准备任务卡修改方案，确认后再写入。',
+      operations: [{ type: 'revise-task-card', instruction: '先调整任务卡重点。' }],
+      warnings: [],
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-source-discussion-user', message: '写作中需要包含司棋的脂批内容，可以改写，但不要漏掉了', pendingProposalId: proposal.id, context: { kind: 'task-card' } },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.mode).toBe('discuss');
+    expect(body.proposal).toBeUndefined();
+    expect(retriever.lastRequest()).toBeUndefined();
+    const pending = await container.stores.revisionProposalStore.listPendingProposals(article.id, 'dialogue-source-discussion-user');
+    expect(pending).toHaveLength(1);
+    expect(pending[0].id).toBe(proposal.id);
+    await app.close();
+    await retriever.close();
+  });
+
   it('uses commentary-scoped RAG for explicit commentary dialogue questions', async () => {
     const retriever = await startTonglingyuRetrieverServer();
     const config = testConfig({ ragProvider: 'tonglingyu', ragBaseURL: retriever.baseURL, ragSearchPath: '/retrieve' });
