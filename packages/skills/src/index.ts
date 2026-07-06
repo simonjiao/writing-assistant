@@ -9,4 +9,5 @@ export * from './outline-reviser';
 export * from './section-writer';
 export * from './patch-editor';
 export * from './quality-evaluator';
+export * from './task-card-policy';
 export * from './register';

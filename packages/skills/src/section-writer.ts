@@ -1,4 +1,5 @@
 import { ArticleBlock, KnowledgeItem, newId, nowIso, OutlineItem, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
+import { filterKnowledgeByTaskCardPolicy, normalizeTaskCardPolicies, validateGeneratedTextAgainstTaskCardPolicy } from './task-card-policy';
 import { findAvoidedTermsInText } from './writing-constraints';
 
 export interface SectionWriterInput {
@@ -34,7 +35,9 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
   };
 
   async invoke({ input, context, llm }: Parameters<Skill<SectionWriterInput, SectionWriterOutput>['invoke']>[0]): Promise<SectionWriterOutput> {
-    const writingBudget = buildSectionWritingBudget(input.taskCard, context.article?.outline.length ?? 1);
+    const taskCard = normalizeTaskCardPolicies(input.taskCard).taskCard;
+    const knowledge = filterKnowledgeByTaskCardPolicy(context.knowledge, taskCard);
+    const writingBudget = buildSectionWritingBudget(taskCard, context.article?.outline.length ?? 1);
     const response = await llm.chat({
       jsonMode: true,
       temperature: 0.45,
@@ -57,16 +60,17 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
             'taskCard.topRules.writingStandards 是顶部写作规则，优先级高于普通风格偏好、资料口吻和大纲措辞。',
             '如有 taskCard.topRules.replacementHints，必须优先采用 prefer 中的替代表达，不要使用 avoid 中的词。',
             '必须遵守 taskCard.constraints.mustAvoid；不得使用其中明示的禁用词、禁用说法，以及括号中“如/例如/比如”列出的词。',
+            '必须遵守 taskCard.constraints.sourcePolicy；来源策略是硬约束，不允许借用、转述或暗含被排除来源中的情节与文本。',
             '如果 mustAvoid 指向某类词汇、术语或写法，必须避开任务卡中对应的词表、例词和搭配。',
           ].join('\n'),
         },
         {
           role: 'user',
           content: JSON.stringify({
-            taskCard: input.taskCard,
+            taskCard,
             section: input.section,
             contextSummary: context.compactSummary,
-            knowledge: context.knowledge,
+            knowledge,
             writingBudget,
             sourceUsePolicy: {
               useSourcesAsEvidenceOnly: true,
@@ -86,7 +90,7 @@ export class SectionWriterSkill implements Skill<SectionWriterInput, SectionWrit
     });
     const parsed = safeJsonParse<SectionWriterRawOutput>(response.content);
     if (!parsed?.block?.text && !parsed?.blocks?.some((block) => block.text)) throw new Error(`Section writer did not return a valid block: ${response.content.slice(0, 300)}`);
-    return normalizeOutput(parsed, input, context.knowledge, writingBudget);
+    return normalizeOutput(parsed, { ...input, taskCard }, knowledge, writingBudget);
   }
 }
 
@@ -120,6 +124,7 @@ function normalizeOutput(output: SectionWriterRawOutput, input: SectionWriterInp
   const combinedText = blocks.map((block) => block.text).join('\n\n');
   validateLengthBudget(combinedText, writingBudget);
   validateAvoidedTerms(combinedText, input.taskCard.constraints.mustAvoid);
+  validateGeneratedTextAgainstTaskCardPolicy(combinedText, input.taskCard, knowledge, blocks.flatMap((block) => block.sourceRefs));
   validateSourceUse(combinedText, knowledge);
   const block = blocks[0];
   return {

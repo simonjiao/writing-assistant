@@ -100,6 +100,37 @@ describe('TaskCardReviserSkill', () => {
     expect(output.taskCard.constraints.mustAvoid).toContain('现代评论腔和现代抽象词汇（如价值观、责任观、世界观、维度、机制、结构性、主体性、规训、不可调和的产物）');
   });
 
+  it('removes later-40 source conflicts and duplicate avoid phrasing', async () => {
+    const skill = new TaskCardReviserSkill();
+    const cardWithConflict: WritingTaskCard = {
+      ...currentTaskCard,
+      constraints: {
+        ...currentTaskCard.constraints,
+        mustInclude: ['引用《红楼梦》后40回（程高本续书）的情节或任何文本', '介绍司棋'],
+        mustAvoid: ['引用《红楼梦》后40回（程高本续书）的情节或任何文本', '不得引用《红楼梦》后40回（程高本续书）的情节或任何文本'],
+        sourcePolicy: '允许引用《红楼梦》前80回原文和脂批，正文以原创分析为主，可适当改写批语内容。',
+      },
+    };
+    const output = await skill.invoke({
+      input: { articleId: 'art_1', instruction: '不得引用《红楼梦》后40回（程高本续书）的情节或任何文本。', currentTaskCard: cardWithConflict },
+      context: { memory: {} } as never,
+      llm: llmReturning({
+        taskCard: {
+          ...cardWithConflict,
+          constraints: {
+            ...cardWithConflict.constraints,
+            mustInclude: ['引用《红楼梦》后40回（程高本续书）的情节或任何文本', '介绍司棋'],
+          },
+        },
+        summary: '已调整来源边界。',
+        changedFields: ['constraints.mustAvoid', 'constraints.sourcePolicy'],
+      }),
+    });
+    expect(output.taskCard.constraints.mustInclude).toEqual(['介绍司棋']);
+    expect(output.taskCard.constraints.mustAvoid.filter((item) => item.includes('后40回'))).toEqual(['不得引用《红楼梦》后40回（程高本续书）的情节或任何文本']);
+    expect(output.taskCard.constraints.sourcePolicy).toContain('不引用后40回');
+  });
+
   it('updates remaining follow-up prompts after a user answer', async () => {
     const skill = new TaskCardReviserSkill();
     const draftCard: WritingTaskCard = {

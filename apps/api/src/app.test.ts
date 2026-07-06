@@ -606,6 +606,67 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('explains task card citation rules from current structured fields', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
+    const invokedSkills: string[] = [];
+    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+      invokedSkills.push(skillId);
+      return originalInvokeSkill(skillId as never, input as never, meta as never);
+    }) as typeof container.runtime.invokeSkill;
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-dialogue-citation-answer',
+      topic: '司棋人物文章',
+      writingGoal: '介绍司棋。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: ['司棋'], themes: ['司棋'] },
+      structure: { articleType: 'analysis', expectedLength: '1500字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '允许引用原文和脂批，正文以原创分析为主。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-citation-user', name: '引用解释工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-citation-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    const before = await container.stores.artifactStore.getArticle(article.id);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-citation-user', message: '解释不强制引用', context: { kind: 'task-card' } },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.mode).toBe('answer');
+    expect(body.message).toContain('不强制引用');
+    expect(body.message).toContain('不是禁止引用');
+    expect(body.message).toContain('允许引用原文和脂批');
+    expect(body.proposal).toBeUndefined();
+
+    const typoResponse = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'dialogue-citation-user', message: '解释不强制应用', context: { kind: 'task-card' } },
+    });
+
+    expect(typoResponse.statusCode).toBe(200);
+    expect(typoResponse.json().mode).toBe('answer');
+    expect(typoResponse.json().message).toContain('按任务卡字段理解为「不强制引用」');
+    expect(typoResponse.json().message).toContain('不是禁止引用');
+    expect(typoResponse.json().proposal).toBeUndefined();
+    expect(invokedSkills).toEqual([]);
+    const after = await container.stores.artifactStore.getArticle(article.id);
+    expect(after?.versions).toHaveLength(before?.versions.length ?? 0);
+    expect(await container.stores.revisionProposalStore.listPendingProposals(article.id, 'dialogue-citation-user')).toHaveLength(0);
+    await app.close();
+  });
+
   it('persists dialogue proposals and applies them only after confirmation', async () => {
     const config = testConfig();
     const container = createContainer(config);

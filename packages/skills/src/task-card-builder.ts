@@ -1,4 +1,5 @@
 import { newId, nowIso, safeJsonParse, Skill, TaskCardFollowUpPrompt, WritingTaskCard } from '@wa/core';
+import { normalizeTaskCardPolicies } from './task-card-policy';
 import { extractConfiguredAvoidanceRules, extractExplicitAvoidances } from './writing-constraints';
 
 export interface TaskCardBuilderInput {
@@ -185,8 +186,9 @@ function normalizeOutput(output: Partial<TaskCardBuilderOutput>, rawRequirement:
       followUpPrompts,
     },
   };
+  const normalized = normalizeTaskCardPolicies(taskCard, rawRequirement).taskCard;
   return {
-    taskCard,
+    taskCard: normalized,
     missingQuestions,
     followUpPrompts,
     summary: requireText(output.summary, 'summary'),

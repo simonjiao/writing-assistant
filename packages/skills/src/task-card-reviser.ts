@@ -1,10 +1,12 @@
 import { nowIso, safeJsonParse, Skill, TaskCardFollowUpPrompt, WritingTaskCard } from '@wa/core';
+import { normalizeTaskCardPolicies } from './task-card-policy';
 import { extractConfiguredAvoidanceRules, extractExplicitAvoidances } from './writing-constraints';
 
 export interface TaskCardReviserInput {
   articleId: string;
   instruction: string;
   currentTaskCard: WritingTaskCard;
+  skipKnowledge?: boolean;
 }
 
 export interface TaskCardReviserOutput {
@@ -127,8 +129,9 @@ function normalizeOutput(output: Partial<TaskCardReviserOutput>, current: Writin
       followUpPrompts,
     },
   };
+  const normalized = normalizeTaskCardPolicies(taskCard, instruction).taskCard;
   return {
-    taskCard,
+    taskCard: normalized,
     summary: requireText(output.summary, 'summary'),
     missingQuestions,
     followUpPrompts,

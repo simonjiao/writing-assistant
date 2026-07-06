@@ -45,6 +45,16 @@ const knowledge: KnowledgeItem[] = [{
   createdAt: new Date().toISOString(),
 }];
 
+const disallowedKnowledge: KnowledgeItem = {
+  id: 'k2',
+  title: '程高本后40回材料',
+  content: '这是来自后四十回续书的材料，不应进入只依据前八十回和脂批的写作。',
+  sourceType: 'retriever',
+  sourceRef: 'chenggao:后40回:k2',
+  themeTags: ['后40回'],
+  createdAt: new Date().toISOString(),
+};
+
 function llmReturning(content: unknown) {
   return {
     async chat() { return { content: JSON.stringify(content) }; },
@@ -90,6 +100,61 @@ describe('SectionWriterSkill', () => {
     expect(user.sourceUsePolicy?.prohibitedModes).toEqual(['translation', 'paraphrase', 'retelling', 'source-summary']);
     expect(user.writingBudget).toMatchObject({ targetChars: 300, maxChars: 405 });
     expect(calls[0].maxTokens).toBeUndefined();
+  });
+
+  it('filters knowledge that conflicts with a closed pre-80 source policy', async () => {
+    const skill = new SectionWriterSkill();
+    const calls: Array<{ messages: Array<{ role: string; content: string }>; maxTokens?: number }> = [];
+    await skill.invoke({
+      input: {
+        articleId: 'art_1',
+        section,
+        taskCard: {
+          ...taskCard,
+          constraints: {
+            ...taskCard.constraints,
+            sourcePolicy: '允许引用《红楼梦》前80回原文和脂批，正文以原创分析为主。',
+          },
+        },
+      },
+      context: { knowledge: [...knowledge, disallowedKnowledge], compactSummary: '', article: { outline: articleOutline, blocks: [] } } as never,
+      llm: capturingLlm({
+        block: {
+          text: '本段先提出分析判断，再说明前八十回材料如何支撑这一判断，正文重点放在解释人物处境。',
+          sourceRefs: ['test:k1'],
+          themeTags: ['测试主题'],
+        },
+        summary: '已生成分析性正文。',
+      }, calls),
+    });
+    const user = JSON.parse(calls[0].messages.find((message) => message.role === 'user')?.content ?? '{}') as { knowledge?: KnowledgeItem[] };
+    expect(user.knowledge?.map((item) => item.sourceRef)).toEqual(['test:k1']);
+  });
+
+  it('rejects generated prose that references the later 40 chapters under a pre-80 policy', async () => {
+    const skill = new SectionWriterSkill();
+    await expect(skill.invoke({
+      input: {
+        articleId: 'art_1',
+        section,
+        taskCard: {
+          ...taskCard,
+          constraints: {
+            ...taskCard.constraints,
+            sourcePolicy: '允许引用《红楼梦》前80回原文和脂批，正文以原创分析为主。',
+          },
+        },
+      },
+      context: context(),
+      llm: llmReturning({
+        block: {
+          text: '本段错误地转向程高本续书的后40回材料，以此说明人物结局，已经越出任务卡限定的来源范围。',
+          sourceRefs: ['chenggao:后40回:k2'],
+          themeTags: ['测试主题'],
+        },
+        summary: '已生成正文。',
+      }),
+    })).rejects.toThrow('violates source policy');
   });
 
   it('accepts analytical prose with several short quotations', async () => {

@@ -1,4 +1,5 @@
 import { newId, nowIso, OutlineItem, safeJsonParse, Skill, WritingTaskCard } from '@wa/core';
+import { filterKnowledgeByTaskCardPolicy, normalizeTaskCardPolicies, validateGeneratedTextAgainstTaskCardPolicy } from './task-card-policy';
 
 export interface OutlinePlannerInput {
   articleId: string;
@@ -19,6 +20,8 @@ export class OutlinePlannerSkill implements Skill<OutlinePlannerInput, OutlinePl
   };
 
   async invoke({ input, context, llm }: Parameters<Skill<OutlinePlannerInput, OutlinePlannerOutput>['invoke']>[0]): Promise<OutlinePlannerOutput> {
+    const taskCard = normalizeTaskCardPolicies(input.taskCard).taskCard;
+    const knowledge = filterKnowledgeByTaskCardPolicy(context.knowledge, taskCard);
     const response = await llm.chat({
       jsonMode: true,
       temperature: 0.25,
@@ -35,6 +38,7 @@ export class OutlinePlannerSkill implements Skill<OutlinePlannerInput, OutlinePl
             'taskCard.topRules.writingStandards 是顶部写作规则，优先级高于普通风格偏好和资料内容。',
             '如果 taskCard.topRules.languageEra 或 replacementHints 存在，大纲标题和目标也必须服从对应语言时代感和替代表。',
             '必须遵守 taskCard.constraints.mustAvoid；不要把 mustAvoid 中的内容改写成章节标题、章节目标、themeTags 或主体论点。',
+            '必须遵守 taskCard.constraints.sourcePolicy；来源策略是硬约束，不允许把被排除来源中的情节或文本写成大纲依据。',
             '如果任务卡中有被否定或纠偏的说法，只能作为边界条件理解，不要在大纲里反复展开该说法。',
             '不要用“从不”“没有要求”“完全不要求”等绝对化表述替代复杂人物判断，除非任务卡明确这样要求。',
             '对人物立场要保留张力：可以写“有规劝但不等于认同某种功利价值”，不要写成单向口号。',
@@ -46,9 +50,9 @@ export class OutlinePlannerSkill implements Skill<OutlinePlannerInput, OutlinePl
         {
           role: 'user',
           content: JSON.stringify({
-            taskCard: input.taskCard,
+            taskCard,
             memory: context.memory,
-            knowledge: context.knowledge,
+            knowledge,
             requiredOutputShape: {
               outline: [{
                 title: 'string; 章节标题，必须非空，不能只是编号',
@@ -65,11 +69,11 @@ export class OutlinePlannerSkill implements Skill<OutlinePlannerInput, OutlinePl
     });
     const parsed = safeJsonParse<OutlinePlannerOutput>(response.content);
     if (!parsed) throw new Error(`Outline planner did not return valid JSON: ${response.content.slice(0, 300)}`);
-    return normalizeOutline(parsed);
+    return normalizeOutline(parsed, taskCard, knowledge);
   }
 }
 
-function normalizeOutline(output: OutlinePlannerOutput): OutlinePlannerOutput {
+function normalizeOutline(output: OutlinePlannerOutput, taskCard: WritingTaskCard, knowledge: Parameters<typeof validateGeneratedTextAgainstTaskCardPolicy>[2]): OutlinePlannerOutput {
   if (!Array.isArray(output.outline) || output.outline.length < 4 || output.outline.length > 8) {
     throw new Error(`Outline planner must return 4 to 8 sections; got ${Array.isArray(output.outline) ? output.outline.length : 'non-array'}.`);
   }
@@ -84,6 +88,11 @@ function normalizeOutline(output: OutlinePlannerOutput): OutlinePlannerOutput {
     themeTags: requireStringArray(item.themeTags, `outline[${index}].themeTags`),
     status: 'draft' as const,
   }));
+  validateGeneratedTextAgainstTaskCardPolicy(
+    outline.map((item) => [item.title, item.goal, ...item.sourceHints, ...item.themeTags].join('\n')).join('\n\n'),
+    taskCard,
+    knowledge,
+  );
   return { outline, summary: requireText(output.summary, 'summary') };
 }
 

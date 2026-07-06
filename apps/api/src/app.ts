@@ -2,6 +2,7 @@ import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply } from 'fastify';
 import { AgentEvent, ArticleArtifact, ArticleBlock, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, KnowledgeItem, KnowledgeSearchOptions, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WritingTaskCard, WritingWorkspace } from '@wa/core';
+import { normalizeTaskCardPolicies } from '@wa/skills';
 import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
@@ -103,13 +104,13 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     if (!(await canAccessArticle(container, userId, article))) return reply.code(403).send({ error: 'Workspace access required.' });
     if (!article.taskCard) return reply.code(400).send({ error: 'Article has no task card to revise.' });
-    const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; currentTaskCard: WritingTaskCard }, TaskCardReviserOutput>(
+    const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; currentTaskCard: WritingTaskCard; skipKnowledge: boolean }, TaskCardReviserOutput>(
       'task-card-reviser',
-      { articleId: article.id, instruction, currentTaskCard: article.taskCard },
+      { articleId: article.id, instruction, currentTaskCard: article.taskCard, skipKnowledge: true },
       { userId, sessionId: body.sessionId, articleId: article.id },
     );
     const invalidation = clearDownstreamForTaskCardChange(article);
-    article.taskCard = result.taskCard;
+    article.taskCard = normalizeTaskCardPolicies(result.taskCard, instruction).taskCard;
     article.title = result.taskCard.topic;
     const updated = await container.stores.artifactStore.updateArticle(article);
     const reason = invalidation.outlineCount || invalidation.blockCount ? `修订任务卡并清空下游内容：${result.summary.slice(0, 80)}` : `修订任务卡：${result.summary.slice(0, 80)}`;
@@ -127,8 +128,10 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
     const article = access.article;
     if (!article.taskCard) return reply.code(400).send({ error: 'Article has no task card to confirm.' });
-    if (article.taskCard.status !== 'confirmed') {
-      article.taskCard = { ...article.taskCard, status: 'confirmed', updatedAt: nowIso() };
+    const taskCardForConfirm = article.taskCard.status === 'confirmed' ? article.taskCard : { ...article.taskCard, status: 'confirmed' as const, updatedAt: nowIso() };
+    const normalized = normalizeTaskCardPolicies(taskCardForConfirm);
+    if (article.taskCard.status !== 'confirmed' || normalized.changed) {
+      article.taskCard = normalized.taskCard;
       await container.stores.artifactStore.updateArticle(article);
       await container.stores.artifactStore.commitVersion(article.id, '确认任务卡', 'user');
       await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'task-card-confirmed', userId }, createdAt: nowIso() });
@@ -227,7 +230,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
       if (shouldUpdateDialogueBrief(route, message, pendingProposal)) {
         await enqueueDialogueBriefUpdate({ container, article: access.article, userId, sessionId: body.sessionId, message: userMessage, context: { kind: context.value.context.kind, title: context.value.context.title } });
       }
-      const assistantMessage = localDialogueReply(route, context.value.context, pendingProposal);
+      const assistantMessage = localDialogueReply(route, context.value.context, access.article, message, pendingProposal);
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id });
       return { mode: route, message: assistantMessage, messages: await listDialogueMessages(container, access.article.id, userId) };
     }
@@ -480,10 +483,61 @@ function shouldUpdateDialogueBrief(route: DialogueRoute, message: string, pendin
   return false;
 }
 
-function localDialogueReply(route: DialogueRoute, context: DialogueCoordinatorInput['context'], pendingProposal?: RevisionProposal): string {
-  if (route === 'answer') return `这是关于「${context.title}」的只读说明，不会修改当前任务。若要改动，请直接说明要改成什么。`;
+function localDialogueReply(route: DialogueRoute, context: DialogueCoordinatorInput['context'], article: ArticleArtifact, message: string, pendingProposal?: RevisionProposal): string {
+  if (route === 'answer') return localDialogueAnswer(context, article, message);
   if (route === 'discuss' && pendingProposal) return '已记录这条意见，暂不刷新当前修改方案。需要合并这些意见时，可以点击“更新方案”，或直接说“按以上意见更新方案”。';
   return `我还不能判断要修改「${context.title}」的哪一部分。请说明要修改、添加、删除，还是只是讨论想法。`;
+}
+
+function localDialogueAnswer(context: DialogueCoordinatorInput['context'], article: ArticleArtifact, message: string): string {
+  const taskCard = article.taskCard;
+  if (taskCard && context.kind === 'task-card') {
+    const normalized = normalizeQuestionText(message);
+    const citationQuestion = classifyCitationQuestion(normalized);
+    if (citationQuestion) return explainCitationRule(taskCard, citationQuestion);
+    if (/来源策略|资料|材料/.test(normalized)) return explainSourcePolicy(taskCard);
+    if (/写作标准|语言时代感|自然传统/.test(normalized)) return explainWritingStandard(taskCard);
+    if (/必须包含|包含项|包含/.test(normalized)) return explainTaskCardList('必须包含', taskCard.constraints.mustInclude);
+    if (/避免|不要|禁用词|禁用/.test(normalized)) return explainTaskCardList('避免', taskCard.constraints.mustAvoid);
+  }
+  if (context.kind === 'outline-item') {
+    return `这是对大纲项「${context.title}」的解释：${context.detail || '当前大纲项用于限定这一节要证明的判断或分析角度。'} 这条回复不会修改大纲。`;
+  }
+  if (context.kind === 'outline') return '这是对整体大纲的只读解释。大纲用于组织文章的论证顺序；如需改动，请说明要新增、删除、合并或调整哪些大纲项。';
+  if (context.kind === 'block') return `这是对当前段落「${context.title}」的只读解释。当前问题不会修改正文；如需改写，请说明希望改成什么效果。`;
+  return `这是关于「${context.title}」的只读解释，不会修改当前任务。`;
+}
+
+function classifyCitationQuestion(normalized: string): 'citation' | 'application-typo' | undefined {
+  if (/不强制应用|应用不强制/.test(normalized)) return 'application-typo';
+  if (/不强制引用|引用不强制|引用/.test(normalized)) return 'citation';
+  return undefined;
+}
+
+function explainCitationRule(taskCard: WritingTaskCard, kind: 'citation' | 'application-typo'): string {
+  if (taskCard.constraints.citationRequired) {
+    return '任务卡中的「需要可追溯引用」意思是：正文使用关键原文、脂批或资料判断时，需要能追到来源；引用仍然只作论据，不能用大段原文替代自己的分析。';
+  }
+  return [
+    ...(kind === 'application-typo' ? ['这里按任务卡字段理解为「不强制引用」。'] : []),
+    '任务卡中的「不强制引用」意思是：正文不要求每个观点都附原文、脂批或出处。',
+    '它不是禁止引用。可以引用原文或脂批作证，但引用应当短、准，只服务于分析，不能把资料摘要或原文搬运当成正文主体。',
+    `当前来源策略是：${taskCard.constraints.sourcePolicy}`,
+  ].join('\n');
+}
+
+function explainSourcePolicy(taskCard: WritingTaskCard): string {
+  return `当前来源策略是：${taskCard.constraints.sourcePolicy} 也就是说，资料用于支撑判断和校正事实，正文仍要以自己的分析、过渡和解释为主。`;
+}
+
+function explainWritingStandard(taskCard: WritingTaskCard): string {
+  const summary = taskCard.topRules?.summary || taskCard.topRules?.writingStandards.join('；') || '未指定额外写作标准。';
+  return `当前写作标准是：${summary} 它会约束正文语言和表达方式，优先级高于普通风格描述。`;
+}
+
+function explainTaskCardList(label: string, items: string[]): string {
+  if (!items.length) return `当前任务卡没有设置「${label}」条目。`;
+  return `当前任务卡的「${label}」条目是：${items.join('；')}。这些条目会约束后续大纲、正文生成和局部修改。`;
 }
 
 function dialogueBriefBarrierError(error: unknown): string {
@@ -582,6 +636,10 @@ function isQuestionLike(message: string): boolean {
   return /[?？]|为什么|为何|解释|说明|怎么|是否|吗|是什么|什么意思/.test(message);
 }
 
+function normalizeQuestionText(message: string): string {
+  return message.replace(/\s+/g, '').toLowerCase();
+}
+
 function needsKnowledgeSearch(message: string): boolean {
   const hasKnowledgeTarget = /(资料|文本|原文|出处|引用|脂批|批语|批注|评语|第[一二三四五六七八九十百0-9几哪]+回|哪[一几]回|证据|知识库|来源|根据文本)/.test(message);
   const hasExplicitSearchIntent = /(查|查找|检索|搜索|找|找出|列出|给出|有哪些|有哪|哪里|在哪|哪[一几]回|第几回|第[一二三四五六七八九十百0-9]+回)/.test(message);
@@ -628,13 +686,13 @@ async function applyRevisionProposal(container: AppContainer, proposalId: string
 async function applyRevisionOperation(container: AppContainer, article: ArticleArtifact, operation: RevisionOperation, userId: string, sessionId?: string): Promise<{ article: ArticleArtifact; runPayload?: Awaited<ReturnType<typeof enrichRun>> }> {
   if (operation.type === 'revise-task-card') {
     if (!article.taskCard) throw new Error('Article has no task card to revise.');
-    const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; currentTaskCard: WritingTaskCard }, TaskCardReviserOutput>(
+    const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; currentTaskCard: WritingTaskCard; skipKnowledge: boolean }, TaskCardReviserOutput>(
       'task-card-reviser',
-      { articleId: article.id, instruction: operation.instruction, currentTaskCard: article.taskCard },
+      { articleId: article.id, instruction: operation.instruction, currentTaskCard: article.taskCard, skipKnowledge: true },
       { userId, sessionId, articleId: article.id },
     );
     const invalidation = clearDownstreamForTaskCardChange(article);
-    article.taskCard = result.taskCard;
+    article.taskCard = normalizeTaskCardPolicies(result.taskCard, operation.instruction).taskCard;
     article.title = result.taskCard.topic;
     const updated = await container.stores.artifactStore.updateArticle(article);
     await container.stores.artifactStore.commitVersion(article.id, invalidation.outlineCount || invalidation.blockCount ? `修订任务卡并清空下游内容：${result.summary.slice(0, 80)}` : `修订任务卡：${result.summary.slice(0, 80)}`, 'user');

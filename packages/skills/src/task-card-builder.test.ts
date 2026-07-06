@@ -109,6 +109,36 @@ describe('TaskCardBuilderSkill', () => {
     expect(output.taskCard.constraints.sourcePolicy).toContain('以脂评本前八十回为主要依据');
   });
 
+  it('turns a closed pre-80 source policy into an explicit later-40 prohibition', async () => {
+    const skill = new TaskCardBuilderSkill();
+    const output = await skill.invoke({
+      input: { rawRequirement: '写一篇关于司棋的文章，只依据前80回和脂批。', userId: 'u1' },
+      context: { memory: {} } as never,
+      llm: llmReturning({
+        taskCard: {
+          topic: '司棋人物文章',
+          writingGoal: '介绍并分析司棋。',
+          audience: '普通中文读者',
+          scope: { editions: ['脂评本'], chapters: [], characters: ['司棋'], themes: [] },
+          structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+          style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+          constraints: {
+            mustInclude: ['司棋的性格'],
+            mustAvoid: ['引用《红楼梦》后40回（程高本续书）的情节或任何文本'],
+            citationRequired: false,
+            sourcePolicy: '允许引用《红楼梦》前80回原文和脂批，正文以原创分析为主。',
+          },
+          interactionMode: { askBeforeWriting: true, localEditFirst: true },
+        },
+        missingQuestions: [],
+        summary: '已生成任务卡。',
+        confidence: 0.8,
+      }),
+    });
+    expect(output.taskCard.constraints.mustAvoid.filter((item) => item.includes('后40回'))).toEqual(['不得引用《红楼梦》后40回（程高本续书）的情节或任何文本']);
+    expect(output.taskCard.constraints.sourcePolicy).toContain('不引用后40回');
+  });
+
   it('stores selectable follow-up prompts on the draft task card', async () => {
     const skill = new TaskCardBuilderSkill();
     const output = await skill.invoke({
