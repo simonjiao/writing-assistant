@@ -477,6 +477,54 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .task-guidance-option:hover {
   background: #ede7dc;
 }
+.selected-guidance-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+.selected-guidance-card {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  min-height: 54px;
+  padding: 10px 30px 10px 10px;
+  border: 1px solid #d8dde6;
+  border-radius: 10px;
+  background: #eef2f7;
+}
+.selected-guidance-card span {
+  color: #596474;
+  font-size: 12px;
+}
+.selected-guidance-card strong {
+  color: #18202a;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.selected-guidance-clear {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid #cfd6e1;
+  border-radius: 50%;
+  background: #fffdf8;
+  color: #596474;
+  font-size: 13px;
+  line-height: 1;
+}
+.selected-guidance-clear:hover {
+  background: #f7f1e8;
+  color: #18202a;
+}
+.pending-guidance-list {
+  display: grid;
+  gap: 10px;
+}
 .task-settings-guidance .writing-standard-controls,
 .task-settings-guidance .profile-controls {
   margin-top: 0;
@@ -573,6 +621,11 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .profile-options { display: flex; flex-wrap: wrap; gap: 8px 12px; }
 .profile-options label { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
 .profile-options input { width: auto; }
+.profile-detail-title {
+  color: #6f665b;
+  font-size: 13px;
+  font-weight: 600;
+}
 .outline { margin-top: 18px; }
 .outline > h3 {
   display: inline-flex;
@@ -1028,6 +1081,9 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   background: #fffdf8;
   box-shadow: 0 24px 70px rgba(24, 32, 42, 0.22);
 }
+.warning-modal {
+  border-color: #e2b8a4;
+}
 .modal-head {
   display: flex;
   align-items: center;
@@ -1046,11 +1102,28 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   color: #6f665b;
   font-size: 13px;
 }
+.modal-warning-text,
+.modal-secondary-text {
+  margin: 0;
+  color: #2f3742;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.modal-warning-text {
+  color: #7c2d12;
+}
 .modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   padding: 0 16px 16px;
+}
+.danger-button {
+  background: #9f2d18;
+  color: #fffdf8;
+}
+.danger-button:hover:not(:disabled) {
+  background: #84220f;
 }
 
 @media (max-width: 1180px) {

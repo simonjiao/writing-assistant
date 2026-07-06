@@ -98,6 +98,12 @@ describe('api app', () => {
     expect(['queued', 'running', 'waiting']).toContain(body.run.status);
     const run = await waitForRun(container, body.run.id, ['waiting']);
     expect(run.status).toBe('waiting');
+    const runResponse = await app.inject({ method: 'GET', url: `/api/runs/${body.run.id}` });
+    expect(runResponse.statusCode).toBe(200);
+    expect(runResponse.json().article.taskCard.status).toBe('draft');
+    const listResponse = await app.inject({ method: 'GET', url: '/api/articles?userId=test-user&workspaceId=wsp_default_test-user&view=summary' });
+    expect(listResponse.statusCode).toBe(200);
+    expect(listResponse.json()).toMatchObject([{ taskStatus: 'draft', outlineCount: 0, blockCount: 0 }]);
     await app.close();
   });
 
@@ -297,19 +303,45 @@ describe('api app', () => {
     await app.close();
   });
 
-  it('confirms a draft outline through the article API', async () => {
+  it('starts writing by accepting the current outline through the article API', async () => {
     const config = testConfig();
     const container = createContainer(config);
     const app = createApp(config, container);
-    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'outline-confirm-user', name: '大纲确认工作台' });
-    const article = await container.stores.artifactStore.createArticle({ userId: 'outline-confirm-user', workspaceId: workspace.id, title: '待确认大纲' });
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'outline-confirm-user', name: '开始写作工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'outline-confirm-user', workspaceId: workspace.id, title: '待开始写作' });
     article.outline = [{ id: 'sec-1', title: '草稿标题', goal: '草稿目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'draft' }];
     await container.stores.artifactStore.updateArticle(article);
-    const response = await app.inject({ method: 'POST', url: `/api/articles/${article.id}/outline/confirm`, payload: { userId: 'outline-confirm-user' } });
+    const response = await app.inject({ method: 'POST', url: `/api/articles/${article.id}/writing/start`, payload: { userId: 'outline-confirm-user' } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.outline[0].status).toBe('confirmed');
-    expect(body.versions[body.versions.length - 1].reason).toBe('确认大纲');
+    expect(body.versions[body.versions.length - 1].reason).toBe('开始写作');
+    await app.close();
+  });
+
+  it('clears generated section text when an outline item is edited', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'outline-consistency-user', name: '大纲一致性工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'outline-consistency-user', workspaceId: workspace.id, title: '大纲一致性' });
+    article.outline = [
+      { id: 'sec-1', title: '旧标题', goal: '旧目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'written' },
+      { id: 'sec-2', title: '保留标题', goal: '保留目标', order: 2, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'written' },
+    ];
+    article.blocks = [
+      { id: 'block-1', type: 'paragraph', sectionId: 'sec-1', title: '旧正文', text: '旧大纲项下的正文。', sourceRefs: [], themeTags: [], status: 'draft', createdAt: now, updatedAt: now },
+      { id: 'block-2', type: 'paragraph', sectionId: 'sec-2', title: '保留正文', text: '另一节正文。', sourceRefs: [], themeTags: [], status: 'draft', createdAt: now, updatedAt: now },
+    ];
+    await container.stores.artifactStore.updateArticle(article);
+    const response = await app.inject({ method: 'PATCH', url: `/api/articles/${article.id}/outline/sec-1`, payload: { title: '新标题', goal: '新目标', userId: 'outline-consistency-user' } });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.outline.find((item: { id: string }) => item.id === 'sec-1')?.status).toBe('confirmed');
+    expect(body.blocks.map((block: { id: string }) => block.id)).not.toContain('block-1');
+    expect(body.blocks.map((block: { id: string }) => block.id)).toContain('block-2');
+    expect(body.versions[body.versions.length - 1].reason).toContain('清空本节正文');
     await app.close();
   });
 
@@ -342,6 +374,44 @@ describe('api app', () => {
     expect(body.article.taskCard.status).toBe('draft');
     expect(body.changedFields).toContain('topic');
     expect(body.article.versions[body.article.versions.length - 1].reason).toContain('修订任务卡');
+    await app.close();
+  });
+
+  it('clears outline and generated text when a task card changes', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-consistency',
+      topic: '旧主题',
+      writingGoal: '写一篇分析文章。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: [], themes: ['旧主题'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'consistency-user', name: '一致性工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'consistency-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    article.outline = [{ id: 'sec-old', title: '旧大纲', goal: '旧目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: ['旧主题'], status: 'written' }];
+    article.blocks = [{ id: 'block-old', type: 'paragraph', sectionId: 'sec-old', title: '旧正文', text: '旧任务卡下生成的正文。', sourceRefs: [], themeTags: ['旧主题'], status: 'draft', createdAt: now, updatedAt: now }];
+    article.citations = [{ id: 'cite-old', label: '旧引用', sourceRef: 'old-ref' }];
+    article.themeTags = [{ id: 'tag-old', label: '旧主题', scope: 'article' }];
+    await container.stores.artifactStore.updateArticle(article);
+    const response = await app.inject({ method: 'POST', url: `/api/articles/${article.id}/task-card/revise`, payload: { instruction: '主题改为新主题，目标更偏论证。', userId: 'consistency-user' } });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.article.taskCard.topic).toBe('新主题');
+    expect(body.article.outline).toHaveLength(0);
+    expect(body.article.blocks).toHaveLength(0);
+    expect(body.article.citations).toHaveLength(0);
+    expect(body.article.themeTags).toHaveLength(0);
+    expect(body.article.versions[body.article.versions.length - 1].reason).toContain('清空下游内容');
     await app.close();
   });
 

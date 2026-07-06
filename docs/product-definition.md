@@ -25,7 +25,7 @@
   → task-card workflow
   → 用户确认任务卡
   → outline workflow
-  → 用户确认大纲
+  → 用户开始写作，系统自动锁定当前大纲
   → section-writing workflow
   → patch workflow
   → artifact version commit

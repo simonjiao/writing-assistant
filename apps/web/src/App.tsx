@@ -11,6 +11,7 @@ const supportColumnCollapsedStorageKey = 'writing-assistant.support-column-colla
 type SectionGenerationState = { sectionId: string; runId?: string; status: WorkflowRun['status'] | 'starting'; error?: string };
 type TaskCardTarget = 'current' | 'new';
 type DialogContext = { kind: 'new-task' | 'task-card' | 'outline' | 'outline-item' | 'paragraph'; label: string; title: string; detail: string; contextText: string; outlineItemId?: string; blockId?: string };
+type TaskCardPromptAnswer = { prompt: TaskCardFollowUpPrompt; answer: string };
 
 export function App() {
   const [sessionId, setSessionId] = useState<string>();
@@ -24,6 +25,7 @@ export function App() {
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [newWorkspaceMembers, setNewWorkspaceMembers] = useState('');
   const [workspaceModalOpen, setWorkspaceModalOpen] = useState(false);
+  const [outlineRegenerationWarningOpen, setOutlineRegenerationWarningOpen] = useState(false);
   const [navigationCollapsed, setNavigationCollapsed] = useState(() => readNavigationCollapsedPreference());
   const [supportColumnCollapsed, setSupportColumnCollapsed] = useState(() => readSupportColumnCollapsedPreference());
   const [domainProfiles, setDomainProfiles] = useState<DomainProfileSummary[]>([]);
@@ -33,6 +35,7 @@ export function App() {
   const [writingStandard, setWritingStandard] = useState<WritingStandardSummary>();
   const [selectedLanguageEra, setSelectedLanguageEra] = useState('');
   const [extraForbiddenTerms, setExtraForbiddenTerms] = useState('');
+  const [clearedTaskCardPromptIds, setClearedTaskCardPromptIds] = useState<string[]>([]);
   const [lastRun, setLastRun] = useState<RunResponse>();
   const [selectedBlockId, setSelectedBlockId] = useState<string>();
   const [patchInstruction, setPatchInstruction] = useState('这段写得更含蓄、更有红楼梦的味道，但不要改变意思。');
@@ -124,7 +127,9 @@ export function App() {
     setTaskCardTarget(article?.taskCard ? 'current' : 'new');
     setCurrentTaskMessage('');
     setNewTaskMessage('');
+    setClearedTaskCardPromptIds([]);
     setDialogueResponse(undefined);
+    setOutlineRegenerationWarningOpen(false);
     void refreshDialogueProposals(article?.id).catch(() => setPendingProposals([]));
   }, [article?.id]);
   useEffect(() => () => window.clearTimeout(progressDismissTimer.current), []);
@@ -144,8 +149,8 @@ export function App() {
   const taskCardConfirmed = visibleArticle?.taskCard?.status === 'confirmed';
   const taskCardDraft = visibleArticle?.taskCard?.status === 'draft';
   const taskCardConfirmationRunId = lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-task-card-confirm' ? lastRun.run.id : undefined;
-  const outlineConfirmationRunId = lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-outline-confirm' ? lastRun.run.id : undefined;
-  const canConfirmOutline = Boolean(visibleArticle?.outline.length && visibleArticle.outline.some((item) => item.status !== 'confirmed'));
+  const writingStartRunId = lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-writing-start' ? lastRun.run.id : undefined;
+  const canStartWriting = Boolean(visibleArticle?.outline.length && visibleArticle.outline.some((item) => item.status !== 'confirmed'));
   const canDeleteWorkspace = Boolean(selectedWorkspace && !selectedWorkspace.isDefault && selectedWorkspace.userId === userId);
   const canSubmitTaskCardMessage = Boolean(activeTaskCardMessage.trim() && (taskCardDialogTarget === 'current' || selectedWorkspaceId));
   const taskCardFollowUpPrompts = useMemo(() => visibleArticle?.taskCard?.status === 'draft' ? taskCardPrompts(visibleArticle.taskCard) : [], [visibleArticle?.taskCard]);
@@ -258,6 +263,7 @@ export function App() {
     setNewTaskMessage('');
     setDialogueResponse(undefined);
     setPendingProposals([]);
+    setOutlineRegenerationWarningOpen(false);
     setLastRun(undefined);
     setLiveEvents([]);
     setProgressVisible(false);
@@ -272,6 +278,19 @@ export function App() {
       return;
     }
     setSectionGeneration((current) => current?.sectionId === sectionId ? { ...current, runId: response.run.id, status: response.run.status, error: response.run.error } : current);
+  }
+  async function requestOutlineGeneration() {
+    if (!visibleArticle) return;
+    if (visibleArticle.outline.length) {
+      setOutlineRegenerationWarningOpen(true);
+      return;
+    }
+    await execute(() => api.startOutline(visibleArticle.id, userId, sessionId));
+  }
+  async function applyOutlineRegeneration() {
+    if (!visibleArticle) return;
+    setOutlineRegenerationWarningOpen(false);
+    await execute(() => api.startOutline(visibleArticle.id, userId, sessionId));
   }
   function updateNavigationCollapsed(collapsed: boolean) {
     setNavigationCollapsed(collapsed);
@@ -395,7 +414,12 @@ export function App() {
     void submitTaskCardMessage();
   }
   function chooseTaskCardPromptOption(prompt: TaskCardFollowUpPrompt, option: string) {
-    setCurrentTaskMessage((current) => appendPromptAnswer(current, prompt.question, option));
+    setClearedTaskCardPromptIds((current) => current.filter((id) => id !== prompt.id));
+    setCurrentTaskMessage((current) => setPromptAnswer(current, prompt.question, option));
+  }
+  function clearTaskCardPromptAnswer(prompt: TaskCardFollowUpPrompt) {
+    setClearedTaskCardPromptIds((current) => current.includes(prompt.id) ? current : [...current, prompt.id]);
+    setCurrentTaskMessage((current) => removePromptAnswer(current, prompt.question));
   }
   async function sendDialogueMessage(message: string) {
     if (!visibleArticle?.taskCard) return;
@@ -498,16 +522,16 @@ export function App() {
       setBusy(false);
     }
   }
-  async function confirmOutline() {
+  async function startWriting() {
     if (!visibleArticle?.outline.length) return;
-    if (outlineConfirmationRunId) {
-      await execute(() => api.resume(outlineConfirmationRunId, { decision: 'confirm' }));
+    if (writingStartRunId) {
+      await execute(() => api.resume(writingStartRunId, { decision: 'start-writing' }));
       return;
     }
     setBusy(true);
     setError(undefined);
     try {
-      const updated = await api.confirmOutline(visibleArticle.id, { userId, sessionId });
+      const updated = await api.startWriting(visibleArticle.id, { userId, sessionId });
       setArticle(updated);
       setLastRun(undefined);
       await refreshArticleSummaries(updated.workspaceId);
@@ -547,8 +571,8 @@ export function App() {
         {taskCardConfirmed ? <aside className={dialogContext.kind === 'task-card' ? 'panel task-card-panel selected' : 'panel task-card-panel'} onClick={() => { setTaskCardTarget('current'); setSelectedBlockId(undefined); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }}>
           <h2>任务卡</h2>
           {visibleArticle.taskCard ? <TaskCardView taskCard={visibleArticle.taskCard} /> : null}
-          {visibleArticle && canGenerateOutline && <button disabled={busy} onClick={() => execute(() => api.startOutline(visibleArticle.id, userId, sessionId))}>{visibleArticle.outline.length ? '重新生成大纲' : '生成大纲'}</button>}
-          {canConfirmOutline ? <button disabled={busy} onClick={() => void confirmOutline()}>确认大纲</button> : null}
+          {visibleArticle && canGenerateOutline && <button disabled={busy} onClick={() => void requestOutlineGeneration()}>{visibleArticle.outline.length ? '重新生成大纲' : '生成大纲'}</button>}
+          {canStartWriting ? <button disabled={busy} onClick={() => void startWriting()}>开始写作</button> : null}
         </aside> : null}
         <section className="panel editor-panel">
           <div className="editor-scroll-content">
@@ -576,8 +600,8 @@ export function App() {
           {outlineGenerated && visibleArticle && progressVisible ? <div className="editor-progress-support"><section className="support-card"><h3>执行进度</h3><ProgressTimeline events={liveEvents} run={lastRun?.run} /></section></div> : null}
           </div>
           <div className="task-dialog-panel">
-            {taskCardDialogTarget === 'current' && taskCardFollowUpPrompts.length ? <TaskCardGuidance prompts={taskCardFollowUpPrompts} onChooseOption={chooseTaskCardPromptOption} /> : null}
-            {taskCardDialogTarget === 'new' ? <NewTaskGuidance writingStandard={writingStandard} selectedLanguageEra={selectedLanguageEra} onSelectLanguageEra={setSelectedLanguageEra} domainProfiles={domainProfiles} recommendations={domainProfileRecommendations} selectedProfileId={selectedProfileId} selections={profileSelections} onSelectProfile={selectProfile} onUpdateGroup={updateProfileGroup} /> : null}
+            {taskCardDialogTarget === 'current' && visibleArticle?.taskCard && taskCardFollowUpPrompts.length ? <TaskCardGuidance prompts={taskCardFollowUpPrompts} taskCard={visibleArticle.taskCard} message={currentTaskMessage} clearedPromptIds={clearedTaskCardPromptIds} onChooseOption={chooseTaskCardPromptOption} onClearAnswer={clearTaskCardPromptAnswer} /> : null}
+            {taskCardDialogTarget === 'new' ? <NewTaskGuidance writingStandard={writingStandard} selectedLanguageEra={selectedLanguageEra} onSelectLanguageEra={setSelectedLanguageEra} onClearLanguageEra={() => setSelectedLanguageEra('')} domainProfiles={domainProfiles} recommendations={domainProfileRecommendations} selectedProfileId={selectedProfileId} selections={profileSelections} onSelectProfile={selectProfile} onClearProfile={() => selectProfile('')} onUpdateGroup={updateProfileGroup} /> : null}
             <DialogContextView context={dialogContext} />
             <DialogueResultView response={dialogueResponse} proposal={activeDialogueProposal} busy={busy} onApply={applyDialogueProposal} onDismiss={dismissDialogueProposal} />
             <div className="task-dialog-input-row">
@@ -601,6 +625,7 @@ export function App() {
       </main>
       {visibleArticle && selectedBlockId ? <footer className="chatbar"><div className="patch-box"><strong>局部修改</strong><input value={patchInstruction} onChange={(event) => setPatchInstruction(event.target.value)} placeholder="输入对选中段落的修改意见" /><button disabled={busy} onClick={() => execute(() => api.startPatch(visibleArticle.id, selectedBlockId, patchInstruction, userId, sessionId))}>生成 Patch</button>{lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-patch-confirm' && <button onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'accept' }))}>应用 Patch</button>}</div>{patchPreview && <div className="patch-preview"><strong>Patch 预览</strong><div className="diff-grid"><pre>{patchPreview.before}</pre><pre>{patchPreview.after}</pre></div><ul>{patchPreview.changeSummary.map((item) => <li key={item}>{item}</li>)}</ul></div>}</footer> : null}
       {workspaceModalOpen && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="workspace-modal-title"><div className="modal-head"><h2 id="workspace-modal-title">新建工作台</h2><button aria-label="关闭" className="icon-button" disabled={busy} onClick={() => setWorkspaceModalOpen(false)}>×</button></div><div className="modal-body"><label>名称</label><input value={newWorkspaceName} autoFocus onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="新工作台名称" /><label>协作者</label><input value={newWorkspaceMembers} onChange={(event) => setNewWorkspaceMembers(event.target.value)} placeholder="协作者 userId，用逗号分隔" /></div><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setWorkspaceModalOpen(false)}>取消</button><button disabled={busy || !newWorkspaceName.trim()} onClick={() => void createWorkspace()}>创建</button></div></div></div>}
+      {outlineRegenerationWarningOpen && visibleArticle ? <div className="modal-backdrop" role="presentation"><div className="modal warning-modal" role="dialog" aria-modal="true" aria-labelledby="outline-regeneration-title"><div className="modal-head"><h2 id="outline-regeneration-title">重新生成大纲？</h2><button aria-label="关闭" className="icon-button" disabled={busy} onClick={() => setOutlineRegenerationWarningOpen(false)}>×</button></div><div className="modal-body"><p className="modal-warning-text">重新生成会替换当前 {visibleArticle.outline.length} 个大纲项，并清空已经生成的 {visibleArticle.blocks.length} 段正文。这个操作适合在任务卡发生较大变化、现有大纲已经不适用时使用。</p><p className="modal-secondary-text">如果只是调整某一节或少量内容，建议选中大纲项后通过对话提出修改意见。</p></div><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setOutlineRegenerationWarningOpen(false)}>取消</button><button className="danger-button" disabled={busy} onClick={() => void applyOutlineRegeneration()}>确认重新生成</button></div></div></div> : null}
     </div>
   );
 }
@@ -621,14 +646,18 @@ function SectionBlocksView(props: { blocks: ArticleBlock[]; selectedBlockId?: st
   );
 }
 
-function TaskCardGuidance(props: { prompts: TaskCardFollowUpPrompt[]; onChooseOption: (prompt: TaskCardFollowUpPrompt, option: string) => void }) {
+function TaskCardGuidance(props: { prompts: TaskCardFollowUpPrompt[]; taskCard: WritingTaskCard; message: string; clearedPromptIds: string[]; onChooseOption: (prompt: TaskCardFollowUpPrompt, option: string) => void; onClearAnswer: (prompt: TaskCardFollowUpPrompt) => void }) {
+  const selectedAnswers = promptSelectedAnswers(props.prompts, props.message, props.taskCard, props.clearedPromptIds);
+  const selectedPromptIds = new Set(selectedAnswers.map((item) => item.prompt.id));
+  const pendingPrompts = props.prompts.filter((prompt) => !selectedPromptIds.has(prompt.id));
   return (
     <div className="task-guidance">
-      <div className="task-guidance-head"><strong>待确认项</strong><span>{props.prompts.length} 项</span></div>
-      {props.prompts.map((prompt) => <div className="task-guidance-item" key={prompt.id}>
+      <div className="task-guidance-head"><strong>待确认项</strong><span>{pendingPrompts.length ? `${pendingPrompts.length} 项待选` : '已选择'}</span></div>
+      {selectedAnswers.length ? <SelectedGuidanceRow items={selectedAnswers.map((item) => selectedGuidanceItemFromPromptAnswer(item, () => props.onClearAnswer(item.prompt)))} /> : null}
+      {pendingPrompts.length ? <div className="pending-guidance-list">{pendingPrompts.map((prompt) => <div className="task-guidance-item" key={prompt.id}>
         <div className="task-guidance-question">{prompt.question}</div>
         {prompt.options.length ? <div className="task-guidance-options">{prompt.options.map((option) => <button type="button" className="task-guidance-option" key={option} onClick={() => props.onChooseOption(prompt, option)}>{option}</button>)}</div> : null}
-      </div>)}
+      </div>)}</div> : null}
     </div>
   );
 }
@@ -664,21 +693,96 @@ function NewTaskGuidance(props: {
   writingStandard?: WritingStandardSummary;
   selectedLanguageEra: string;
   onSelectLanguageEra: (languageEra: string) => void;
+  onClearLanguageEra: () => void;
   domainProfiles: DomainProfileSummary[];
   recommendations: DomainProfileRecommendation[];
   selectedProfileId?: string;
   selections: Record<string, string | string[]>;
   onSelectProfile: (profileId: string) => void;
+  onClearProfile: () => void;
   onUpdateGroup: (groupId: string, value: string | string[]) => void;
 }) {
   if (!props.writingStandard && !props.domainProfiles.length) return null;
+  const selectedLanguageEra = props.writingStandard?.options.find((option) => option.id === props.selectedLanguageEra);
+  const selectedProfile = props.domainProfiles.find((profile) => profile.id === props.selectedProfileId);
+  const selectedItems = [
+    selectedLanguageEra ? { id: 'writing-standard', label: '写作标准', value: selectedLanguageEra.label, onClear: props.onClearLanguageEra } : undefined,
+    selectedProfile ? { id: 'domain-profile', label: '题材标准', value: selectedProfile.label, onClear: props.onClearProfile } : undefined,
+  ].filter((item): item is SelectedGuidanceItem => Boolean(item));
+  const hasPendingWritingStandard = Boolean(props.writingStandard && !selectedLanguageEra);
+  const hasDomainProfilePanel = props.domainProfiles.length > 0 && (!selectedProfile || selectedProfile.groups.length > 0);
   return (
     <div className="task-guidance task-settings-guidance">
-      <div className="task-guidance-head"><strong>待确认项</strong><span>新任务设置</span></div>
-      {props.writingStandard ? <div className="task-guidance-item"><WritingStandardControls standard={props.writingStandard} selectedLanguageEra={props.selectedLanguageEra} onSelectLanguageEra={props.onSelectLanguageEra} /></div> : null}
-      {props.domainProfiles.length ? <div className="task-guidance-item"><DomainProfileControls profiles={props.domainProfiles} recommendations={props.recommendations} selectedProfileId={props.selectedProfileId} selections={props.selections} onSelectProfile={props.onSelectProfile} onUpdateGroup={props.onUpdateGroup} /></div> : null}
+      <div className="task-guidance-head"><strong>待确认项</strong><span>{selectedItems.length ? `${selectedItems.length} 项已选择` : '新任务设置'}</span></div>
+      {selectedItems.length ? <SelectedGuidanceRow items={selectedItems} /> : null}
+      {hasPendingWritingStandard || hasDomainProfilePanel ? <div className="pending-guidance-list">
+        {hasPendingWritingStandard && props.writingStandard ? <div className="task-guidance-item"><WritingStandardControls standard={props.writingStandard} selectedLanguageEra={props.selectedLanguageEra} onSelectLanguageEra={props.onSelectLanguageEra} /></div> : null}
+        {hasDomainProfilePanel ? <div className="task-guidance-item"><DomainProfileControls profiles={props.domainProfiles} recommendations={props.recommendations} selectedProfileId={props.selectedProfileId} selections={props.selections} onSelectProfile={props.onSelectProfile} onUpdateGroup={props.onUpdateGroup} /></div> : null}
+      </div> : null}
     </div>
   );
+}
+
+type SelectedGuidanceItem = { id: string; label: string; value: string; onClear: () => void; ariaLabel?: string; title?: string };
+
+function SelectedGuidanceRow(props: { items: SelectedGuidanceItem[] }) {
+  return (
+    <div className="selected-guidance-row">
+      {props.items.map((item) => <div className="selected-guidance-card" key={item.id} title={item.title}>
+        <button type="button" className="selected-guidance-clear" aria-label={`重新选择${item.ariaLabel ?? item.label}`} title="重新选择" onClick={item.onClear}>×</button>
+        <span>{item.label}</span>
+        <strong>{item.value}</strong>
+      </div>)}
+    </div>
+  );
+}
+
+function selectedGuidanceItemFromPromptAnswer(item: TaskCardPromptAnswer, onClear: () => void): SelectedGuidanceItem {
+  const summary = summarizePromptSelection(item.prompt.question, item.answer);
+  return {
+    id: item.prompt.id,
+    label: summary.label,
+    value: summary.value,
+    onClear,
+    ariaLabel: summary.ariaLabel,
+    title: `${item.prompt.question}：${item.answer}`,
+  };
+}
+
+function summarizePromptSelection(question: string, answer: string): { label: string; value: string; ariaLabel: string } {
+  const normalizedQuestion = normalizePromptText(question);
+  if (/篇幅|字数|多长|长度/.test(normalizedQuestion)) return { label: '篇幅', value: compactLengthAnswer(answer), ariaLabel: '篇幅' };
+  if (/结构|侧重|重点|方面/.test(normalizedQuestion)) return { label: '结构侧重', value: compactFocusAnswer(answer), ariaLabel: '结构侧重' };
+  if (/资料|引用|来源|参考/.test(normalizedQuestion)) return { label: '资料使用', value: compactSourceAnswer(answer), ariaLabel: '资料使用' };
+  return { label: compactQuestionLabel(question), value: compactAnswerValue(answer), ariaLabel: question };
+}
+
+function compactLengthAnswer(answer: string): string {
+  return answer.trim().replace(/（约/g, '，约').replace(/[（）()]/g, '');
+}
+
+function compactFocusAnswer(answer: string): string {
+  return compactAnswerValue(answer
+    .replace(/人物性格与命运分析/g, '性格与命运')
+    .replace(/.+与其他人物的关系/g, '人物关系')
+    .replace(/.+在全书中的文学作用/g, '文学作用')
+    .replace(/综合全面介绍/g, '综合介绍'));
+}
+
+function compactSourceAnswer(answer: string): string {
+  const text = answer.trim();
+  if (/仅引用|原文/.test(text)) return '原文为主';
+  if (/红学|评论/.test(text)) return '可用红学评论';
+  if (/自由|各种/.test(text)) return '资料不限';
+  return compactAnswerValue(text);
+}
+
+function compactQuestionLabel(question: string): string {
+  return summarizeText(question.replace(/^您(?:希望|对)?/, '').replace(/[？?]$/, '').trim(), 8);
+}
+
+function compactAnswerValue(answer: string): string {
+  return summarizeText(answer.trim(), 18);
 }
 
 function OutlineActionBar(props: { isEditing: boolean; busy: boolean; canSave: boolean; hasSectionBlocks: boolean; onSave: () => void; onCancel: () => void; onEdit: () => void; onGenerate: () => void }) {
@@ -779,14 +883,21 @@ function DomainProfileControls(props: { profiles: DomainProfileSummary[]; recomm
     props.onSelectProfile(profileId);
     setPickerOpen(false);
   }
+  if (profile) {
+    return (
+      <div className="profile-controls">
+        <div className="profile-detail-title">题材标准细项</div>
+        {profile.groups.map((group) => <div className="profile-group" key={group.id}><span>{group.label}</span>{group.type === 'single' ? <select value={singleSelection(props.selections[group.id])} onChange={(event) => props.onUpdateGroup(group.id, event.target.value)}>{group.options.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select> : <div className="profile-options">{group.options.map((option) => {
+          const checked = multiSelection(props.selections[group.id]).includes(option.id);
+          return <label key={option.id}><input type="checkbox" checked={checked} onChange={(event) => props.onUpdateGroup(group.id, toggleSelection(multiSelection(props.selections[group.id]), option.id, event.target.checked))} />{option.label}</label>;
+        })}</div>}</div>)}
+      </div>
+    );
+  }
   return (
     <div className="profile-controls">
-      <div className="profile-header"><strong>题材标准</strong><div className="profile-summary">{profile ? <span className="profile-pill active">{profile.label}</span> : recommendation ? <button type="button" className="profile-recommendation" onClick={() => chooseProfile(recommendation.id)}>推荐：{recommendation.label}</button> : <span className="profile-pill">未应用</span>}<button type="button" className="secondary-button compact" onClick={() => setPickerOpen((current) => !current)}>{pickerOpen ? '收起' : '更换'}</button></div></div>
+      <div className="profile-header"><strong>题材标准</strong><div className="profile-summary">{recommendation ? <button type="button" className="profile-recommendation" onClick={() => chooseProfile(recommendation.id)}>推荐：{recommendation.label}</button> : <span className="profile-pill">未应用</span>}<button type="button" className="secondary-button compact" onClick={() => setPickerOpen((current) => !current)}>{pickerOpen ? '收起' : '更换'}</button></div></div>
       {showPicker ? <select className="profile-select" value={props.selectedProfileId ?? ''} onChange={(event) => chooseProfile(event.target.value)}><option value="">不使用题材标准</option>{props.profiles.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select> : null}
-      {profile?.groups.map((group) => <div className="profile-group" key={group.id}><span>{group.label}</span>{group.type === 'single' ? <select value={singleSelection(props.selections[group.id])} onChange={(event) => props.onUpdateGroup(group.id, event.target.value)}>{group.options.map((option) => <option value={option.id} key={option.id}>{option.label}</option>)}</select> : <div className="profile-options">{group.options.map((option) => {
-        const checked = multiSelection(props.selections[group.id]).includes(option.id);
-        return <label key={option.id}><input type="checkbox" checked={checked} onChange={(event) => props.onUpdateGroup(group.id, toggleSelection(multiSelection(props.selections[group.id]), option.id, event.target.checked))} />{option.label}</label>;
-      })}</div>}</div>)}
     </div>
   );
 }
@@ -855,7 +966,7 @@ function articleTypeLabel(value: string): string {
 }
 
 function outlineStatusLabel(value: string): string {
-  const labels: Record<string, string> = { draft: '待确认', confirmed: '已确认', written: '已写作' };
+  const labels: Record<string, string> = { draft: '待调整', confirmed: '可写作', written: '已写作' };
   return labels[value] ?? value;
 }
 
@@ -866,7 +977,7 @@ function taskStatusLabel(value?: string): string {
 
 function runStatusLabel(run: WorkflowRun, events: AgentEvent[]): string {
   if (run.status === 'failed') return '处理失败';
-  if (run.status === 'waiting') return '等待确认';
+  if (run.status === 'waiting') return run.waitingFor?.nodeId === 'wait-writing-start' ? '等待开始写作' : '等待确认';
   if (run.status === 'completed') return '处理完成';
   if (run.status === 'queued') return '等待处理';
   const latest = friendlyProgressEvents(events, run).at(-1);
@@ -906,7 +1017,7 @@ function friendlyEventLabel(event: AgentEvent): string | undefined {
   if (event.type === 'skill.started') return skillProgressLabel(skillId, 'started');
   if (event.type === 'skill.completed') return skillProgressLabel(skillId, 'completed');
   if (event.type === 'artifact.updated') return artifactProgressLabel(reason);
-  if (event.type === 'workflow.waiting' || event.type === 'review.required') return '等待确认';
+  if (event.type === 'workflow.waiting' || event.type === 'review.required') return event.payload?.nodeId === 'wait-writing-start' ? '等待开始写作' : '等待确认';
   if (event.type === 'workflow.completed' || event.type === 'queue.completed') return '处理完成';
   if (event.type === 'workflow.failed' || event.type === 'queue.failed') return '处理失败';
   return undefined;
@@ -930,6 +1041,7 @@ function artifactProgressLabel(reason: string | undefined): string {
     'task-card-confirmed': '任务卡已确认',
     'task-card-revised': '任务卡已更新',
     'outline-draft-created': '大纲草稿已生成',
+    'writing-started': '开始写作',
     'outline-section-edited': '大纲已更新',
     'section-written': '正文已保存',
     'patch-applied': '修改已应用',
@@ -1082,9 +1194,145 @@ function contextualizeDialogInstruction(instruction: string, context: DialogCont
   return [`当前对话上下文：${context.label}`, `标题：${context.title}`, '完整上下文：', context.contextText || context.detail, '', `用户意见：${instruction}`].join('\n');
 }
 
-function appendPromptAnswer(current: string, question: string, answer: string): string {
-  const line = `${question}：${answer}`;
-  return current.trim() ? `${current.trim()}\n${line}` : line;
+function promptSelectedAnswers(prompts: TaskCardFollowUpPrompt[], message: string, taskCard?: WritingTaskCard, clearedPromptIds: string[] = []): TaskCardPromptAnswer[] {
+  const clearedIds = new Set(clearedPromptIds);
+  const messageAnswers = prompts.flatMap((prompt) => {
+    const prefix = promptAnswerPrefix(prompt.question);
+    const answerLine = message.split('\n').map((item) => item.trim()).find((item) => item.startsWith(prefix));
+    const answer = answerLine?.slice(prefix.length).trim();
+    return answer ? [{ prompt, answer }] : [];
+  });
+  if (!taskCard) return messageAnswers;
+  const answeredIds = new Set(messageAnswers.map((item) => item.prompt.id));
+  const inferredAnswers = prompts.flatMap((prompt) => {
+    if (answeredIds.has(prompt.id) || clearedIds.has(prompt.id)) return [];
+    const answer = inferPromptAnswerFromTaskCard(prompt, taskCard);
+    return answer ? [{ prompt, answer }] : [];
+  });
+  return [...messageAnswers, ...inferredAnswers];
+}
+
+function setPromptAnswer(current: string, question: string, answer: string): string {
+  const prefix = promptAnswerPrefix(question);
+  const lines = current.split('\n').map((item) => item.trim()).filter((item) => item && !item.startsWith(prefix));
+  return [...lines, `${prefix}${answer}`].join('\n');
+}
+
+function removePromptAnswer(current: string, question: string): string {
+  const prefix = promptAnswerPrefix(question);
+  return current.split('\n').map((item) => item.trim()).filter((item) => item && !item.startsWith(prefix)).join('\n');
+}
+
+function promptAnswerPrefix(question: string): string {
+  return `${question}：`;
+}
+
+function inferPromptAnswerFromTaskCard(prompt: TaskCardFollowUpPrompt, taskCard: WritingTaskCard): string | undefined {
+  if (!prompt.options.length) return undefined;
+  const kindAnswer = inferPromptAnswerByKind(prompt, taskCard);
+  if (kindAnswer) return kindAnswer;
+  const context = promptContextFromTaskCard(prompt, taskCard);
+  const scores = prompt.options.map((option) => ({ option, score: scorePromptOption(option, context) })).sort((left, right) => right.score - left.score);
+  const best = scores[0];
+  const next = scores[1];
+  if (!best || best.score < 8) return undefined;
+  if (next && best.score === next.score) return undefined;
+  return best.option;
+}
+
+function promptContextFromTaskCard(prompt: TaskCardFollowUpPrompt, taskCard: WritingTaskCard): string {
+  const question = normalizePromptText(prompt.question);
+  const structureText = [articleTypeLabel(taskCard.structure.articleType), taskCard.structure.expectedLength, taskCard.structure.outlinePreference].filter(Boolean).join('；');
+  const sourceText = [
+    taskCard.constraints.citationRequired ? '需要引用 原文 可追溯引用' : '不强制引用',
+    taskCard.constraints.sourcePolicy,
+    joinList(taskCard.constraints.mustInclude),
+  ].join('；');
+  const focusText = [
+    taskCard.topic,
+    taskCard.writingGoal,
+    taskCard.audience,
+    displayScope(taskCard),
+    structureText,
+    displayStyle(taskCard),
+    sourceText,
+  ].join('；');
+  if (/篇幅|字数|多长|长度/.test(question)) return structureText;
+  if (/资料|引用|来源|参考/.test(question)) return sourceText;
+  if (/结构|侧重|重点|方面/.test(question)) return focusText;
+  return formatTaskCardContext(taskCard);
+}
+
+function inferPromptAnswerByKind(prompt: TaskCardFollowUpPrompt, taskCard: WritingTaskCard): string | undefined {
+  const question = normalizePromptText(prompt.question);
+  if (/篇幅|字数|多长|长度/.test(question)) return chooseLengthOption(prompt.options, taskCard.structure.expectedLength);
+  if (/资料|引用|来源|参考/.test(question)) return chooseSourceOption(prompt.options, taskCard);
+  if (/结构|侧重|重点|方面/.test(question)) return chooseFocusOption(prompt.options, taskCard);
+  return undefined;
+}
+
+function chooseLengthOption(options: string[], expectedLength: string): string | undefined {
+  const text = normalizePromptText(expectedLength);
+  if (/短|800|1000/.test(text)) return options.find((option) => /短|800|1000/.test(normalizePromptText(option)));
+  if (/中等|1500|2000/.test(text)) return options.find((option) => /中等|1500|2000/.test(normalizePromptText(option)));
+  if (/长|3000|以上/.test(text)) return options.find((option) => /长|3000|以上/.test(normalizePromptText(option)));
+  return undefined;
+}
+
+function chooseSourceOption(options: string[], taskCard: WritingTaskCard): string | undefined {
+  const policy = normalizePromptText(taskCard.constraints.sourcePolicy);
+  if (taskCard.constraints.citationRequired) {
+    const originalOnly = options.find((option) => /原文|引用/.test(normalizePromptText(option)));
+    if (originalOnly) return originalOnly;
+  }
+  if (/红学|评论/.test(policy)) return options.find((option) => /红学|评论/.test(normalizePromptText(option)));
+  if (/自由|各种/.test(policy)) return options.find((option) => /自由|各种/.test(normalizePromptText(option)));
+  return undefined;
+}
+
+function chooseFocusOption(options: string[], taskCard: WritingTaskCard): string | undefined {
+  const context = normalizePromptText([taskCard.writingGoal, displayStructure(taskCard), displayScope(taskCard), displayStyle(taskCard)].join('；'));
+  return options.find((option) => {
+    const text = normalizePromptText(option);
+    if (/性格/.test(text) && /命运/.test(text)) return /性格/.test(context) && /命运/.test(context);
+    if (/关系/.test(text)) return /关系/.test(context);
+    if (/文学/.test(text) && /作用/.test(text)) return /文学/.test(context) && /作用|意义/.test(context);
+    if (/综合|全面/.test(text)) return /综合|全面/.test(context);
+    return false;
+  });
+}
+
+function scorePromptOption(option: string, context: string): number {
+  const normalizedOption = normalizePromptText(option);
+  const normalizedContext = normalizePromptText(context);
+  let score = normalizedContext.includes(normalizedOption) ? 80 : 0;
+  for (const keyword of optionKeywords(option)) {
+    const normalizedKeyword = normalizePromptText(keyword);
+    if (!normalizedKeyword || !normalizedContext.includes(normalizedKeyword)) continue;
+    score += /^\d+$/.test(normalizedKeyword) ? 6 : Math.min(12, Math.max(4, normalizedKeyword.length * 2));
+  }
+  return score;
+}
+
+function optionKeywords(option: string): string[] {
+  const tokens = new Set<string>();
+  const pieces = option.match(/[A-Za-z0-9\u4e00-\u9fff]+/g) ?? [];
+  for (const piece of pieces) {
+    if (/^\d+$/.test(piece)) {
+      tokens.add(piece);
+      continue;
+    }
+    piece.split(/[与和及的在中对]/).filter((item) => item.length >= 2).forEach((item) => tokens.add(item));
+  }
+  const cueWords = ['短篇', '中等', '长文', '性格', '命运', '关系', '文学', '作用', '综合', '全面', '介绍', '原文', '红学', '评论', '资料', '引用'];
+  for (const cue of cueWords) {
+    if (option.includes(cue)) tokens.add(cue);
+  }
+  return [...tokens];
+}
+
+function normalizePromptText(value: string): string {
+  return value.toLowerCase().replace(/[\s，。、《》“”‘’（）()：:；;、,.-]/g, '');
 }
 
 function dialogPlaceholder(context: DialogContext): string {
