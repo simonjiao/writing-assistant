@@ -2,7 +2,7 @@ import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply } from 'fastify';
 import { AgentEvent, ArticleArtifact, EventSubscriptionFilter, newId, nowIso, Unsubscribe, WritingTaskCard, WritingWorkspace } from '@wa/core';
-import type { TaskCardReviserOutput } from '@wa/skills';
+import type { OutlineItemReviserOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
 import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfileSummaries, recommendDomainProfiles, resolveDomainProfileSelection } from './domainProfiles';
@@ -154,6 +154,31 @@ export function createApp(config: AppConfig, container: AppContainer) {
     await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, sectionId, reason: 'outline-section-edited', userId }, createdAt: nowIso() });
     const updatedArticle = await container.stores.artifactStore.getArticle(updated.id);
     return updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle;
+  });
+  app.post('/api/articles/:articleId/outline/:sectionId/revise', async (request, reply) => {
+    const { articleId, sectionId } = request.params as { articleId: string; sectionId: string };
+    const body = request.body as { instruction?: string; userId?: string; sessionId?: string };
+    const instruction = body.instruction?.trim();
+    if (!instruction) return reply.code(400).send({ error: 'Outline revision instruction is required.' });
+    const article = await container.stores.artifactStore.getArticle(articleId);
+    if (!article) return reply.code(404).send({ error: 'Article not found' });
+    const userId = readUserId(body.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    if (!(await canAccessArticle(container, userId, article))) return reply.code(403).send({ error: 'Workspace access required.' });
+    const existing = article.outline.find((item) => item.id === sectionId);
+    if (!existing) return reply.code(404).send({ error: 'Outline section not found' });
+    const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; currentOutlineItem: typeof existing; taskCard?: WritingTaskCard; articleOutline: typeof article.outline }, OutlineItemReviserOutput>(
+      'outline-item-reviser',
+      { articleId: article.id, instruction, currentOutlineItem: existing, taskCard: article.taskCard, articleOutline: article.outline },
+      { userId, sessionId: body.sessionId, articleId: article.id },
+    );
+    article.outline = article.outline.map((item) => item.id === sectionId ? result.outlineItem : item);
+    const updated = await container.stores.artifactStore.updateArticle(article);
+    const reason = `修订大纲章节：${result.summary.slice(0, 80)}`;
+    await container.stores.artifactStore.commitVersion(article.id, reason, 'user');
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, sectionId, reason: 'outline-section-revised', changedFields: result.changedFields, userId }, createdAt: nowIso() });
+    const updatedArticle = await container.stores.artifactStore.getArticle(updated.id);
+    return { article: updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle, outlineItem: result.outlineItem, summary: result.summary, changedFields: result.changedFields };
   });
   app.post('/api/articles/:articleId/outline/confirm', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };

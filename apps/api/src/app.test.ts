@@ -408,6 +408,49 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('revises a single outline section through the outline revision API', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-outline-revise',
+      topic: '大纲局部修订',
+      writingGoal: '测试只修订一个大纲项。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: [], themes: ['大纲局部修订'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'outline-revise-user', name: '大纲修订工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'outline-revise-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    article.outline = [
+      { id: 'sec-revise-1', title: '旧标题', goal: '旧目标。', order: 1, expectedBlocks: 2, sourceHints: ['旧来源'], themeTags: ['旧标签'], status: 'confirmed' },
+      { id: 'sec-revise-2', title: '保留标题', goal: '保留目标。', order: 2, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' },
+    ];
+    await container.stores.artifactStore.updateArticle(article);
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/outline/sec-revise-1/revise`,
+      payload: { userId: 'outline-revise-user', instruction: '标题改成新标题，目标不要说成完全反对。' },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.outlineItem.id).toBe('sec-revise-1');
+    expect(body.outlineItem.title).toBe('新标题');
+    expect(body.outlineItem.order).toBe(1);
+    expect(body.outlineItem.status).toBe('confirmed');
+    expect(body.article.taskCard.topic).toBe('大纲局部修订');
+    expect(body.article.outline.find((item: { id: string }) => item.id === 'sec-revise-2')?.title).toBe('保留标题');
+    expect(body.article.versions[body.article.versions.length - 1].reason).toContain('修订大纲章节');
+    await app.close();
+  });
+
   it('records section revisions with readable section titles', async () => {
     const config = testConfig();
     const container = createContainer(config);

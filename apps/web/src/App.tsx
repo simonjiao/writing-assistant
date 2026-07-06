@@ -366,6 +366,10 @@ export function App() {
       if (response) setCurrentTaskMessage('');
       return;
     }
+    if (visibleArticle && selectedOutline) {
+      await reviseOutlineItem(contextualizeDialogInstruction(message, dialogContext));
+      return;
+    }
     await reviseTaskCard(contextualizeDialogInstruction(message, dialogContext));
   }
   function submitTaskCardMessageWithKeyboard(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -387,6 +391,21 @@ export function App() {
       setCurrentTaskMessage('');
       if (response.article.taskCard?.status === 'confirmed') setLastRun(undefined);
       await refreshArticleSummaries();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function reviseOutlineItem(instruction: string) {
+    if (!visibleArticle || !selectedOutline || !instruction.trim()) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const response = await api.reviseOutlineItem(visibleArticle.id, selectedOutline.id, { instruction, userId, sessionId });
+      setArticle(response.article);
+      setCurrentTaskMessage('');
+      await refreshArticleSummaries(response.article.workspaceId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

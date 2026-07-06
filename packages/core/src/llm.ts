@@ -75,6 +75,11 @@ export class MockLLMProvider implements LLMProvider {
       const taskCard = payload.taskCard as { topic?: string; scope?: { themes?: string[] } } | undefined;
       return { content: JSON.stringify(mockOutline(taskCard?.topic ?? '测试主题', taskCard?.scope?.themes ?? [])), raw: { provider: 'mock' } };
     }
+    if (request.jsonMode && system.includes('大纲项修订器')) {
+      const currentOutlineItem = payload.currentOutlineItem as { id?: string; title?: string; goal?: string; order?: number; expectedBlocks?: number; sourceHints?: string[]; themeTags?: string[]; status?: string } | undefined;
+      const instruction = String(payload.instruction ?? '修订大纲项');
+      return { content: JSON.stringify(mockOutlineItemRevision(currentOutlineItem, instruction)), raw: { provider: 'mock' } };
+    }
     if (request.jsonMode && system.includes('章节写作者')) {
       const section = payload.section as { id?: string; title?: string; goal?: string; themeTags?: string[] } | undefined;
       return { content: JSON.stringify(mockSection(section)), raw: { provider: 'mock' } };
@@ -166,6 +171,28 @@ function mockOutline(topic: string, themes: string[]) {
       { title: '收束全文立意', goal: '回扣写作目标，形成结论。', order: 4, expectedBlocks: 1, sourceHints: [], themeTags: themes },
     ],
     summary: 'Mock outline generated.',
+  };
+}
+
+function mockOutlineItemRevision(currentOutlineItem: { id?: string; title?: string; goal?: string; order?: number; expectedBlocks?: number; sourceHints?: string[]; themeTags?: string[]; status?: string } | undefined, instruction: string) {
+  const base = currentOutlineItem ?? { id: 'sec_mock', title: '测试大纲', goal: '测试大纲目标。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'draft' };
+  const titleMatch = instruction.match(/(?:标题|题目)(?:改成|改为|调整为|设为|是)[:：\s]*([^，,。.!！?？]+)/);
+  const title = titleMatch?.[1]?.trim() || base.title || '测试大纲';
+  const changedFields = [
+    ...(title === base.title ? [] : ['title']),
+    ...(instruction.includes('目标') || instruction.includes('不要') || instruction.includes('不是') ? ['goal'] : []),
+  ];
+  return {
+    outlineItem: {
+      ...base,
+      title,
+      goal: instruction.includes('目标') || instruction.includes('不要') || instruction.includes('不是') ? `${base.goal ?? ''} ${instruction}`.trim() : base.goal,
+      expectedBlocks: base.expectedBlocks ?? 1,
+      sourceHints: base.sourceHints ?? [],
+      themeTags: base.themeTags ?? [],
+    },
+    summary: 'Mock outline item revision generated.',
+    changedFields,
   };
 }
 
