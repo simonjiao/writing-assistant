@@ -35,7 +35,7 @@ writing-assistant/
 
 ## 环境要求
 
-- Node.js `22.x`（`>=22.12.0 <23`）
+- Node.js `22.x`（`>=22.19.0 <23`）
 - npm `>=10`
 - 可选：Docker / Docker Compose
 - 可选：Redis，仅在 `WORKFLOW_QUEUE_DRIVER=redis` 时需要
