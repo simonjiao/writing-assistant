@@ -62,6 +62,10 @@ WS /api/events/ws?runId=&userId=
 
 批注处理也通过 `/api/workflows/writing/start` 进入 `writing-autopilot`。前端传入 `message=处理正文批注` 和可选 `commentIds`，runner 会选择 `process_article_comments` action，并写入 operation log、event trace 和 article revision。
 
+任务卡确认也通过 workflow HumanGate 完成。前端先用 `/api/workflows/writing/start` 推进 `targetStage=task-card`，再调用 `/api/workflows/:runId/human-gates/:gateId/resolve`；不再提供 `/api/articles/:articleId/task-card/confirm` 直写入口。
+
+任务卡和大纲项的智能修改统一通过对话生成 `RevisionProposal`，再由用户调用 `apply/dismiss`。不再提供 `/task-card/revise`、`/outline/:sectionId/revise` 这类绕过 proposal 确认的智能修订入口。
+
 workflow review 生成的 proposal 带 `runId`。`apply` 返回 `DialogueResponse`，其中可以包含恢复后的 `run/article/events/revisionProposals`；`dismiss` 同样返回 `DialogueResponse`，前端应按普通对话响应更新本地状态。
 
 当 workflow run 已等待一个 pending revision proposal 时，`/api/workflows/:runId/message` 不会直接绕过该 proposal 继续写作。确认类消息会应用 proposal，取消类消息会取消 proposal，明确修改意见会通过 `dialogue-coordinator` 刷新 proposal 并保持 run 等待新 proposal；普通讨论消息只返回当前等待状态。
