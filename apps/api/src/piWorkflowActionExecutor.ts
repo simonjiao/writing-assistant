@@ -9,6 +9,8 @@ import {
   newId,
   nowIso,
   ReviewFinding,
+  ReviewArtifact,
+  RevisionOperation,
   WorkflowActionExecutionInput,
   WorkflowActionExecutionResult,
   WorkflowActionExecutor,
@@ -58,6 +60,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     if (action.type === 'plan_outline') return this.planOutline(run, action);
     if (action.type === 'request_human_gate') return this.requestHumanGate(run, action);
     if (action.type === 'review_task_card_outline_consistency') return this.reviewTaskCardOutlineConsistency(run, action);
+    if (action.type === 'create_revision_proposal') return this.createRevisionProposal(run, action);
     if (action.type === 'write_next_section' || action.type === 'write_section') return this.writeSection(run, action);
     if (action.type === 'generate_polish_report') return this.generatePolishReport(run, action);
     throw new Error(`Unsupported workflow action: ${action.type}`);
@@ -137,30 +140,77 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     const article = await this.requireArticle(action.articleId);
     const findings = consistencyFindings(article);
     const hasBlockingFindings = findings.some((finding) => finding.severity === 'blocking');
+    const suggestions = findings
+      .filter((finding) => finding.severity !== 'info')
+      .map((finding) => ({ id: newId('sug'), actionType: 'create_revision_proposal', targetKind: finding.targetKind, targetId: finding.targetId, summary: finding.message }));
     const reviewArtifact = await this.deps.stores.reviewArtifactStore.createReviewArtifact({
       articleId: article.id,
       runId: run.id,
       type: 'consistency-review',
       baseRevision: article.revision,
       findings,
-      suggestions: findings
-        .filter((finding) => finding.severity !== 'info')
-        .map((finding) => ({ id: newId('sug'), actionType: 'create_revision_proposal', targetKind: finding.targetKind, targetId: finding.targetId, summary: finding.message })),
+      suggestions,
     });
+    const firstSuggestion = suggestions[0];
     await this.deps.stores.stateStore.updateRun(run.id, {
-      status: hasBlockingFindings ? 'waiting' : run.status,
-      waitingFor: hasBlockingFindings ? { nodeId: 'consistency-review', reason: '一致性检查发现阻断问题，请先处理右侧建议后再继续写作。' } : run.waitingFor,
+      status: run.status,
+      waitingFor: run.waitingFor,
       state: {
         ...run.state,
         consistencyReviewRevision: article.revision,
         consistencyReviewId: reviewArtifact.id,
         consistencyBlockingReviewId: hasBlockingFindings ? reviewArtifact.id : undefined,
         consistencyBlockingRevision: hasBlockingFindings ? article.revision : undefined,
+        pendingReviewProposal: hasBlockingFindings && firstSuggestion ? {
+          articleRevision: article.revision,
+          reviewArtifactId: reviewArtifact.id,
+          suggestionId: firstSuggestion.id,
+          targetKind: firstSuggestion.targetKind,
+          targetId: firstSuggestion.targetId,
+          summary: firstSuggestion.summary,
+        } : undefined,
       },
       updatedAt: nowIso(),
     });
     await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'review_artifact.created', payload: { articleId: article.id, reviewArtifactId: reviewArtifact.id, reviewType: reviewArtifact.type, userId: run.metadata.userId }, createdAt: nowIso() });
     return { article, summary: hasBlockingFindings ? '一致性检查发现阻断问题。' : '一致性检查完成。' };
+  }
+
+  private async createRevisionProposal(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
+    const article = await this.requireArticle(action.articleId);
+    this.requireBaseRevision(action, article);
+    const reviewArtifactId = this.requireString(action.reviewArtifactId, 'reviewArtifactId');
+    const reviewArtifact = await this.deps.stores.reviewArtifactStore.getReviewArtifact(reviewArtifactId);
+    if (!reviewArtifact || reviewArtifact.runId !== run.id || reviewArtifact.articleId !== article.id) {
+      throw new Error(`Review artifact not found for workflow action: ${reviewArtifactId}`);
+    }
+    const operations = revisionOperationsForReview(reviewArtifact);
+    if (!operations.length) throw new Error('Review artifact has no actionable revision suggestions.');
+    const summary = revisionProposalSummary(reviewArtifact);
+    const proposal = await this.deps.stores.revisionProposalStore.createProposal({
+      articleId: article.id,
+      userId: run.metadata.userId,
+      authorUserId: run.metadata.userId,
+      baseRevision: article.revision,
+      contextKind: revisionProposalContextKind(reviewArtifact),
+      summary,
+      message: '已根据一致性检查生成待确认修改方案，应用后再继续写作。',
+      operations,
+      warnings: reviewArtifact.findings.filter((finding) => finding.severity === 'blocking').map((finding) => finding.message),
+    });
+    await this.deps.stores.stateStore.updateRun(run.id, {
+      status: 'waiting',
+      waitingFor: { nodeId: 'revision-proposal', reason: '已生成待确认修改方案，请先应用或取消后再继续写作。' },
+      state: {
+        ...run.state,
+        pendingReviewProposal: undefined,
+        pendingRevisionProposalId: proposal.id,
+        pendingRevisionProposalRevision: article.revision,
+      },
+      updatedAt: nowIso(),
+    });
+    await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'revision_proposal.created', payload: { articleId: article.id, proposalId: proposal.id, reviewArtifactId, userId: run.metadata.userId }, createdAt: nowIso() });
+    return { article, summary };
   }
 
   private async writeSection(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
@@ -273,6 +323,10 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     if (authorized.type !== action.type) throw new Error(`Unauthorized action type for action ${action.id}.`);
     if (authorized.articleId !== action.articleId) throw new Error(`Unauthorized articleId for action ${action.id}.`);
     if (authorized.sectionId !== action.sectionId) throw new Error(`Unauthorized sectionId for action ${action.id}.`);
+    if (authorized.reviewArtifactId !== action.reviewArtifactId) throw new Error(`Unauthorized reviewArtifactId for action ${action.id}.`);
+    if (authorized.suggestionId !== action.suggestionId) throw new Error(`Unauthorized suggestionId for action ${action.id}.`);
+    if (authorized.targetKind !== action.targetKind) throw new Error(`Unauthorized targetKind for action ${action.id}.`);
+    if (authorized.targetId !== action.targetId) throw new Error(`Unauthorized targetId for action ${action.id}.`);
     if (authorized.baseRevision !== action.baseRevision) throw new Error(`Unauthorized baseRevision for action ${action.id}.`);
     if (authorized.requiresHumanGate !== action.requiresHumanGate) throw new Error(`Unauthorized HumanGate policy for action ${action.id}.`);
     if (action.articleId) {
@@ -347,4 +401,46 @@ function polishFindings(article: ArticleArtifact): ReviewFinding[] {
   }
   if (!findings.length) findings.push({ severity: 'info', targetKind: 'article', message: '所有大纲项均已有正文，可以进入人工统稿审阅。' });
   return findings;
+}
+
+function revisionOperationsForReview(reviewArtifact: ReviewArtifact): RevisionOperation[] {
+  const findings = actionableReviewFindings(reviewArtifact);
+  if (!findings.length) return [];
+  const taskCardFindings = findings.filter((finding) => finding.targetKind === 'task-card');
+  const blockFindings = findings.filter((finding) => finding.targetKind === 'block' && finding.targetId);
+  const outlineItemFindings = findings.filter((finding) => finding.targetKind === 'outline-item' && finding.targetId);
+  const outlineFindings = findings.filter((finding) => finding.targetKind === 'outline' || (finding.targetKind !== 'task-card' && finding.targetKind !== 'block' && finding.targetKind !== 'outline-item'));
+  const operations: RevisionOperation[] = [];
+  if (taskCardFindings.length) operations.push({ type: 'revise-task-card', instruction: revisionInstruction(reviewArtifact, taskCardFindings) });
+  if (outlineFindings.length) operations.push({ type: 'revise-outline', instruction: revisionInstruction(reviewArtifact, outlineFindings) });
+  for (const finding of outlineItemFindings) operations.push({ type: 'revise-outline-item', outlineItemId: finding.targetId as string, instruction: revisionInstruction(reviewArtifact, [finding]) });
+  for (const finding of blockFindings) operations.push({ type: 'patch-block', blockId: finding.targetId as string, instruction: revisionInstruction(reviewArtifact, [finding]) });
+  return operations;
+}
+
+function actionableReviewFindings(reviewArtifact: ReviewArtifact): ReviewFinding[] {
+  return reviewArtifact.findings.filter((finding) => finding.severity !== 'info');
+}
+
+function revisionInstruction(reviewArtifact: ReviewArtifact, findings: ReviewFinding[]): string {
+  const source = reviewArtifact.type === 'consistency-review' ? '一致性检查' : '统稿报告';
+  const messages = findings.map((finding) => `- ${finding.message}`).join('\n');
+  return `${source}发现以下问题，请据此修订，保持任务卡、大纲和正文一致：\n${messages}`;
+}
+
+function revisionProposalSummary(reviewArtifact: ReviewArtifact): string {
+  const blockingCount = reviewArtifact.findings.filter((finding) => finding.severity === 'blocking').length;
+  const warningCount = reviewArtifact.findings.filter((finding) => finding.severity === 'warning').length;
+  if (blockingCount) return `处理 ${blockingCount} 个阻断问题`;
+  if (warningCount) return `处理 ${warningCount} 个修订建议`;
+  return '处理审阅建议';
+}
+
+function revisionProposalContextKind(reviewArtifact: ReviewArtifact): 'task-card' | 'outline' | 'outline-item' | 'block' {
+  const findings = actionableReviewFindings(reviewArtifact);
+  const targetKinds = new Set(findings.map((finding) => finding.targetKind));
+  if (targetKinds.size === 1 && targetKinds.has('task-card')) return 'task-card';
+  if (targetKinds.size === 1 && targetKinds.has('outline-item')) return 'outline-item';
+  if (targetKinds.size === 1 && targetKinds.has('block')) return 'block';
+  return 'outline';
 }

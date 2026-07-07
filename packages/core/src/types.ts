@@ -409,6 +409,10 @@ export interface AllowedAction {
   type: AllowedActionType;
   articleId?: string;
   sectionId?: string;
+  reviewArtifactId?: string;
+  suggestionId?: string;
+  targetKind?: string;
+  targetId?: string;
   baseRevision?: number;
   requiresHumanGate: boolean;
   reason: string;
@@ -465,6 +469,7 @@ export type AgentEventType =
   | 'human_gate.created'
   | 'human_gate.resolved'
   | 'review_artifact.created'
+  | 'revision_proposal.created'
   | 'dialogue.brief.updated'
   | 'dialogue.brief.failed'
   | 'realtime.client.connected'

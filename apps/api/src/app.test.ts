@@ -201,7 +201,7 @@ describe('api app', () => {
     await container.close();
   });
 
-  it('blocks writing while the current consistency review has blocking findings', async () => {
+  it('creates a revision proposal and blocks writing when the current consistency review has blocking findings', async () => {
     const config = testConfig();
     const container = createContainer(config);
     const app = createApp(config, container);
@@ -243,9 +243,12 @@ describe('api app', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.run.status).toBe('waiting');
-    expect(body.run.waitingFor.nodeId).toBe('consistency-review');
+    expect(body.run.waitingFor.nodeId).toBe('revision-proposal');
     expect(body.article.blocks).toHaveLength(0);
     expect(body.reviewArtifacts[0].findings.some((finding: { severity: string }) => finding.severity === 'blocking')).toBe(true);
+    const proposals = await container.stores.revisionProposalStore.listPendingProposals(article.id, 'consistency-block-user');
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].operations[0]).toMatchObject({ type: 'revise-outline' });
 
     const resumed = await app.inject({
       method: 'POST',
@@ -256,10 +259,11 @@ describe('api app', () => {
     expect(resumed.statusCode).toBe(200);
     const resumedBody = resumed.json();
     expect(resumedBody.run.status).toBe('waiting');
-    expect(resumedBody.run.waitingFor.nodeId).toBe('consistency-review');
+    expect(resumedBody.run.waitingFor.nodeId).toBe('revision-proposal');
     expect(resumedBody.article.blocks).toHaveLength(0);
     const operations = await container.stores.workflowOperationStore.listOperations({ runId: body.run.id });
-    expect(operations.map((operation) => operation.toolName)).toEqual(['review_task_card_outline_consistency']);
+    expect(operations.map((operation) => operation.toolName).sort()).toEqual(['create_revision_proposal', 'review_task_card_outline_consistency']);
+    expect(operations.some((operation) => operation.toolName === 'write_next_section' || operation.toolName === 'write_section')).toBe(false);
     await app.close();
   });
 

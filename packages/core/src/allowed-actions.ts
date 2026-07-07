@@ -42,6 +42,17 @@ export class AllowedActionPlanner {
     if (this.needsConsistencyReview(input.run, article)) {
       return [this.action(input.run, 'review_task_card_outline_consistency', { article, reason: '任务卡或大纲 revision 变化后，需要先做一致性检查。' })];
     }
+    const pendingReviewProposal = readPendingReviewProposal(input.run.state, article.revision);
+    if (pendingReviewProposal) {
+      return [this.action(input.run, 'create_revision_proposal', {
+        article,
+        reason: `根据一致性检查建议生成待确认修改方案：${pendingReviewProposal.summary}`,
+        reviewArtifactId: pendingReviewProposal.reviewArtifactId,
+        suggestionId: pendingReviewProposal.suggestionId,
+        targetKind: pendingReviewProposal.targetKind,
+        targetId: pendingReviewProposal.targetId,
+      })];
+    }
     if (targetStage === 'outline') return [];
     const section = this.nextWritableSection(article, input.requestedSectionId);
     if (section) {
@@ -68,16 +79,20 @@ export class AllowedActionPlanner {
       .find((section) => section.status !== 'draft' && !writtenSectionIds.has(section.id));
   }
 
-  private action(run: WorkflowRun, type: AllowedActionType, input: { article?: ArticleArtifact; section?: OutlineItem; reason: string; requiresHumanGate?: boolean }): AllowedAction {
+  private action(run: WorkflowRun, type: AllowedActionType, input: { article?: ArticleArtifact; section?: OutlineItem; reason: string; requiresHumanGate?: boolean; reviewArtifactId?: string; suggestionId?: string; targetKind?: string; targetId?: string }): AllowedAction {
     const baseRevision = input.article?.revision;
     const sectionId = input.section?.id;
-    const operationId = stableActionId('op', { runId: run.id, workflowId: run.workflowId, type, articleId: input.article?.id, sectionId, baseRevision });
+    const operationId = stableActionId('op', { runId: run.id, workflowId: run.workflowId, type, articleId: input.article?.id, sectionId, reviewArtifactId: input.reviewArtifactId, suggestionId: input.suggestionId, targetKind: input.targetKind, targetId: input.targetId, baseRevision });
     return {
-      id: stableActionId('act', { runId: run.id, type, articleId: input.article?.id, sectionId, baseRevision }),
+      id: stableActionId('act', { runId: run.id, type, articleId: input.article?.id, sectionId, reviewArtifactId: input.reviewArtifactId, suggestionId: input.suggestionId, targetKind: input.targetKind, targetId: input.targetId, baseRevision }),
       operationId,
       type,
       articleId: input.article?.id,
       sectionId,
+      reviewArtifactId: input.reviewArtifactId,
+      suggestionId: input.suggestionId,
+      targetKind: input.targetKind,
+      targetId: input.targetId,
       baseRevision,
       requiresHumanGate: input.requiresHumanGate ?? false,
       reason: input.reason,
@@ -100,4 +115,19 @@ function readTargetStage(input: unknown): 'task-card' | 'outline' | 'section' | 
 function shouldReplaceExistingOutline(run: WorkflowRun): boolean {
   if (run.state.outlineResult) return false;
   return Boolean(run.input && typeof run.input === 'object' && (run.input as { replaceExisting?: unknown }).replaceExisting === true);
+}
+
+function readPendingReviewProposal(state: WorkflowRun['state'], articleRevision: number): { reviewArtifactId: string; suggestionId?: string; targetKind?: string; targetId?: string; summary: string } | undefined {
+  const value = state.pendingReviewProposal;
+  if (!value || typeof value !== 'object') return undefined;
+  const proposal = value as { reviewArtifactId?: unknown; suggestionId?: unknown; targetKind?: unknown; targetId?: unknown; summary?: unknown; articleRevision?: unknown };
+  if (proposal.articleRevision !== articleRevision) return undefined;
+  if (typeof proposal.reviewArtifactId !== 'string') return undefined;
+  return {
+    reviewArtifactId: proposal.reviewArtifactId,
+    suggestionId: typeof proposal.suggestionId === 'string' ? proposal.suggestionId : undefined,
+    targetKind: typeof proposal.targetKind === 'string' ? proposal.targetKind : undefined,
+    targetId: typeof proposal.targetId === 'string' ? proposal.targetId : undefined,
+    summary: typeof proposal.summary === 'string' ? proposal.summary : '处理一致性检查建议',
+  };
 }

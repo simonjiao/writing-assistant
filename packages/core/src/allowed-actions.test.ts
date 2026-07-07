@@ -81,6 +81,37 @@ describe('AllowedActionPlanner', () => {
     expect(actions[0].sectionId).toBe('sec_1');
   });
 
+  it('creates a revision proposal action before writing when a review suggestion is pending', () => {
+    const planner = new AllowedActionPlanner();
+    const actions = planner.plan({
+      run: run({
+        consistencyReviewRevision: 3,
+        consistencyBlockingRevision: 3,
+        consistencyBlockingReviewId: 'review_1',
+        pendingReviewProposal: {
+          articleRevision: 3,
+          reviewArtifactId: 'review_1',
+          suggestionId: 'sug_1',
+          targetKind: 'outline',
+          summary: '大纲仍包含任务卡要求避免的表达',
+        },
+      }),
+      article: article({
+        outline: [
+          { id: 'sec_1', title: '第一节', goal: '写第一节', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' },
+        ],
+      }),
+    });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      type: 'create_revision_proposal',
+      reviewArtifactId: 'review_1',
+      suggestionId: 'sug_1',
+      targetKind: 'outline',
+      baseRevision: 3,
+    });
+  });
+
   it('requires a human gate before replacing an existing outline', () => {
     const planner = new AllowedActionPlanner();
     const actions = planner.plan({

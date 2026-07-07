@@ -43,7 +43,10 @@ export class PiWorkflowRunner {
       const article = await this.loadArticle(run);
       const pendingGate = await this.pendingHumanGate(run);
       const session = await this.getOrCreateSession(run, article, pendingGate);
-      if (isBlockedByCurrentConsistencyReview(run, article)) {
+      if (isWaitingForCurrentRevisionProposal(run, article)) {
+        return this.wait(run, '已生成待确认修改方案，请先应用或取消后再继续写作。', 'revision-proposal');
+      }
+      if (isBlockedByCurrentConsistencyReview(run, article) && !hasPendingReviewProposal(run, article)) {
         return this.wait(run, '一致性检查发现阻断问题，请先处理右侧建议后再继续写作。', 'consistency-review');
       }
       const allowedActions = this.planner.plan({
@@ -154,4 +157,17 @@ function isBlockedByCurrentConsistencyReview(run: WorkflowRun, article?: Article
   if (!article) return false;
   return typeof run.state.consistencyBlockingReviewId === 'string'
     && run.state.consistencyBlockingRevision === article.revision;
+}
+
+function hasPendingReviewProposal(run: WorkflowRun, article?: ArticleArtifact): boolean {
+  if (!article) return false;
+  const value = run.state.pendingReviewProposal;
+  if (!value || typeof value !== 'object') return false;
+  return (value as { articleRevision?: unknown }).articleRevision === article.revision;
+}
+
+function isWaitingForCurrentRevisionProposal(run: WorkflowRun, article?: ArticleArtifact): boolean {
+  if (!article) return false;
+  return typeof run.state.pendingRevisionProposalId === 'string'
+    && run.state.pendingRevisionProposalRevision === article.revision;
 }
