@@ -187,6 +187,7 @@ export interface RevisionProposal {
   id: string;
   articleId: string;
   userId: string;
+  runId?: string;
   authorUserId?: string;
   baseRevision?: number;
   contextKind: DialogueContextKind;
@@ -470,6 +471,7 @@ export type AgentEventType =
   | 'human_gate.resolved'
   | 'review_artifact.created'
   | 'revision_proposal.created'
+  | 'revision_proposal.resolved'
   | 'dialogue.brief.updated'
   | 'dialogue.brief.failed'
   | 'realtime.client.connected'

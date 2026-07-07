@@ -248,6 +248,7 @@ describe('api app', () => {
     expect(body.reviewArtifacts[0].findings.some((finding: { severity: string }) => finding.severity === 'blocking')).toBe(true);
     const proposals = await container.stores.revisionProposalStore.listPendingProposals(article.id, 'consistency-block-user');
     expect(proposals).toHaveLength(1);
+    expect(proposals[0].runId).toBe(body.run.id);
     expect(proposals[0].operations[0]).toMatchObject({ type: 'revise-outline' });
     expect(body.revisionProposals).toHaveLength(1);
     expect(body.revisionProposals[0].id).toBe(proposals[0].id);
@@ -266,6 +267,22 @@ describe('api app', () => {
     const operations = await container.stores.workflowOperationStore.listOperations({ runId: body.run.id });
     expect(operations.map((operation) => operation.toolName).sort()).toEqual(['create_revision_proposal', 'review_task_card_outline_consistency']);
     expect(operations.some((operation) => operation.toolName === 'write_next_section' || operation.toolName === 'write_section')).toBe(false);
+
+    const dismissed = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue/${proposals[0].id}/dismiss`,
+      payload: { userId: 'consistency-block-user' },
+    });
+
+    expect(dismissed.statusCode).toBe(200);
+    const dismissedBody = dismissed.json();
+    expect(dismissedBody.proposal.status).toBe('dismissed');
+    expect(dismissedBody.run.status).toBe('waiting');
+    expect(dismissedBody.run.waitingFor.nodeId).toBe('consistency-review');
+    expect(dismissedBody.revisionProposals).toHaveLength(0);
+    const dismissedRun = await container.stores.stateStore.getRun(body.run.id);
+    expect(dismissedRun?.state.pendingRevisionProposalId).toBeUndefined();
+    expect(dismissedRun?.state.consistencyBlockingReviewId).toBeTypeOf('string');
     await app.close();
   });
 

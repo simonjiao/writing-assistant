@@ -190,6 +190,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     const proposal = await this.deps.stores.revisionProposalStore.createProposal({
       articleId: article.id,
       userId: run.metadata.userId,
+      runId: run.id,
       authorUserId: run.metadata.userId,
       baseRevision: article.revision,
       contextKind: revisionProposalContextKind(reviewArtifact),

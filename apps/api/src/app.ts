@@ -317,10 +317,10 @@ export function createApp(config: AppConfig, container: AppContainer) {
     }
     if (pendingProposal && route === 'dismiss') {
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: pendingProposal.contextKind, role: 'user', content: message, proposalId: pendingProposal.id });
-      const dismissed = await container.stores.revisionProposalStore.updateProposal({ ...pendingProposal, status: 'dismissed' });
+      const { proposal: dismissed, runPayload } = await dismissRevisionProposal(container, pendingProposal, userId);
       const assistantMessage = '已取消这次修改方案。';
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: pendingProposal.contextKind, role: 'assistant', content: assistantMessage, proposalId: pendingProposal.id });
-      return { mode: 'answer', message: assistantMessage, proposal: dismissed, messages: await listDialogueMessages(container, access.article.id, userId) };
+      return { mode: 'answer', message: assistantMessage, proposal: dismissed, ...(runPayload ?? {}), messages: await listDialogueMessages(container, access.article.id, userId) };
     }
     const context = resolveDialogueContext(access.article, body.context);
     if (!context.ok) return reply.code(context.statusCode).send({ error: context.error });
@@ -376,6 +376,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const proposal = await container.stores.revisionProposalStore.createProposal({
       articleId: access.article.id,
       userId,
+      runId: pendingProposal?.runId,
       authorUserId: userId,
       baseRevision: access.article.revision,
       contextKind: context.value.context.kind,
@@ -384,6 +385,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
       operations: result.operations,
       warnings: result.warnings,
     });
+    if (pendingProposal?.runId) await syncWorkflowRunToRefreshedProposal(container, pendingProposal, proposal);
     await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: result.message, proposalId: proposal.id });
     return { mode: 'proposal', message: result.message, proposal, messages: await listDialogueMessages(container, access.article.id, userId) };
   });
@@ -434,9 +436,9 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
     if (!proposal || proposal.articleId !== articleId) return reply.code(404).send({ error: 'Revision proposal not found.' });
     if (proposal.userId !== userId) return reply.code(403).send({ error: 'Revision proposal belongs to another user.' });
-    const dismissed = await container.stores.revisionProposalStore.updateProposal({ ...proposal, status: 'dismissed' });
+    const { proposal: dismissed, runPayload } = await dismissRevisionProposal(container, proposal, userId);
     await appendDialogueMessage(container, { articleId, userId, contextKind: proposal.contextKind, role: 'assistant', content: '已取消这次修改提案。', proposalId: proposal.id });
-    return dismissed;
+    return { mode: 'answer', message: '已取消这次修改提案。', proposal: dismissed, ...(runPayload ?? {}), messages: await listDialogueMessages(container, articleId, userId) };
   });
   app.post('/api/knowledge/search', async (request) => {
     const body = request.body as { query: string } & KnowledgeSearchOptions;
@@ -844,13 +846,86 @@ async function applyRevisionProposal(container: AppContainer, proposalId: string
   }
   const applied = await container.stores.revisionProposalStore.updateProposal({ ...proposal, status: 'applied' });
   const articlePayload = await container.stores.artifactStore.getArticle(article.id);
+  const workflowRunPayload = await syncWorkflowRunAfterProposal(container, applied, 'applied');
+  const finalRunPayload = workflowRunPayload ?? runPayload;
   return {
     mode: 'applied',
-    message: runPayload ? '已进入修改预览流程，确认后才会写入正文。' : '修改已应用。',
+    message: finalRunPayload ? '修改已应用，工作流已继续推进。' : '修改已应用。',
     proposal: applied,
     article: articlePayload ? withWritingStandardSummary(articlePayload) : articlePayload,
-    ...(runPayload ?? {}),
+    ...(finalRunPayload ?? {}),
   };
+}
+
+async function dismissRevisionProposal(container: AppContainer, proposal: RevisionProposal, userId: string): Promise<{ proposal: RevisionProposal; runPayload?: Awaited<ReturnType<typeof enrichRun>> }> {
+  if (proposal.userId !== userId) throw new Error('Revision proposal belongs to another user.');
+  if (proposal.status !== 'pending') throw new Error(`Revision proposal is already ${proposal.status}.`);
+  const dismissed = await container.stores.revisionProposalStore.updateProposal({ ...proposal, status: 'dismissed' });
+  const runPayload = await syncWorkflowRunAfterProposal(container, dismissed, 'dismissed');
+  return { proposal: dismissed, runPayload };
+}
+
+async function syncWorkflowRunToRefreshedProposal(container: AppContainer, previousProposal: RevisionProposal, nextProposal: RevisionProposal): Promise<void> {
+  if (!previousProposal.runId || previousProposal.runId !== nextProposal.runId) return;
+  const run = await container.stores.stateStore.getRun(previousProposal.runId);
+  if (!run) return;
+  if (run.metadata.userId !== nextProposal.userId) throw new Error('Workflow proposal belongs to another user.');
+  if (run.state.pendingRevisionProposalId !== previousProposal.id) return;
+  await container.stores.stateStore.updateRun(run.id, {
+    status: 'waiting',
+    waitingFor: { nodeId: 'revision-proposal', reason: '已刷新待确认修改方案，请先应用或取消后再继续写作。' },
+    state: {
+      ...run.state,
+      pendingRevisionProposalId: nextProposal.id,
+      pendingRevisionProposalRevision: nextProposal.baseRevision,
+      pendingReviewProposal: undefined,
+    },
+    updatedAt: nowIso(),
+  });
+  await container.stores.eventTraceStore.append({
+    id: newId('evt'),
+    runId: run.id,
+    type: 'revision_proposal.created',
+    payload: {
+      articleId: nextProposal.articleId,
+      proposalId: nextProposal.id,
+      replacedProposalId: previousProposal.id,
+      userId: nextProposal.userId,
+    },
+    createdAt: nowIso(),
+  });
+}
+
+async function syncWorkflowRunAfterProposal(container: AppContainer, proposal: RevisionProposal, resolution: 'applied' | 'dismissed'): Promise<Awaited<ReturnType<typeof enrichRun>> | undefined> {
+  if (!proposal.runId) return undefined;
+  const run = await container.stores.stateStore.getRun(proposal.runId);
+  if (!run) return undefined;
+  if (run.metadata.userId !== proposal.userId) throw new Error('Workflow proposal belongs to another user.');
+  if (run.status === 'completed' || run.status === 'cancelled' || run.status === 'failed') return enrichRun(container, run.id);
+  if (run.state.pendingRevisionProposalId !== proposal.id) return enrichRun(container, run.id);
+  const shouldClearBlocking = resolution === 'applied';
+  await container.stores.stateStore.updateRun(run.id, {
+    status: 'running',
+    waitingFor: undefined,
+    state: {
+      ...run.state,
+      pendingRevisionProposalId: undefined,
+      pendingRevisionProposalRevision: undefined,
+      pendingReviewProposal: undefined,
+      ...(shouldClearBlocking ? { consistencyBlockingReviewId: undefined, consistencyBlockingRevision: undefined } : {}),
+      revisionProposalResult: { proposalId: proposal.id, status: resolution },
+    },
+    updatedAt: nowIso(),
+  });
+  await container.stores.eventTraceStore.append({
+    id: newId('evt'),
+    runId: run.id,
+    type: 'revision_proposal.resolved',
+    payload: { articleId: proposal.articleId, proposalId: proposal.id, status: resolution, userId: proposal.userId },
+    createdAt: nowIso(),
+  });
+  await container.piRunner.runUntilBlocked(run.id);
+  return enrichRun(container, run.id);
 }
 
 async function applyRevisionOperation(container: AppContainer, article: ArticleArtifact, operation: RevisionOperation, userId: string, sessionId?: string): Promise<{ article: ArticleArtifact; runPayload?: Awaited<ReturnType<typeof enrichRun>> }> {

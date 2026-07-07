@@ -21,6 +21,8 @@
 | POST | `/api/workflows/:runId/cancel` | 取消 workflow |
 | GET | `/api/workflows/:runId` | 读取 run、article、events、HumanGate、operation log、review artifact、pending revision proposals |
 | GET | `/api/workflows/:runId/events` | 读取 run 事件日志 |
+| POST | `/api/articles/:articleId/dialogue/:proposalId/apply` | 应用修改方案；若 proposal 绑定 workflow run，会同步恢复 runner |
+| POST | `/api/articles/:articleId/dialogue/:proposalId/dismiss` | 取消修改方案；若 proposal 绑定 workflow run，会同步清理 pending proposal |
 
 ## SSE
 
@@ -55,3 +57,5 @@ WS /api/events/ws?runId=&userId=
 6. 创建 pi-agent decision provider；每轮只允许选择 runner 提供的 allowed action。
 
 `RunResponse.revisionProposals` 返回当前文章、当前用户仍待处理的修改方案。workflow review 生成的 proposal 会通过这个字段同步到前端，不要求前端额外猜测或轮询对话接口。
+
+workflow review 生成的 proposal 带 `runId`。`apply` 返回 `DialogueResponse`，其中可以包含恢复后的 `run/article/events/revisionProposals`；`dismiss` 同样返回 `DialogueResponse`，前端应按普通对话响应更新本地状态。

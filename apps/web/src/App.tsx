@@ -729,11 +729,12 @@ export function App() {
     setBusy(true);
     setError(undefined);
     try {
-      await api.dismissDialogueProposal(visibleArticle.id, proposal.id, { userId });
+      const response = await api.dismissDialogueProposal(visibleArticle.id, proposal.id, { userId });
+      applyDialogueResponse(response);
       if (dialogueResponse?.proposal?.id === proposal.id) setDialogueResponse(undefined);
       setProposalDirty(false);
       await refreshDialogueProposals(visibleArticle.id);
-      await refreshDialogueMessages(visibleArticle.id);
+      if (!response.messages) await refreshDialogueMessages(visibleArticle.id);
       await refreshDialogueBrief(visibleArticle.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

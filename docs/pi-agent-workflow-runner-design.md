@@ -2,9 +2,9 @@
 
 ## 状态
 
-实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、`create_revision_proposal`、开发期多用户工作台隔离、统一 `/api/workflows/writing/start` 和旧节点式 runner/queue 删除。
+实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、`create_revision_proposal`、proposal apply/dismiss 回流、开发期多用户工作台隔离、统一 `/api/workflows/writing/start` 和旧节点式 runner/queue 删除。
 
-仍需补齐的重点：workflow message 到修改提案的完整闭环、proposal apply/dismiss 后对 run 等待状态的回流，以及更完整的验收场景自动化覆盖。
+仍需补齐的重点：workflow message 到复杂修改提案的更多验收场景、统稿建议的可应用提案化，以及更完整的端到端自动化覆盖。
 
 本文记录一次破坏式重构方案：以 `@earendil-works/pi-agent-core` 作为 workflow runner 基座，让 agent 在受控边界内自主选择下一步，并统一工具调用。重构后不保留旧节点式 workflow 双轨兼容。
 
@@ -90,7 +90,7 @@ pi-agent 可以自主选择下一步，但只能从 runner 本轮注入的 `allo
 - 所有大纲项都已写作完成。
 - 任何章节生成失败。
 - 来源不足。
-- 一致性检查出现 blocking issue。
+- 一致性检查出现 blocking issue。此时 runner 生成待确认修改方案并等待用户应用或取消。
 
 全部章节完成后，自动生成统稿报告和修改建议，但不自动应用。
 
