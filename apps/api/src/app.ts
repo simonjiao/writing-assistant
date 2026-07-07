@@ -967,7 +967,7 @@ async function findPendingWorkflowProposalRun(container: AppContainer, articleId
   return undefined;
 }
 
-async function handleWorkflowPendingProposalMessage(container: AppContainer, run: WorkflowRun, message: string, userId: string): Promise<Awaited<ReturnType<typeof enrichRun>> | undefined> {
+async function handleWorkflowPendingProposalMessage(container: AppContainer, run: WorkflowRun, message: string, userId: string): Promise<(Awaited<ReturnType<typeof enrichRun>> & { messages?: DialogueMessage[] }) | undefined> {
   const pendingProposalId = typeof run.state.pendingRevisionProposalId === 'string' ? run.state.pendingRevisionProposalId : undefined;
   if (!pendingProposalId) return undefined;
   const proposal = await container.stores.revisionProposalStore.getProposal(pendingProposalId);
@@ -975,49 +975,68 @@ async function handleWorkflowPendingProposalMessage(container: AppContainer, run
   if (proposal.userId !== userId || run.metadata.userId !== userId) throw new Error('Revision proposal belongs to another user.');
   if (proposal.status !== 'pending') throw new Error(`Revision proposal is already ${proposal.status}.`);
 
+  const access = await requireArticleAccess(container, userId, proposal.articleId);
+  if (!access.ok) throw new Error(access.error);
+  try {
+    await ensureDialogueBriefSettled(container, access.article.id, userId);
+  } catch (error) {
+    throw new Error(dialogueBriefBarrierError(error));
+  }
+  const context = resolveDialogueContext(access.article, dialogueContextRequestForProposal(proposal));
+  if (!context.ok) throw new Error(context.error);
+  const sessionId = typeof run.metadata.sessionId === 'string' ? run.metadata.sessionId : undefined;
+  const userMessage = await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'user', content: message, proposalId: proposal.id });
+  await enqueueDialogueBriefUpdate({ container, article: access.article, userId, sessionId, message: userMessage, context: { kind: context.value.context.kind, title: context.value.context.title } });
+  await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromContext(context.value.context), [{ role: 'user', content: message, proposalId: proposal.id }]);
+
   const route = routeDialogueMessage(message, proposal);
   if (route === 'apply') {
-    await applyRevisionProposal(container, proposal.id, userId, typeof run.metadata.sessionId === 'string' ? run.metadata.sessionId : undefined);
-    return enrichRun(container, run.id);
+    const applied = await applyRevisionProposal(container, proposal.id, userId, sessionId);
+    await appendWorkflowProposalAssistantTurn(container, applied.article ?? access.article, userId, context.value.context, applied.message, proposal.id);
+    return enrichRunWithDialogueMessages(container, run.id, access.article.id, userId);
   }
   if (route === 'dismiss') {
     const { runPayload } = await dismissRevisionProposal(container, proposal, userId);
-    return runPayload ?? enrichRun(container, run.id);
+    await appendWorkflowProposalAssistantTurn(container, access.article, userId, context.value.context, '已取消这次修改方案。', proposal.id);
+    return { ...(runPayload ?? (await enrichRun(container, run.id))), messages: await listDialogueMessages(container, access.article.id, userId) };
   }
   if (route !== 'propose' && !(route === 'discuss' && isModificationIntent(message))) {
-    return enrichRun(container, run.id);
+    const assistantMessage = workflowPendingProposalReply(route, context.value.context, proposal);
+    await appendWorkflowProposalAssistantTurn(container, access.article, userId, context.value.context, assistantMessage, proposal.id);
+    return enrichRunWithDialogueMessages(container, run.id, access.article.id, userId);
   }
 
-  const access = await requireArticleAccess(container, userId, proposal.articleId);
-  if (!access.ok) throw new Error(access.error);
-  const context = resolveDialogueContext(access.article, dialogueContextRequestForProposal(proposal));
-  if (!context.ok) throw new Error(context.error);
-  const now = nowIso();
-  const existingConversation = await listDialogueMessages(container, access.article.id, userId, 24);
-  const conversation = buildCompactDialogueConversation([
-    ...existingConversation,
-    { id: newId('dlg'), articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'user', content: message, proposalId: proposal.id, createdAt: now },
-  ]);
+  const conversation = buildCompactDialogueConversation(await listDialogueMessages(container, access.article.id, userId, 24));
   const conversationBrief = await getOrCreateDialogueBrief(container, access.article.id, userId);
-  const result = await container.runtime.invokeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
-    'dialogue-coordinator',
-    {
-      articleId: access.article.id,
-      message,
-      skipKnowledge: true,
-      conversation,
-      conversationBrief: compactDialogueBriefForPrompt(conversationBrief),
-      pendingProposal: proposalForDialogue(proposal),
-      context: context.value.context,
-      taskCard: access.article.taskCard,
-      outline: access.article.outline,
-      selectedOutlineItem: context.value.selectedOutlineItem,
-      selectedBlock: context.value.selectedBlock,
-    },
-    { userId, sessionId: typeof run.metadata.sessionId === 'string' ? run.metadata.sessionId : undefined, runId: run.id, articleId: access.article.id },
-  );
+  let result: DialogueCoordinatorOutput;
+  try {
+    result = await container.runtime.invokeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
+      'dialogue-coordinator',
+      {
+        articleId: access.article.id,
+        message,
+        skipKnowledge: true,
+        conversation,
+        conversationBrief: compactDialogueBriefForPrompt(conversationBrief),
+        pendingProposal: proposalForDialogue(proposal),
+        context: context.value.context,
+        taskCard: access.article.taskCard,
+        outline: access.article.outline,
+        selectedOutlineItem: context.value.selectedOutlineItem,
+        selectedBlock: context.value.selectedBlock,
+      },
+      { userId, sessionId, runId: run.id, articleId: access.article.id },
+    );
+  } catch (error) {
+    if (!isDialogueCoordinatorRecoverableFailure(error)) throw error;
+    const assistantMessage = '这次修改方案没有刷新成功，原方案仍保留。请把要合并的意见拆成更明确的一两条再发。';
+    await appendWorkflowProposalAssistantTurn(container, access.article, userId, context.value.context, assistantMessage, proposal.id);
+    return enrichRunWithDialogueMessages(container, run.id, access.article.id, userId);
+  }
   if (result.mode !== 'proposal') {
-    throw new Error(`Workflow proposal refresh did not return a proposal: ${result.mode}`);
+    const assistantMessage = '这次输入没有形成新的修改方案，原方案仍保留。需要刷新方案时，请明确说明要新增、删除、替换或调整什么。';
+    await appendWorkflowProposalAssistantTurn(container, access.article, userId, context.value.context, assistantMessage, proposal.id);
+    return enrichRunWithDialogueMessages(container, run.id, access.article.id, userId);
   }
   await container.stores.revisionProposalStore.updateProposal({ ...proposal, status: 'dismissed' });
   const nextProposal = await container.stores.revisionProposalStore.createProposal({
@@ -1033,7 +1052,22 @@ async function handleWorkflowPendingProposalMessage(container: AppContainer, run
     warnings: result.warnings,
   });
   await syncWorkflowRunToRefreshedProposal(container, proposal, nextProposal);
-  return enrichRun(container, run.id);
+  await appendWorkflowProposalAssistantTurn(container, access.article, userId, context.value.context, result.message, nextProposal.id);
+  return enrichRunWithDialogueMessages(container, run.id, access.article.id, userId);
+}
+
+async function enrichRunWithDialogueMessages(container: AppContainer, runId: string, articleId: string, userId: string): Promise<Awaited<ReturnType<typeof enrichRun>> & { messages: DialogueMessage[] }> {
+  return { ...(await enrichRun(container, runId)), messages: await listDialogueMessages(container, articleId, userId) };
+}
+
+async function appendWorkflowProposalAssistantTurn(container: AppContainer, article: ArticleArtifact, userId: string, context: DialogueCoordinatorInput['context'], content: string, proposalId: string): Promise<void> {
+  await appendDialogueMessage(container, { articleId: article.id, userId, contextKind: context.kind, role: 'assistant', content, proposalId });
+  await appendDialoguePiMessages(container, article, userId, dialogueSessionTargetFromContext(context), [{ role: 'assistant', content, proposalId }]);
+}
+
+function workflowPendingProposalReply(route: DialogueRoute, context: DialogueCoordinatorInput['context'], proposal: RevisionProposal): string {
+  const suffix = route === 'answer' ? `如果只是解释「${context.title}」，请先处理当前方案后再继续。` : '请先应用、取消，或明确说“按以上意见更新方案”。';
+  return `当前已有待确认修改方案「${proposal.summary}」，不会继续写入正文。${suffix}`;
 }
 
 function dialogueContextRequestForProposal(proposal: RevisionProposal): DialogueContextRequest {

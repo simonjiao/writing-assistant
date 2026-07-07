@@ -238,6 +238,7 @@ export function App() {
       setPendingProposals(response.revisionProposals);
       if (!response.revisionProposals.length) setProposalDirty(false);
     }
+    if (response.messages) setDialogueMessages(response.messages);
     if (response.article) {
       const updatedArticle = response.article;
       setArticle((current) => (!current || current.id === updatedArticle.id || taskCardDialogTarget === 'new') ? updatedArticle : current);

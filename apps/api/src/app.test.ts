@@ -290,6 +290,7 @@ describe('api app', () => {
     expect(duplicateStartBody.run.waitingFor.nodeId).toBe('revision-proposal');
     expect(duplicateStartBody.revisionProposals).toHaveLength(1);
     expect(duplicateStartBody.revisionProposals[0].id).toBe(proposals[0].id);
+    expect(duplicateStartBody.messages.at(-1).content).toContain('待确认修改方案');
     expect(await container.stores.revisionProposalStore.listPendingProposals(article.id, 'consistency-block-user')).toHaveLength(1);
 
     const resumed = await app.inject({
@@ -303,6 +304,8 @@ describe('api app', () => {
     expect(resumedBody.run.status).toBe('waiting');
     expect(resumedBody.run.waitingFor.nodeId).toBe('revision-proposal');
     expect(resumedBody.article.blocks).toHaveLength(0);
+    expect(resumedBody.messages.map((message: { role: string }) => message.role).slice(-2)).toEqual(['user', 'assistant']);
+    expect(resumedBody.messages.at(-1).content).toContain('不会继续写入正文');
     const operations = await container.stores.workflowOperationStore.listOperations({ runId: body.run.id });
     expect(operations.map((operation) => operation.toolName).sort()).toEqual(['create_revision_proposal', 'review_task_card_outline_consistency']);
     expect(operations.some((operation) => operation.toolName === 'write_next_section' || operation.toolName === 'write_section')).toBe(false);
@@ -320,6 +323,7 @@ describe('api app', () => {
     expect(refreshedBody.revisionProposals).toHaveLength(1);
     expect(refreshedBody.revisionProposals[0].id).not.toBe(proposals[0].id);
     expect(refreshedBody.revisionProposals[0].operations[0].instruction).toContain('必须只依据前80回');
+    expect(refreshedBody.messages.at(-1).proposalId).toBe(refreshedBody.revisionProposals[0].id);
     expect((await container.stores.revisionProposalStore.getProposal(proposals[0].id))?.status).toBe('dismissed');
     expect((await container.stores.stateStore.getRun(body.run.id))?.state.pendingRevisionProposalId).toBe(refreshedBody.revisionProposals[0].id);
 
@@ -338,6 +342,70 @@ describe('api app', () => {
     const dismissedRun = await container.stores.stateStore.getRun(body.run.id);
     expect(dismissedRun?.state.pendingRevisionProposalId).toBeUndefined();
     expect(dismissedRun?.state.consistencyBlockingReviewId).toBeTypeOf('string');
+    await app.close();
+  });
+
+  it('keeps the original workflow proposal when proposal refresh fails', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
+    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+      if (skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator did not return valid JSON: {"mode":"proposal"');
+      return originalInvokeSkill(skillId as never, input as never, meta as never);
+    }) as typeof container.runtime.invokeSkill;
+    const app = createApp(config, container);
+    const now = nowIso();
+    const taskCard: WritingTaskCard = {
+      id: 'task-workflow-refresh-failure',
+      topic: 'Workflow 方案刷新失败测试',
+      writingGoal: '测试 workflow proposal 刷新失败时不丢失原方案。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: [], themes: ['一致性'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: ['后40回'], citationRequired: false, sourcePolicy: '仅以前80回和脂批为依据。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'workflow-refresh-fail-user', name: 'Workflow 刷新失败工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'workflow-refresh-fail-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    article.outline = [{
+      id: 'sec-workflow-refresh-fail',
+      title: '误引后40回的段落',
+      goal: '这里故意包含后40回，触发一致性阻断。',
+      order: 1,
+      expectedBlocks: 1,
+      sourceHints: ['后40回'],
+      themeTags: ['一致性'],
+      status: 'confirmed',
+    }];
+    await container.stores.artifactStore.updateArticle(article);
+
+    const started = await app.inject({
+      method: 'POST',
+      url: '/api/workflows/writing/start',
+      payload: { userId: 'workflow-refresh-fail-user', articleId: article.id, targetStage: 'article' },
+    });
+    expect(started.statusCode).toBe(200);
+    const startedBody = started.json();
+    const originalProposalId = startedBody.revisionProposals[0].id;
+
+    const refreshed = await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${startedBody.run.id}/message`,
+      payload: { userId: 'workflow-refresh-fail-user', message: '必须只依据前80回，不要沿用后40回。', targetStage: 'article' },
+    });
+
+    expect(refreshed.statusCode).toBe(200);
+    const refreshedBody = refreshed.json();
+    expect(refreshedBody.run.status).toBe('waiting');
+    expect(refreshedBody.run.waitingFor.nodeId).toBe('revision-proposal');
+    expect(refreshedBody.revisionProposals).toHaveLength(1);
+    expect(refreshedBody.revisionProposals[0].id).toBe(originalProposalId);
+    expect(refreshedBody.messages.at(-1).content).toContain('原方案仍保留');
+    expect((await container.stores.revisionProposalStore.getProposal(originalProposalId))?.status).toBe('pending');
     await app.close();
   });
 
