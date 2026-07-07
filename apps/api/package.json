@@ -15,8 +15,7 @@
     "@wa/core": "0.1.0",
     "@wa/skills": "0.1.0",
     "dotenv": "^16.4.7",
-    "fastify": "^5.2.1",
-    "ioredis": "^5.11.1"
+    "fastify": "^5.2.1"
   },
   "devDependencies": {
     "tsx": "^4.19.2",

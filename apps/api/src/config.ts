@@ -1,7 +1,6 @@
 import { config as loadDotenv } from 'dotenv';
 import { existsSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
-import { WorkflowExecutionMode } from '@wa/core';
 
 const projectRoot = resolve(__dirname, '../../..');
 
@@ -31,11 +30,6 @@ export interface AppConfig {
   openaiBaseURL: string;
   openaiApiKey: string;
   openaiModel: string;
-  workflowExecutionMode: WorkflowExecutionMode;
-  workflowQueueDriver: 'local' | 'redis';
-  enableWorkers: boolean;
-  runnerConcurrency: number;
-  redisUrl: string;
   ragProvider: 'local' | 'http' | 'tonglingyu';
   ragBaseURL: string;
   ragApiKey: string;
@@ -62,11 +56,6 @@ export function getConfig(): AppConfig {
     openaiBaseURL: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
     openaiApiKey: process.env.OPENAI_API_KEY ?? '',
     openaiModel: process.env.OPENAI_MODEL ?? 'gpt-4.1-mini',
-    workflowExecutionMode: process.env.WORKFLOW_EXECUTION_MODE === 'async' ? 'async' : 'inline',
-    workflowQueueDriver: process.env.WORKFLOW_QUEUE_DRIVER === 'redis' || process.env.QUEUE_PROVIDER === 'redis' ? 'redis' : 'local',
-    enableWorkers: process.env.ENABLE_WORKERS !== 'false',
-    runnerConcurrency: Math.max(1, Number(process.env.RUNNER_CONCURRENCY ?? process.env.RUNNER_COUNT ?? 2)),
-    redisUrl: process.env.REDIS_URL ?? 'redis://localhost:6379',
     ragProvider,
     ragBaseURL: process.env.RAG_BASE_URL ?? '',
     ragApiKey: process.env.RAG_API_KEY ?? '',

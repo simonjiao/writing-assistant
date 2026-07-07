@@ -103,7 +103,7 @@ function workflowActionLabel(type?: string): string {
 }
 
 function workflowRunStatusLabel(status: string): string {
-  const labels: Record<string, string> = { queued: '等待处理', running: '处理中', waiting: '等待确认', completed: '已完成', failed: '失败', cancelled: '已取消', idle: '就绪' };
+  const labels: Record<string, string> = { running: '处理中', waiting: '等待确认', completed: '已完成', failed: '失败', cancelled: '已取消', idle: '就绪' };
   return labels[status] ?? status;
 }
 

@@ -1,6 +1,6 @@
 # Writing Assistant
 
-一版 workflow-driven 写作助手。它不是普通聊天机器人，而是以 **Task Card / Outline / Article Artifact / Patch / Version** 为中心的写作工作台。
+一版 pi-agent 驱动的写作助手。它不是普通聊天机器人，而是以 **Task Card / Outline / Article Artifact / Patch / Version** 为中心的写作工作台。
 
 本版已经加入：
 
@@ -8,10 +8,10 @@
 - Fastify API 后端 + React/Vite 前端
 - OpenAI-compatible LLM Provider，默认 `mock` 模式可离线运行
 - Skill 机制：任务卡、大纲、章节写作、局部修改、引用/连贯性检查
-- WorkflowEngine / WorkflowRunner 拆分
+- pi-agent writing autopilot：自主选择下一步，所有工具调用走统一幂等 action executor
+- HumanGate：任务卡确认、大纲覆盖等人工裁决点独立建模
 - 外部化 Session / State / Memory / Artifact / Knowledge / Event Trace
 - HTTP RAG KnowledgeStore：通过 HTTP POST 接入真实 RAG 服务
-- Redis / Local 多 Runner 异步队列
 - SQLite 单一持久化存储后端
 - SSE + WebSocket 实时事件通道
 - 单元与集成测试
@@ -21,14 +21,14 @@
 ```text
 writing-assistant/
 ├─ apps/
-│  ├─ api/                 # Fastify API、stores、queue、RAG client
+│  ├─ api/                 # Fastify API、stores、pi action executor、RAG client
 │  └─ web/                 # React/Vite 写作工作台
 ├─ packages/
-│  ├─ core/                # Workflow、AgentRuntime、Skill、Store、Queue、EventBus
+│  ├─ core/                # Pi workflow runner、AgentRuntime、Skill、Store、EventBus
 │  └─ skills/              # 默认写作 skills
 ├─ docs/                   # 产品、架构、模块、部署测试文档
 ├─ scripts/smoke.sh        # API smoke test
-├─ docker-compose.yml      # API + Web + 可选 Redis Queue
+├─ docker-compose.yml      # API + Web
 ├─ Dockerfile.api
 └─ Dockerfile.web
 ```
@@ -38,7 +38,6 @@ writing-assistant/
 - Node.js `22.x`（`>=22.19.0 <23`）
 - npm `>=10`
 - 可选：Docker / Docker Compose
-- 可选：Redis，仅在 `WORKFLOW_QUEUE_DRIVER=redis` 时需要
 
 项目通过 `.nvmrc`、`.node-version`、`.npmrc`、`package.json#engines` 和 npm 脚本检查共同限定 Node 22。若当前 shell 不是 Node 22，`npm install`、`npm run build`、`npm run test`、`npm run dev` 会直接失败。
 
@@ -67,7 +66,7 @@ npm run dev:web
 http://localhost:5173
 ```
 
-默认配置为 `mock` LLM、SQLite 持久化存储、本地异步队列、本地知识库。
+默认配置为 `mock` LLM、SQLite 持久化存储、pi-agent workflow runtime、本地知识库。
 
 ## Docker 启动
 
@@ -79,7 +78,6 @@ docker compose up --build
 
 - API: `http://localhost:8787`
 - Web: `http://localhost:5173`
-- Redis Queue: `localhost:6379`
 
 ## 核心配置
 
@@ -106,27 +104,7 @@ DATA_DIR=.data
 ${DATA_DIR}/writing-assistant.sqlite
 ```
 
-Redis 不再作为持久化 Store 使用；它只在 `WORKFLOW_QUEUE_DRIVER=redis` 时作为异步 workflow 队列。
-
-### Workflow 执行模式
-
-```bash
-WORKFLOW_EXECUTION_MODE=inline # API 请求内同步执行
-WORKFLOW_EXECUTION_MODE=async  # 入队后由 Runner workers 执行
-ENABLE_WORKERS=true
-RUNNER_CONCURRENCY=2
-```
-
-### 队列
-
-```bash
-WORKFLOW_QUEUE_DRIVER=local
-# 或
-WORKFLOW_QUEUE_DRIVER=redis
-REDIS_URL=redis://localhost:6379
-```
-
-`local` 队列适合单进程开发；`redis` 队列适合多个 API/worker 进程共享任务。
+Workflow 由 API 进程内的 pi-agent runner 推进。前端只提交 intent，例如生成任务卡、生成大纲、开始写作；runner 每轮生成 allowed actions，agent 只能选择其中一个动作。覆盖大纲、确认任务卡等需要用户裁决的位置会生成 HumanGate 并暂停。
 
 ### HTTP RAG
 
@@ -201,7 +179,6 @@ POST /refs
 
 ```bash
 curl http://localhost:8787/health
-curl http://localhost:8787/api/queue/status
 ./scripts/smoke.sh
 ```
 
@@ -210,7 +187,7 @@ curl http://localhost:8787/api/queue/status
 按 run 订阅 SSE：
 
 ```text
-GET /api/runs/:runId/stream
+GET /api/workflows/:runId/stream
 ```
 
 全局/过滤订阅 SSE：
@@ -228,13 +205,15 @@ WS /api/events/ws?runId=<runId>&userId=<userId>
 事件类型包括：
 
 ```text
-workflow.started / workflow.queued / workflow.waiting / workflow.completed / workflow.failed
-node.started / node.completed / node.failed
-skill.started / skill.completed / skill.failed
-queue.enqueued / queue.dequeued / queue.completed / queue.failed
-runner.started / runner.stopped
+workflow.started / workflow.waiting / workflow.completed / workflow.failed
+workflow.operation.started / workflow.operation.completed / workflow.operation.failed
+skill.started / skill.completed
+tool.started / tool.completed / tool.failed
+pi.session.created / pi.session.updated / agent.decision
+human_gate.created / human_gate.resolved
 artifact.updated
-review.required
+review_artifact.created
+dialogue.brief.updated / dialogue.brief.failed
 rag.http.started / rag.http.completed / rag.http.failed
 ```
 

@@ -5,7 +5,7 @@ import { WorkflowSupportCard } from './WorkflowSupportCard';
 
 const userId = 'demo-user';
 const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']);
-const activeStatuses = new Set(['queued', 'running']);
+const activeStatuses = new Set(['running']);
 const runRefreshIntervalMs = 1000;
 const navigationCollapsedStorageKey = 'writing-assistant.navigation-collapsed';
 const supportColumnCollapsedStorageKey = 'writing-assistant.support-column-collapsed';
@@ -137,7 +137,7 @@ export function App() {
     const runId = lastRun.run.id;
     activeRunId.current = runId;
     setLiveEvents(lastRun.events ?? []);
-    const close = api.streamRunEvents(runId, (event) => { setLiveEvents((items) => [...items.filter((item) => item.id !== event.id), event].slice(-80)); if (['workflow.waiting','workflow.completed','workflow.failed','review.required','artifact.updated','queue.dequeued','queue.completed'].includes(event.type)) scheduleRunRefresh(runId); }, () => scheduleRunRefresh(runId, runRefreshIntervalMs));
+    const close = api.streamRunEvents(runId, (event) => { setLiveEvents((items) => [...items.filter((item) => item.id !== event.id), event].slice(-80)); if (['workflow.waiting','workflow.completed','workflow.failed','artifact.updated','workflow.operation.completed','human_gate.created','human_gate.resolved','review_artifact.created'].includes(event.type)) scheduleRunRefresh(runId); }, () => scheduleRunRefresh(runId, runRefreshIntervalMs));
     if (activeStatuses.has(lastRun.run.status)) scheduleRunRefresh(runId);
     return close;
   }, [lastRun?.run.id]);
@@ -1425,7 +1425,6 @@ function runStatusLabel(run: WorkflowRun, events: AgentEvent[]): string {
   if (run.status === 'failed') return '处理失败';
   if (run.status === 'waiting') return waitingStatusLabel(run.waitingFor?.reason);
   if (run.status === 'completed') return '处理完成';
-  if (run.status === 'queued') return '等待处理';
   const latest = friendlyProgressEvents(events, run).at(-1);
   return latest?.label ?? '处理中';
 }
@@ -1444,8 +1443,7 @@ function sectionGenerationStage(progress: SectionGenerationState, events: AgentE
   if (hasFriendlyEvent(events, 'skill.started', 'section-writer')) return { title: '正在生成', detail: '正在根据任务卡、大纲和资料写作。', percent: 48, tone: 'active' };
   if (hasFriendlyEvent(events, 'rag.http.completed')) return { title: '正在生成', detail: '资料已准备，正在组织正文。', percent: 42, tone: 'active' };
   if (hasFriendlyEvent(events, 'rag.http.started')) return { title: '正在准备资料', detail: '正在查找可用资料。', percent: 30, tone: 'active' };
-  if (hasFriendlyEvent(events, 'queue.dequeued')) return { title: '开始处理', detail: '请求已进入写作流程。', percent: 22, tone: 'active' };
-  if (progress.status === 'queued') return { title: '等待开始', detail: '请求已提交，正在等待处理。', percent: 18, tone: 'active' };
+  if (hasFriendlyEvent(events, 'workflow.operation.started') || hasFriendlyEvent(events, 'tool.started')) return { title: '开始处理', detail: '正在推进写作流程。', percent: 22, tone: 'active' };
   if (progress.status === 'starting') return { title: '准备生成', detail: '正在提交生成请求。', percent: 12, tone: 'active' };
   return { title: '正在处理', detail: '正在推进生成流程。', percent: 24, tone: 'active' };
 }
@@ -1462,17 +1460,17 @@ function friendlyEventLabel(event: AgentEvent): string | undefined {
   const reason = typeof event.payload?.reason === 'string' ? event.payload.reason : undefined;
   const skillId = typeof event.payload?.skillId === 'string' ? event.payload.skillId : undefined;
   if (event.type === 'workflow.started') return '已收到请求';
-  if (event.type === 'workflow.queued' || event.type === 'queue.enqueued') return '等待处理';
-  if (event.type === 'queue.dequeued') return '开始处理';
+  if (event.type === 'workflow.operation.started' || event.type === 'tool.started') return '开始处理';
+  if (event.type === 'agent.decision') return '已选择下一步';
   if (event.type === 'rag.http.started') return '正在查找资料';
   if (event.type === 'rag.http.completed') return '资料已准备';
   if (event.type === 'rag.http.failed') return '资料查找失败';
   if (event.type === 'skill.started') return skillProgressLabel(skillId, 'started');
   if (event.type === 'skill.completed') return skillProgressLabel(skillId, 'completed');
   if (event.type === 'artifact.updated') return artifactProgressLabel(reason);
-  if (event.type === 'workflow.waiting' || event.type === 'review.required') return waitingStatusLabel(typeof event.payload?.reason === 'string' ? event.payload.reason : undefined);
-  if (event.type === 'workflow.completed' || event.type === 'queue.completed') return '处理完成';
-  if (event.type === 'workflow.failed' || event.type === 'queue.failed') return '处理失败';
+  if (event.type === 'workflow.waiting' || event.type === 'human_gate.created') return waitingStatusLabel(typeof event.payload?.reason === 'string' ? event.payload.reason : undefined);
+  if (event.type === 'workflow.completed') return '处理完成';
+  if (event.type === 'workflow.failed') return '处理失败';
   return undefined;
 }
 
@@ -1504,7 +1502,7 @@ function artifactProgressLabel(reason: string | undefined): string {
 }
 
 function runStatusLabelFromStatus(status: WorkflowRun['status']): string {
-  const labels: Record<WorkflowRun['status'], string> = { idle: '就绪', queued: '等待处理', running: '处理中', waiting: '等待确认', completed: '处理完成', failed: '处理失败', cancelled: '已取消' };
+  const labels: Record<WorkflowRun['status'], string> = { idle: '就绪', running: '处理中', waiting: '等待确认', completed: '处理完成', failed: '处理失败', cancelled: '已取消' };
   return labels[status];
 }
 

@@ -63,7 +63,6 @@ export class PiWorkflowRunner {
       await this.deps.actionExecutor.execute({ policy: this.policy, run, action: selectedAction });
       run = await this.requireRun(run.id);
       if (run.status === 'waiting' || run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') return run;
-      if (run.status === 'queued') return run;
     }
     return run.status === 'running' ? this.wait(run, '已达到本轮自动执行步数上限。') : run;
   }

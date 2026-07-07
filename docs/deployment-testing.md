@@ -29,7 +29,7 @@ LLM_PROVIDER=mock
 当前 workflow runtime 是 pi-agent，不依赖 Redis 队列。启动 API 后检查：
 
 ```bash
-curl http://localhost:8787/api/queue/status
+curl http://localhost:8787/health
 ```
 
 ## Pi Workflow 状态重置

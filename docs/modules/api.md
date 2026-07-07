@@ -11,7 +11,6 @@
 | Method | Path | 作用 |
 |---|---|---|
 | GET | `/health` | 健康检查和运行模式 |
-| GET | `/api/queue/status` | 兼容状态端点；当前 workflow runtime 为 pi-agent，无外部队列 |
 | POST | `/api/sessions` | 创建 session |
 | GET | `/api/articles` | 列出文章 |
 | GET | `/api/articles/:articleId` | 读取文章 artifact |

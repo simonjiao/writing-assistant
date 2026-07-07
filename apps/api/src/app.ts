@@ -17,10 +17,9 @@ export function createApp(config: AppConfig, container: AppContainer) {
   void app.register(websocket);
   app.addHook('onClose', async () => { await container.close(); });
 
-  app.get('/health', async () => ({ ok: true, service: 'writing-assistant-api', store: 'sqlite', workflowRuntime: 'pi-agent', workflowExecutionMode: 'pi-agent', workflowQueueDriver: 'disabled', runnerConcurrency: 0, ragProvider: config.ragProvider }));
+  app.get('/health', async () => ({ ok: true, service: 'writing-assistant-api', store: 'sqlite', workflowRuntime: 'pi-agent', ragProvider: config.ragProvider }));
   app.get('/api/workflows', async () => [{ id: WRITING_AUTOPILOT_POLICY.id, name: '写作自动流程', description: WRITING_AUTOPILOT_POLICY.goal }]);
   app.get('/api/skills', async () => container.skills.list());
-  app.get('/api/queue/status', async () => ({ executionMode: 'pi-agent', queueDriver: 'disabled', runnerConcurrency: 0, depth: 0 }));
 
   app.post('/api/sessions', async (request, reply) => {
     const body = request.body as { userId?: string };
@@ -498,7 +497,6 @@ export function createApp(config: AppConfig, container: AppContainer) {
       input: { message: body.message?.trim() || undefined, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined, targetStage: normalizeWorkflowTargetStage(body.targetStage), replaceExisting: body.replaceExisting === true, domainContext, writingStandard },
       state: {},
       metadata: { userId, sessionId: body.sessionId, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined },
-      history: [],
       createdAt: now,
       updatedAt: now,
     };

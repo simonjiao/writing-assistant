@@ -430,28 +430,16 @@ export interface WorkflowPolicy {
   completionPolicy: string;
 }
 
-export type WorkflowStatus = 'idle' | 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled';
-export type WorkflowRunHistoryStatus = 'completed' | 'waiting' | 'failed';
-
-export interface WorkflowRunHistoryItem {
-  nodeId: string;
-  status: WorkflowRunHistoryStatus;
-  startedAt: string;
-  finishedAt?: string;
-  summary?: string;
-}
+export type WorkflowStatus = 'idle' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled';
 
 export interface WorkflowRun {
   id: string;
   workflowId: string;
   status: WorkflowStatus;
-  currentNodeId?: string;
   input: unknown;
   state: Record<string, unknown>;
   metadata: { userId: string; sessionId?: string; articleId?: string; [key: string]: unknown };
   waitingFor?: { nodeId: string; reason: string };
-  resumeInput?: unknown;
-  history: WorkflowRunHistoryItem[];
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -459,17 +447,12 @@ export interface WorkflowRun {
 
 export type AgentEventType =
   | 'workflow.started'
-  | 'workflow.queued'
-  | 'workflow.resumed'
   | 'workflow.completed'
   | 'workflow.failed'
   | 'workflow.waiting'
   | 'workflow.operation.started'
   | 'workflow.operation.completed'
   | 'workflow.operation.failed'
-  | 'node.started'
-  | 'node.completed'
-  | 'node.failed'
   | 'skill.started'
   | 'skill.completed'
   | 'artifact.updated'
@@ -484,13 +467,6 @@ export type AgentEventType =
   | 'review_artifact.created'
   | 'dialogue.brief.updated'
   | 'dialogue.brief.failed'
-  | 'review.required'
-  | 'queue.enqueued'
-  | 'queue.dequeued'
-  | 'queue.completed'
-  | 'queue.failed'
-  | 'runner.started'
-  | 'runner.stopped'
   | 'realtime.client.connected'
   | 'realtime.client.disconnected'
   | 'rag.http.started'

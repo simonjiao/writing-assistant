@@ -30,5 +30,5 @@ This file applies to the whole repository.
 - Use target-specific restarts with npm argument forwarding, for example `npm run local:restart -- api` or `npm run local:restart -- web`.
 - Do not start project services with ad hoc `npm run start`, `npm run dev`, `nohup`, manual PID management, or temporary `launchctl submit` commands.
 - Local runtime logs must stay under `.data/logs/`.
-- Redis is not part of the default local runtime. Use Redis only when `WORKFLOW_QUEUE_DRIVER=redis` is explicitly configured.
+- Redis is not part of the workflow runtime. Do not add workflow queue toggles or worker switches; pi-agent owns progression inside the API process.
 - Do not commit `.env`, `.data`, `dist`, `dist-ts`, `node_modules`, or generated runtime data.

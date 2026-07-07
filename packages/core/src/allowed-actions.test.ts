@@ -11,7 +11,6 @@ function run(state: WorkflowRun['state'] = {}, input: WorkflowRun['input'] = {})
     input,
     state,
     metadata: { userId: 'u1', articleId: 'art_1', workspaceId: 'wsp_1' },
-    history: [],
     createdAt: now,
     updatedAt: now,
   };
