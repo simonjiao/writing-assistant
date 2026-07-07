@@ -35,6 +35,6 @@
 
 - HTTP RAG：真实知识库通过 HTTP 接入。
 - SQLite Store：唯一持久化存储，保存 Session/State/Memory/Artifact/Knowledge/EventTrace。
-- Redis Queue：可选异步队列，只用于 workflow run 排队和跨进程消费。
-- 多 Runner：多个 runner worker 并发消费队列。
-- SSE/WebSocket：前端实时接收 workflow、queue、RAG、artifact 事件。
+- Pi Agent Workflow：`writing-autopilot` 根据当前状态自主选择下一步，但只能执行 runner 给出的 allowed actions。
+- HumanGate：任务卡确认、大纲覆盖等人工裁决点独立持久化。
+- SSE/WebSocket：前端实时接收 workflow、tool、HumanGate、review、RAG、artifact 事件。

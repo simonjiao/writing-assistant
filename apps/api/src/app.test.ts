@@ -17,15 +17,6 @@ function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return { host: '127.0.0.1', port: 0, dataDir, webOrigin: 'http://localhost:5173', llmProvider: 'mock', openaiBaseURL: 'https://api.openai.com/v1', openaiApiKey: '', openaiModel: 'mock', workflowExecutionMode: 'inline', workflowQueueDriver: 'local', enableWorkers: true, runnerConcurrency: 2, redisUrl: 'redis://localhost:6379', ragProvider: 'local', ragBaseURL: '', ragApiKey: '', ragSearchPath: '/search', ragRefsPath: '/refs', ragTimeoutMs: 1000, ...overrides };
 }
 
-async function waitForRun(container: ReturnType<typeof createContainer>, runId: string, statuses: string[]) {
-  for (let i = 0; i < 40; i += 1) {
-    const run = await container.engine.getRun(runId);
-    if (run && statuses.includes(run.status)) return run;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error(`Run did not reach statuses: ${statuses.join(',')}`);
-}
-
 async function startRagServer(): Promise<{ baseURL: string; close: () => Promise<void> }> {
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method !== 'POST' || req.url !== '/search') { res.writeHead(404); res.end(); return; }
@@ -112,7 +103,7 @@ describe('api app', () => {
     const app = createApp(config, container);
     const health = await app.inject({ method: 'GET', url: '/health' });
     expect(health.statusCode).toBe(200);
-    const response = await app.inject({ method: 'POST', url: '/api/workflows/task-card/start', payload: { userId: 'test-user', rawRequirement: '写一篇关于宝黛关系的长文，半文半白' } });
+    const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { userId: 'test-user', message: '写一篇关于宝黛关系的长文，半文半白', targetStage: 'task-card' } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.run.status).toBe('waiting');
@@ -384,16 +375,16 @@ describe('api app', () => {
     await app.close();
   });
 
-  it('runs workflows through the local async queue', async () => {
-    const config = testConfig({ workflowExecutionMode: 'async' });
+  it('exposes writing-autopilot run state through the workflow API', async () => {
+    const config = testConfig();
     const container = createContainer(config);
     const app = createApp(config, container);
-    const response = await app.inject({ method: 'POST', url: '/api/workflows/task-card/start', payload: { userId: 'test-user', rawRequirement: '写一篇关于宝黛关系的长文，半文半白' } });
+    const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { userId: 'test-user', message: '写一篇关于宝黛关系的长文，半文半白', targetStage: 'task-card' } });
     const body = response.json();
-    expect(['queued', 'running', 'waiting']).toContain(body.run.status);
-    const run = await waitForRun(container, body.run.id, ['waiting']);
-    expect(run.status).toBe('waiting');
-    const runResponse = await app.inject({ method: 'GET', url: `/api/runs/${body.run.id}` });
+    expect(body.run.workflowId).toBe('writing-autopilot');
+    const run = await container.stores.stateStore.getRun(body.run.id);
+    expect(run?.status).toBe('waiting');
+    const runResponse = await app.inject({ method: 'GET', url: `/api/workflows/${body.run.id}` });
     expect(runResponse.statusCode).toBe(200);
     expect(runResponse.json().article.taskCard.status).toBe('draft');
     const listResponse = await app.inject({ method: 'GET', url: '/api/articles?userId=test-user&workspaceId=wsp_default_test-user&view=summary' });
@@ -535,10 +526,11 @@ describe('api app', () => {
     const app = createApp(config, container);
     const response = await app.inject({
       method: 'POST',
-      url: '/api/workflows/task-card/start',
+      url: '/api/workflows/writing/start',
       payload: {
         userId: 'profile-user',
-        rawRequirement: '写一篇关于宝黛精神相通的文章。',
+        message: '写一篇关于宝黛精神相通的文章。',
+        targetStage: 'task-card',
         domainProfile: {
           id: 'hongloumeng-baodai',
           selections: {
@@ -564,10 +556,11 @@ describe('api app', () => {
     const app = createApp(config, container);
     const response = await app.inject({
       method: 'POST',
-      url: '/api/workflows/task-card/start',
+      url: '/api/workflows/writing/start',
       payload: {
         userId: 'standard-user',
-        rawRequirement: '写一篇关于宝黛关系的文章。',
+        message: '写一篇关于宝黛关系的文章。',
+        targetStage: 'task-card',
         writingStandard: { languageEra: 'natural-traditional', extraForbiddenTerms: ['俗套词'] },
       },
     });
@@ -764,13 +757,18 @@ describe('api app', () => {
     article.outline = [{ id: 'old-sec', title: '旧大纲', goal: '旧目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: ['旧主题'], status: 'confirmed' }];
     article.blocks = [{ id: 'old-block', type: 'paragraph', sectionId: 'old-sec', title: '旧正文', text: '旧大纲下生成过的正文。', sourceRefs: [], themeTags: ['旧主题'], status: 'draft', createdAt: now, updatedAt: now }];
     await container.stores.artifactStore.updateArticle(article);
-    const response = await app.inject({ method: 'POST', url: '/api/workflows/outline/start', payload: { articleId: article.id, userId: 'outline-user' } });
+    const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { articleId: article.id, userId: 'outline-user', targetStage: 'outline', replaceExisting: true, message: '重新生成大纲' } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.run.status).toBe('waiting');
-    expect(body.article.outline.map((item: { id: string }) => item.id)).not.toContain('old-sec');
-    expect(body.article.outline[0].goal).toContain('更新后的主题');
-    expect(body.article.blocks).toHaveLength(0);
+    expect(body.humanGates[0]).toMatchObject({ targetKind: 'outline', status: 'pending' });
+    const resolved = await app.inject({ method: 'POST', url: `/api/workflows/${body.run.id}/human-gates/${body.humanGates[0].id}/resolve`, payload: { userId: 'outline-user', decision: 'accept' } });
+    expect(resolved.statusCode).toBe(200);
+    const resolvedBody = resolved.json();
+    expect(resolvedBody.run.status).toBe('completed');
+    expect(resolvedBody.article.outline.map((item: { id: string }) => item.id)).not.toContain('old-sec');
+    expect(resolvedBody.article.outline[0].goal).toContain('更新后的主题');
+    expect(resolvedBody.article.blocks).toHaveLength(0);
     await app.close();
   });
 
@@ -1331,11 +1329,11 @@ describe('api app', () => {
     const article = await container.stores.artifactStore.createArticle({ userId: 'section-log-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
     article.outline = [{ id: 'sec-readable-log', title: '可读章节标题', goal: '写出章节正文。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: ['章节日志'], status: 'confirmed' }];
     await container.stores.artifactStore.updateArticle(article);
-    const response = await app.inject({ method: 'POST', url: '/api/workflows/section/start', payload: { articleId: article.id, sectionId: 'sec-readable-log', userId: 'section-log-user' } });
+    const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { articleId: article.id, sectionId: 'sec-readable-log', userId: 'section-log-user', targetStage: 'section', message: '生成当前章节正文' } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
     const reason = body.article.versions[body.article.versions.length - 1].reason;
-    expect(reason).toBe('生成章节正文：可读章节标题');
+    expect(reason).toBe('pi 生成章节正文：可读章节标题');
     expect(reason).not.toContain('sec-readable-log');
     await app.close();
   });

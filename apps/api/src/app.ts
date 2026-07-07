@@ -3,7 +3,7 @@ import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply, FastifyRequest } from 'fastify';
 import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
 import { normalizeTaskCardPolicies } from '@wa/skills';
-import type { ArticleCommentResolverInput, ArticleCommentResolverOutput, DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, TaskCardReviserOutput } from '@wa/skills';
+import type { ArticleCommentResolverInput, ArticleCommentResolverOutput, DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, PatchEditorInput, PatchEditorOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
 import { addKnowledgeEvidenceToBrief, buildCompactDialogueConversation, compactDialogueBriefForPrompt, enqueueDialogueBriefUpdate, ensureDialogueBriefSettled, getDialogueBriefStatus, getOrCreateDialogueBrief } from './dialogueBrief';
@@ -17,13 +17,10 @@ export function createApp(config: AppConfig, container: AppContainer) {
   void app.register(websocket);
   app.addHook('onClose', async () => { await container.close(); });
 
-  app.get('/health', async () => ({ ok: true, service: 'writing-assistant-api', store: 'sqlite', workflowExecutionMode: config.workflowExecutionMode, workflowQueueDriver: config.workflowExecutionMode === 'async' ? config.workflowQueueDriver : 'disabled', runnerConcurrency: config.workflowExecutionMode === 'async' ? config.runnerConcurrency : 0, ragProvider: config.ragProvider }));
-  app.get('/api/workflows', async () => [
-    ...container.engine.listWorkflows(),
-    { id: WRITING_AUTOPILOT_POLICY.id, name: '写作自动流程', description: WRITING_AUTOPILOT_POLICY.goal },
-  ]);
+  app.get('/health', async () => ({ ok: true, service: 'writing-assistant-api', store: 'sqlite', workflowRuntime: 'pi-agent', workflowExecutionMode: 'pi-agent', workflowQueueDriver: 'disabled', runnerConcurrency: 0, ragProvider: config.ragProvider }));
+  app.get('/api/workflows', async () => [{ id: WRITING_AUTOPILOT_POLICY.id, name: '写作自动流程', description: WRITING_AUTOPILOT_POLICY.goal }]);
   app.get('/api/skills', async () => container.skills.list());
-  app.get('/api/queue/status', async () => ({ executionMode: config.workflowExecutionMode, queueDriver: config.workflowExecutionMode === 'async' ? config.workflowQueueDriver : 'disabled', runnerConcurrency: config.workflowExecutionMode === 'async' ? config.runnerConcurrency : 0, depth: container.queue?.getDepth ? await container.queue.getDepth() : 0 }));
+  app.get('/api/queue/status', async () => ({ executionMode: 'pi-agent', queueDriver: 'disabled', runnerConcurrency: 0, depth: 0 }));
 
   app.post('/api/sessions', async (request, reply) => {
     const body = request.body as { userId?: string };
@@ -476,7 +473,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   });
 
   app.post('/api/workflows/writing/start', async (request, reply) => {
-    const body = (request.body ?? {}) as { userId?: string; sessionId?: string; workspaceId?: string; articleId?: string; message?: string; sectionId?: string; targetStage?: string; domainProfile?: DomainProfileSelectionRequest; writingStandard?: WritingStandardSelectionRequest };
+    const body = (request.body ?? {}) as { userId?: string; sessionId?: string; workspaceId?: string; articleId?: string; message?: string; sectionId?: string; targetStage?: string; replaceExisting?: boolean; domainProfile?: DomainProfileSelectionRequest; writingStandard?: WritingStandardSelectionRequest };
     const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const articleId = body.articleId?.trim();
@@ -498,7 +495,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
       id: newId('run'),
       workflowId: WRITING_AUTOPILOT_POLICY.id,
       status: 'running',
-      input: { message: body.message?.trim() || undefined, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined, targetStage: normalizeWorkflowTargetStage(body.targetStage), domainContext, writingStandard },
+      input: { message: body.message?.trim() || undefined, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined, targetStage: normalizeWorkflowTargetStage(body.targetStage), replaceExisting: body.replaceExisting === true, domainContext, writingStandard },
       state: {},
       metadata: { userId, sessionId: body.sessionId, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined },
       history: [],
@@ -538,37 +535,22 @@ export function createApp(config: AppConfig, container: AppContainer) {
       return enrichRun(container, runId);
     }
     const gateResult = await applyAcceptedHumanGate(container, resolvedGate, body.payload ?? {});
-    await container.stores.stateStore.updateRun(runId, { status: 'running', waitingFor: undefined, state: { ...run.state, pendingHumanGateId: undefined, lastResolvedHumanGateId: resolvedGate.id, humanGateResult: gateResult }, updatedAt: nowIso() });
+    const statePatch = readObject(gateResult.statePatch) ?? {};
+    await container.stores.stateStore.updateRun(runId, { status: 'running', waitingFor: undefined, state: { ...run.state, ...statePatch, pendingHumanGateId: undefined, lastResolvedHumanGateId: resolvedGate.id, humanGateResult: gateResult }, updatedAt: nowIso() });
     await container.piRunner.runUntilBlocked(runId);
     return enrichRun(container, runId);
   });
 
-  app.post('/api/workflows/task-card/start', async (request, reply) => {
-    const body = request.body as { rawRequirement: string; userId?: string; sessionId?: string; workspaceId?: string; domainProfile?: DomainProfileSelectionRequest; writingStandard?: WritingStandardSelectionRequest };
-    const userId = readRequestUserId(request, body.userId);
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
-    const workspaceId = body.workspaceId?.trim() || (await ensureDefaultWorkspace(container, userId)).id;
-    const workspace = await requireWorkspaceAccess(container, userId, workspaceId);
-    if (!workspace) return reply.code(403).send({ error: 'Workspace access required.' });
-    let domainContext: ReturnType<typeof resolveDomainProfileSelection>;
-    let writingStandard: ReturnType<typeof resolveWritingStandardSelection>;
-    try {
-      domainContext = resolveDomainProfileSelection(body.domainProfile);
-      writingStandard = resolveWritingStandardSelection(body.writingStandard);
-    } catch (err) {
-      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
-    }
-    const run = await container.engine.startWorkflow('task-card-workflow', { rawRequirement: body.rawRequirement, userId, sessionId: body.sessionId, workspaceId, domainContext, writingStandard }, { userId, sessionId: body.sessionId, workspaceId });
-    return enrichRun(container, run.id);
+  app.post('/api/workflows/:runId/cancel', async (request, reply) => {
+    const { runId } = request.params as { runId: string };
+    const run = await container.stores.stateStore.getRun(runId);
+    if (!run) return reply.code(404).send({ error: 'Run not found.' });
+    await container.stores.stateStore.updateRun(runId, { status: 'cancelled', updatedAt: nowIso() });
+    await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'workflow.failed', payload: { workflowId: run.workflowId, cancelled: true, userId: run.metadata.userId }, createdAt: nowIso() });
+    return enrichRun(container, runId);
   });
-  app.post('/api/workflows/outline/start', async (request, reply) => { const body = request.body as { articleId: string; userId?: string; sessionId?: string }; const userId = readRequestUserId(request, body.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, body.articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); if (access.article.taskCard?.status !== 'confirmed') return reply.code(400).send({ error: 'Task card must be confirmed before outlining.' }); if (body.sessionId) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: body.articleId, currentWorkspaceId: access.article.workspaceId }); const run = await container.engine.startWorkflow('outline-workflow', { articleId: body.articleId }, { userId, sessionId: body.sessionId, articleId: body.articleId, workspaceId: access.article.workspaceId }); return enrichRun(container, run.id); });
-  app.post('/api/workflows/section/start', async (request, reply) => { const body = request.body as { articleId: string; sectionId: string; userId?: string; sessionId?: string }; const userId = readRequestUserId(request, body.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, body.articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); if (access.article.taskCard?.status !== 'confirmed') return reply.code(400).send({ error: 'Task card must be confirmed before writing.' }); const section = access.article.outline.find((item) => item.id === body.sectionId); if (!section) return reply.code(404).send({ error: 'Outline section not found.' }); if (section.status === 'draft') return reply.code(400).send({ error: 'Outline must be ready before writing.' }); const run = await container.engine.startWorkflow('section-writing-workflow', { articleId: body.articleId, sectionId: body.sectionId }, { userId, sessionId: body.sessionId, articleId: body.articleId, workspaceId: access.article.workspaceId }); return enrichRun(container, run.id); });
-  app.post('/api/workflows/patch/start', async (request, reply) => { const body = request.body as { articleId: string; blockId: string; instruction: string; userId?: string; sessionId?: string }; const userId = readRequestUserId(request, body.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, body.articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); if (body.sessionId) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: body.articleId, currentWorkspaceId: access.article.workspaceId, currentBlockId: body.blockId }); const run = await container.engine.startWorkflow('patch-workflow', { articleId: body.articleId, blockId: body.blockId, instruction: body.instruction }, { userId, sessionId: body.sessionId, articleId: body.articleId, workspaceId: access.article.workspaceId }); return enrichRun(container, run.id); });
-  app.post('/api/workflows/:runId/resume', async (request) => { const { runId } = request.params as { runId: string }; await container.engine.resumeWorkflow(runId, request.body ?? {}); return enrichRun(container, runId); });
-  app.post('/api/workflows/:runId/cancel', async (request) => { const { runId } = request.params as { runId: string }; await container.engine.cancelWorkflow(runId); return enrichRun(container, runId); });
-  app.get('/api/runs/:runId', async (request, reply) => { const { runId } = request.params as { runId: string }; const run = await container.engine.getRun(runId); if (!run) return reply.code(404).send({ error: 'Run not found' }); return enrichRun(container, runId); });
-  app.get('/api/runs/:runId/events', async (request) => { const { runId } = request.params as { runId: string }; return container.stores.eventTraceStore.listByRun(runId); });
-  app.get('/api/runs/:runId/stream', async (request, reply) => { const { runId } = request.params as { runId: string }; await openSseStream(container, reply, { runId }); });
+  app.get('/api/workflows/:runId/events', async (request) => { const { runId } = request.params as { runId: string }; return container.stores.eventTraceStore.listByRun(runId); });
+  app.get('/api/workflows/:runId/stream', async (request, reply) => { const { runId } = request.params as { runId: string }; await openSseStream(container, reply, { runId }); });
   app.get('/api/events/stream', async (request, reply) => { const query = request.query as { runId?: string; userId?: string }; await openSseStream(container, reply, { runId: query.runId, userId: query.userId }); });
   app.get('/api/events/ws', { websocket: true }, (socket, request) => { const query = request.query as { runId?: string; userId?: string }; let unsubscribe: Unsubscribe | undefined; void Promise.resolve(container.eventBus.subscribe({ runId: query.runId, userId: query.userId }, (event) => socket.send(JSON.stringify({ type: 'event', event })))).then((value) => { unsubscribe = value; }); socket.send(JSON.stringify({ type: 'connected' })); socket.on('close', () => unsubscribe?.()); });
   return app;
@@ -907,9 +889,15 @@ async function applyRevisionOperation(container: AppContainer, article: ArticleA
     await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'outline-revised', changedFields: result.changedFields, warnings: result.warnings, invalidated: invalidation, userId }, createdAt: nowIso() });
     return { article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated };
   }
-  const run = await container.engine.startWorkflow('patch-workflow', { articleId: article.id, blockId: operation.blockId, instruction: operation.instruction }, { userId, sessionId, articleId: article.id, workspaceId: article.workspaceId });
+  const patchResult = await container.runtime.invokeSkill<PatchEditorInput, PatchEditorOutput>(
+    'patch-editor',
+    { articleId: article.id, blockId: operation.blockId, instruction: operation.instruction },
+    { userId, sessionId, articleId: article.id, blockId: operation.blockId },
+  );
+  const updated = await container.stores.artifactStore.applyPatch(patchResult.patch);
+  await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, blockId: operation.blockId, reason: 'dialogue-patch-applied', userId }, createdAt: nowIso() });
   if (sessionId) await container.stores.sessionStore.updateSession(sessionId, { currentArticleId: article.id, currentWorkspaceId: article.workspaceId, currentBlockId: operation.blockId });
-  return { article, runPayload: await enrichRun(container, run.id) };
+  return { article: updated };
 }
 
 type ArticleCommentProcessResult = {
@@ -1150,13 +1138,22 @@ async function requireArticleAccess(container: AppContainer, userId: string, art
 
 async function applyAcceptedHumanGate(container: AppContainer, gate: Awaited<ReturnType<AppContainer['stores']['humanGateStore']['getGate']>>, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
   if (!gate) throw new Error('Human gate not found.');
-  if (gate.targetKind !== 'task-card') throw new Error(`Unsupported accepted HumanGate target: ${gate.targetKind}`);
   if (!gate.articleId) throw new Error('HumanGate is missing articleId.');
   const article = await container.stores.artifactStore.getArticle(gate.articleId);
-  if (!article?.taskCard) throw new Error('Article task card not found for HumanGate.');
+  if (!article) throw new Error('Article not found for HumanGate.');
   if (typeof gate.baseRevision === 'number' && article.revision !== gate.baseRevision) {
     throw new Error(`HumanGate is stale: article revision is ${article.revision}, gate was created at ${gate.baseRevision}.`);
   }
+  if (gate.targetKind === 'outline') {
+    return {
+      articleId: article.id,
+      revision: article.revision,
+      targetKind: gate.targetKind,
+      statePatch: { outlineReplacementApprovedRevision: article.revision },
+    };
+  }
+  if (gate.targetKind !== 'task-card') throw new Error(`Unsupported accepted HumanGate target: ${gate.targetKind}`);
+  if (!article.taskCard) throw new Error('Article task card not found for HumanGate.');
   const taskCardPatch = readObject(payload.taskCardPatch) ?? readObject(payload.taskCard);
   const mergedTaskCard = taskCardPatch
     ? mergeDeep(article.taskCard as unknown as Record<string, unknown>, taskCardPatch) as unknown as WritingTaskCard
@@ -1217,7 +1214,7 @@ async function openSseStream(container: AppContainer, reply: FastifyReply, filte
 }
 
 async function enrichRun(container: AppContainer, runId: string) {
-  const run = await container.engine.getRun(runId);
+  const run = await container.stores.stateStore.getRun(runId);
   if (!run) throw new Error('Run not found after execution.');
   const articleId = (run.state.draftArticle as { articleId?: string } | undefined)?.articleId ?? (run.state.finalizedTaskCard as { articleId?: string } | undefined)?.articleId ?? (run.state.outlineDraft as { articleId?: string } | undefined)?.articleId ?? (run.state.writingStarted as { articleId?: string } | undefined)?.articleId ?? (run.state.finalizedOutline as { articleId?: string } | undefined)?.articleId ?? (run.state.committedSection as { articleId?: string } | undefined)?.articleId ?? (run.state.appliedPatch as { articleId?: string } | undefined)?.articleId ?? (typeof run.metadata.articleId === 'string' ? run.metadata.articleId : undefined);
   const article = articleId ? await container.stores.artifactStore.getArticle(articleId) : undefined;

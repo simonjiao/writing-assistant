@@ -5,7 +5,7 @@
 ```text
 packages/core   纯业务内核，不依赖 Fastify/React/Redis
 packages/skills 默认 skill 实现，依赖 core 类型
-apps/api        API、SQLite store、queue driver、RAG client、container bootstrap
+apps/api        API、SQLite store、pi workflow action executor、RAG client、container bootstrap
 apps/web        UI 和 API client
 ```
 
@@ -44,16 +44,16 @@ npm run local:restart -- web
 - 不再使用临时 `npm run start`、`npm run dev`、`nohup`、手工找 PID 或一次性的 `launchctl submit` 命令启动项目服务。
 - API 和 Web 日志固定写入 `.data/logs/api.log`、`.data/logs/api.err`、`.data/logs/web.log`、`.data/logs/web.err`。
 - 后端相关代码变更后使用 `npm run local:restart -- api`；只改前端通常由 Vite 热更新处理，必要时使用 `npm run local:restart -- web`。
-- Redis 默认不启动；只有显式设置 `WORKFLOW_QUEUE_DRIVER=redis` 时，才要求本地 Redis。
+- Redis 默认不启动；当前主流程不依赖 Redis 队列。
 - `local:*` 脚本必须使用 Node 22；不要绕过 `scripts/check-node-version.cjs` 或 `package.json#engines`。
 
 ## 模块划分规范
 
 模块应围绕稳定职责划分，而不是围绕临时页面或接口堆叠。新增能力时先判断它属于哪一层，再决定文件位置。
 
-- `packages/core` 放跨端共享的领域类型、workflow/runtime 抽象、store 接口、queue/event 抽象和框架无关工具。
+- `packages/core` 放跨端共享的领域类型、pi workflow runner、allowed action planner、runtime 抽象、store 接口、event 抽象和框架无关工具。
 - `packages/skills` 放默认 agent skill；一个复杂 skill 应拆成 prompt 组装、预算/策略计算、输出归一化、质量校验和测试夹具。
-- `apps/api` 放 HTTP 路由、container/bootstrap、workflow 定义、store adapter、queue adapter、RAG client 和运行配置；这些角色不要长期混在同一个文件。
+- `apps/api` 放 HTTP 路由、container/bootstrap、pi workflow action executor、store adapter、RAG client 和运行配置；这些角色不要长期混在同一个文件。
 - `apps/web` 放页面编排、组件、hooks、API client、展示类型和样式；页面组件只做组合和状态协调，复杂展示组件应独立。
 - 跨层共享类型优先放 `packages/core`；仅 API 入参/出参使用的 DTO 留在 `apps/api`；仅 UI 展示需要的 view model 留在 `apps/web`。
 - 禁止为了省事让 `apps/web` 直接依赖 `packages/skills` 或 `apps/api` 内部模块；Web 只通过 HTTP API 使用后端能力。
@@ -72,21 +72,21 @@ npm run local:restart -- web
 - 单个文件同时出现框架适配、领域逻辑、持久化、副作用编排。
 - 单个 React 组件同时管理页面状态、网络请求、事件订阅和多个大块 UI。
 - 单个 API 文件同时包含多组资源路由、SSE/WS 逻辑和响应组装。
-- 单个 workflow 文件包含多条独立 workflow 定义，且节点 handler 已经难以快速定位。
+- 单个 workflow 文件同时包含 action planning、tool execution、HumanGate 处理和 review artifact 生成，且已经难以快速定位。
 - 新增功能需要在文件中插入大段分支逻辑，而不是复用现有抽象。
 
 拆分时按职责和分层边界移动代码：
 
-- `packages/core`：只放框架无关的类型、接口、workflow/runtime/queue/event/store 抽象和通用实现。
+- `packages/core`：只放框架无关的类型、接口、pi workflow/runtime/event/store 抽象和通用实现。
 - `packages/skills`：一个 skill 一个主要文件；`register.ts` 只负责注册，不放 skill 逻辑。
-- `apps/api`：路由、container 组装、workflow 定义、store adapter、queue adapter、RAG client 分开维护。
+- `apps/api`：路由、container 组装、pi workflow action executor、store adapter、RAG client 分开维护。
 - `apps/web`：页面编排、组件、hooks、API client、类型、样式分开维护；`App.tsx` 应偏向页面组合，不承载全部 UI 细节。
 
 典型拆分方向：
 
 - `apps/web/src/App.tsx` 继续变大时，优先拆出任务导航、任务卡工作区、大纲工作区、辅助列、对话输入区、运行进度和选择态 hooks。
 - `apps/api/src/app.ts` 继续变大时，按 sessions、workspaces、articles、workflows、dialogue、knowledge 拆路由注册文件。
-- `apps/api/src/bootstrap.ts` 继续变大时，拆出 workflow definitions、store/container factory、runtime provider factory。
+- `apps/api/src/bootstrap.ts` 继续变大时，拆出 store/container factory、runtime provider factory、workflow runner factory。
 - `packages/skills/src/section-writer.ts` 继续变大时，拆出 writing budget、continuity context、source policy validation、length/quote validation、prompt builder。
 
 拆分步骤应保守：
@@ -115,11 +115,13 @@ npm run local:restart -- web
 
 ## Workflow 规则
 
-- workflow 节点必须小而明确。
-- LLM 调用必须通过 skill。
-- wait 节点必须可 resume。
-- function 节点负责确定性副作用，如写 ArtifactStore。
-- 每个重要节点应写 EventTraceStore。
+- `writing-autopilot` 是主流程入口；不要再新增分散的任务卡/大纲/章节旧 workflow 入口。
+- Runner 每轮必须先生成 allowed actions，agent 只能从 allowed actions 中选择。
+- LLM 调用必须通过 skill 或 pi-agent decision provider；确定性写入由 action executor 执行。
+- 覆盖已有内容、确认任务卡、需要人工裁决的动作必须创建 HumanGate。
+- 工具必须幂等：稳定 operationId 已完成时不能重复改写 artifact。
+- 写 ArtifactStore 前必须校验 article revision。
+- 每个重要 action、HumanGate、review artifact 和 artifact 更新都应写 EventTraceStore。
 
 ## Store 规则
 
@@ -128,13 +130,6 @@ npm run local:restart -- web
 - ArtifactStore 是文章产物唯一可信来源。
 - StateStore 是 workflow run 唯一可信来源。
 - MemoryStore 只存用户长期偏好，不存临时上下文。
-
-## Queue 规则
-
-- local queue 只用于单进程开发。
-- redis queue 只用于多进程和部署环境的 workflow run 排队，不保存业务持久化数据。
-- async 模式下 API 不能假设 run 已完成，必须依赖状态查询和 SSE/WS。
-- worker 并发通过 `RUNNER_CONCURRENCY` 控制。
 
 ## Realtime 规则
 
@@ -146,5 +141,5 @@ npm run local:restart -- web
 
 - core：测试 workflow 执行语义。
 - skills：测试默认 skill 输出结构。
-- api：测试 REST、async queue、SQLite persistent store、HTTP RAG。
+- api：测试 REST、writing-autopilot、HumanGate、SQLite persistent store、HTTP RAG。
 - web：通过 `npm run build --workspace @wa/web` 做类型和打包检查。

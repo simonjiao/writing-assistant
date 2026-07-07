@@ -29,6 +29,13 @@ export class AllowedActionPlanner {
       return [this.action(input.run, 'ask_followup', { article, reason: '任务卡尚未确认，需要继续补充或等待用户确认。' })];
     }
     if (targetStage === 'task-card') return [];
+    if (targetStage === 'outline' && article.outline.length && shouldReplaceExistingOutline(input.run)) {
+      const approvedRevision = typeof input.run.state.outlineReplacementApprovedRevision === 'number' ? input.run.state.outlineReplacementApprovedRevision : undefined;
+      if (approvedRevision !== article.revision) {
+        return [this.action(input.run, 'request_human_gate', { article, reason: '重新生成大纲会覆盖当前大纲并清空已有正文，需要用户确认。', requiresHumanGate: true })];
+      }
+      return [this.action(input.run, 'plan_outline', { article, reason: '用户已确认覆盖当前大纲，重新生成大纲。' })];
+    }
     if (!article.outline.length) {
       return [this.action(input.run, 'plan_outline', { article, reason: '任务卡已确认，尚未生成大纲。' })];
     }
@@ -61,7 +68,7 @@ export class AllowedActionPlanner {
       .find((section) => section.status !== 'draft' && !writtenSectionIds.has(section.id));
   }
 
-  private action(run: WorkflowRun, type: AllowedActionType, input: { article?: ArticleArtifact; section?: OutlineItem; reason: string }): AllowedAction {
+  private action(run: WorkflowRun, type: AllowedActionType, input: { article?: ArticleArtifact; section?: OutlineItem; reason: string; requiresHumanGate?: boolean }): AllowedAction {
     const baseRevision = input.article?.revision;
     const sectionId = input.section?.id;
     const operationId = stableActionId('op', { runId: run.id, workflowId: run.workflowId, type, articleId: input.article?.id, sectionId, baseRevision });
@@ -72,7 +79,7 @@ export class AllowedActionPlanner {
       articleId: input.article?.id,
       sectionId,
       baseRevision,
-      requiresHumanGate: false,
+      requiresHumanGate: input.requiresHumanGate ?? false,
       reason: input.reason,
     };
   }
@@ -88,4 +95,9 @@ function readTargetStage(input: unknown): 'task-card' | 'outline' | 'section' | 
     if (value === 'task-card' || value === 'outline' || value === 'section' || value === 'article') return value;
   }
   return 'article';
+}
+
+function shouldReplaceExistingOutline(run: WorkflowRun): boolean {
+  if (run.state.outlineResult) return false;
+  return Boolean(run.input && typeof run.input === 'object' && (run.input as { replaceExisting?: unknown }).replaceExisting === true);
 }

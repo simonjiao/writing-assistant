@@ -4,46 +4,29 @@
 
 ```bash
 cp .env.example .env
+nvm use
 npm install
 npm run build
 npm run test
-npm run dev
+npm run local:start
 ```
 
-前端：
+状态检查：
 
 ```bash
-npm run dev:web
+npm run local:status
 ```
 
 ## 推荐本地配置
 
 ```bash
-WORKFLOW_EXECUTION_MODE=async
-WORKFLOW_QUEUE_DRIVER=local
-ENABLE_WORKERS=true
-RUNNER_CONCURRENCY=2
 RAG_PROVIDER=local
 LLM_PROVIDER=mock
 ```
 
-## Redis 队列测试
+## Workflow Runtime 检查
 
-启动 Redis：
-
-```bash
-docker run --rm -p 6379:6379 redis:7-alpine
-```
-
-`.env`：
-
-```bash
-WORKFLOW_EXECUTION_MODE=async
-WORKFLOW_QUEUE_DRIVER=redis
-REDIS_URL=redis://localhost:6379
-```
-
-启动 API 后检查：
+当前 workflow runtime 是 pi-agent，不依赖 Redis 队列。启动 API 后检查：
 
 ```bash
 curl http://localhost:8787/api/queue/status
@@ -87,7 +70,7 @@ curl -s -X POST http://localhost:8787/api/knowledge/search \
 先启动一个 workflow，拿到 `run.id`，然后：
 
 ```bash
-curl -N http://localhost:8787/api/runs/<runId>/stream
+curl -N http://localhost:8787/api/workflows/<runId>/stream
 ```
 
 ## WebSocket 测试
@@ -107,9 +90,6 @@ docker compose up --build
 默认使用：
 
 ```bash
-WORKFLOW_EXECUTION_MODE=async
-WORKFLOW_QUEUE_DRIVER=redis
-REDIS_URL=redis://redis:6379
 LLM_PROVIDER=mock
 RAG_PROVIDER=local
 ```
@@ -126,4 +106,4 @@ npm run test
 
 - TypeScript build：core / skills / api / web
 - Unit tests：core / skills
-- API tests：health、inline workflow、async local queue、SQLite persistent store、HTTP RAG
+- API tests：health、writing-autopilot、HumanGate、SQLite persistent store、HTTP RAG

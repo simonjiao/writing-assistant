@@ -8,7 +8,7 @@
 
 ## 作用
 
-AgentRuntime 是 workflow 节点内部的执行环境。它负责：
+AgentRuntime 是 skill 执行环境。pi workflow action executor、对话接口和批注处理会通过它调用具体 skill。它负责：
 
 1. 从 SkillRegistry 加载 skill。
 2. 调用 ContextBuilder 组装上下文。
@@ -19,12 +19,12 @@ AgentRuntime 是 workflow 节点内部的执行环境。它负责：
 ## Skill Invocation
 
 ```text
-WorkflowRunner
+PiWorkflowActionExecutor / API route
   → AgentRuntime.invokeSkill(skillId, input)
   → SkillRegistry.get(skillId)
   → ContextBuilder.build(...)
   → LLMProvider.json/chat(...)
-  → NodeResult
+  → Skill output
 ```
 
 ## Context Assembly

@@ -184,14 +184,11 @@ export function App() {
   }, [visibleArticle]);
   const selectedWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === selectedWorkspaceId), [selectedWorkspaceId, workspaces]);
   const selectedProfile = useMemo(() => domainProfiles.find((profile) => profile.id === selectedProfileId), [domainProfiles, selectedProfileId]);
-  const patchPreview = (lastRun?.run.state.patchResult as { patch?: { before: string; after: string; changeSummary: string[] } } | undefined)?.patch;
   const status = lastRun ? runStatusLabel(lastRun.run, liveEvents) : '就绪';
   const canGenerateOutline = visibleArticle?.taskCard?.status === 'confirmed';
   const taskCardConfirmed = visibleArticle?.taskCard?.status === 'confirmed';
   const taskCardDraft = visibleArticle?.taskCard?.status === 'draft';
   const pendingTaskCardGate = lastRun?.humanGates?.find((gate) => gate.status === 'pending' && gate.targetKind === 'task-card' && (!visibleArticle || gate.articleId === visibleArticle.id));
-  const taskCardConfirmationRunId = lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-task-card-confirm' ? lastRun.run.id : undefined;
-  const writingStartRunId = lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-writing-start' ? lastRun.run.id : undefined;
   const canStartWriting = Boolean(visibleArticle?.outline.length && visibleArticle.outline.some((item) => item.status !== 'confirmed'));
   const canDeleteWorkspace = Boolean(selectedWorkspace && !selectedWorkspace.isDefault && selectedWorkspace.userId === userId);
   const canSubmitTaskCardMessage = Boolean(activeTaskCardMessage.trim() && (taskCardDialogTarget === 'current' || selectedWorkspaceId));
@@ -216,9 +213,7 @@ export function App() {
       setSelectedWorkspaceId((current) => (!article || article.id === updatedArticle.id || taskCardDialogTarget === 'new') ? updatedArticle.workspaceId : current);
       void refreshArticleSummaries(response.article.workspaceId).catch((err) => setError(err instanceof Error ? err.message : String(err)));
     }
-    if (response.run.workflowId === 'section-writing-workflow') {
-      setSectionGeneration((current) => current ? { ...current, runId: response.run.id, status: response.run.status, error: response.run.error } : current);
-    }
+    setSectionGeneration((current) => current && (!current.runId || current.runId === response.run.id) ? { ...current, runId: response.run.id, status: response.run.status, error: response.run.error } : current);
     if (terminalStatuses.has(response.run.status)) {
       setBusy(false);
       if (response.run.status === 'failed' && response.run.error) setError(userFacingRunError(response.run.error));
@@ -448,7 +443,7 @@ export function App() {
   async function applyOutlineRegeneration() {
     if (!visibleArticle) return;
     setOutlineRegenerationWarningOpen(false);
-    await execute(() => api.startWritingWorkflow({ articleId: visibleArticle.id, targetStage: 'outline', userId, sessionId, message: '重新生成大纲' }));
+    await execute(() => api.startWritingWorkflow({ articleId: visibleArticle.id, targetStage: 'outline', replaceExisting: true, userId, sessionId, message: '重新生成大纲' }));
   }
   function updateNavigationCollapsed(collapsed: boolean) {
     setNavigationCollapsed(collapsed);
@@ -738,10 +733,6 @@ export function App() {
       await execute(() => api.resolveHumanGate(pendingTaskCardGate.runId, pendingTaskCardGate.id, { userId, decision: 'accept' }));
       return;
     }
-    if (taskCardConfirmationRunId) {
-      await execute(() => api.resume(taskCardConfirmationRunId, { decision: 'confirm' }));
-      return;
-    }
     setBusy(true);
     setError(undefined);
     try {
@@ -757,10 +748,6 @@ export function App() {
   }
   async function startWriting() {
     if (!visibleArticle?.outline.length) return;
-    if (writingStartRunId) {
-      await execute(() => api.resume(writingStartRunId, { decision: 'start-writing' }));
-      return;
-    }
     setBusy(true);
     setError(undefined);
     try {
@@ -861,7 +848,7 @@ export function App() {
           </>}
         </aside> : null}
       </main>
-      {visibleArticle && selectedBlockId ? <footer className="chatbar"><div className="patch-box"><strong>局部修改</strong><input value={patchInstruction} onChange={(event) => setPatchInstruction(event.target.value)} placeholder="输入对选中段落的修改意见" /><button disabled={writeBusy} onClick={() => execute(() => api.startPatch(visibleArticle.id, selectedBlockId, patchInstruction, userId, sessionId))}>生成 Patch</button>{lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-patch-confirm' && <button disabled={writeBusy} onClick={() => execute(() => api.resume(lastRun.run.id, { decision: 'accept' }))}>应用 Patch</button>}</div>{patchPreview && <div className="patch-preview"><strong>Patch 预览</strong><div className="diff-grid"><pre>{patchPreview.before}</pre><pre>{patchPreview.after}</pre></div><ul>{patchPreview.changeSummary.map((item) => <li key={item}>{item}</li>)}</ul></div>}</footer> : null}
+      {visibleArticle && selectedBlockId ? <footer className="chatbar"><div className="patch-box"><strong>局部修改</strong><input value={patchInstruction} onChange={(event) => setPatchInstruction(event.target.value)} placeholder="输入对选中段落的修改意见" /><button disabled={writeBusy || !patchInstruction.trim()} onClick={() => void sendDialogueMessage(patchInstruction)}>发送修改意见</button></div></footer> : null}
       {workspaceModalOpen && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="workspace-modal-title"><div className="modal-head"><h2 id="workspace-modal-title">新建工作台</h2><button aria-label="关闭" className="icon-button" disabled={busy} onClick={() => setWorkspaceModalOpen(false)}>×</button></div><div className="modal-body"><label>名称</label><input value={newWorkspaceName} autoFocus onChange={(event) => setNewWorkspaceName(event.target.value)} placeholder="新工作台名称" /><label>协作者</label><input value={newWorkspaceMembers} onChange={(event) => setNewWorkspaceMembers(event.target.value)} placeholder="协作者 userId，用逗号分隔" /></div><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setWorkspaceModalOpen(false)}>取消</button><button disabled={busy || !newWorkspaceName.trim()} onClick={() => void createWorkspace()}>创建</button></div></div></div>}
       {outlineRegenerationWarningOpen && visibleArticle ? <div className="modal-backdrop" role="presentation"><div className="modal warning-modal" role="dialog" aria-modal="true" aria-labelledby="outline-regeneration-title"><div className="modal-head"><h2 id="outline-regeneration-title">重新生成大纲？</h2><button aria-label="关闭" className="icon-button" disabled={busy} onClick={() => setOutlineRegenerationWarningOpen(false)}>×</button></div><div className="modal-body"><p className="modal-warning-text">重新生成会替换当前 {visibleArticle.outline.length} 个大纲项，并清空已经生成的 {visibleArticle.blocks.length} 段正文。旧正文批注会保留在后台历史里，但不会继续显示在当前正文批注区。</p><p className="modal-secondary-text">如果只是调整某一节或少量内容，建议选中大纲项后通过对话提出修改意见。</p></div><div className="modal-actions"><button className="secondary-button" disabled={busy} onClick={() => setOutlineRegenerationWarningOpen(false)}>取消</button><button className="danger-button" disabled={writeBusy} onClick={() => void applyOutlineRegeneration()}>确认重新生成</button></div></div></div> : null}
     </div>
@@ -1430,11 +1417,17 @@ function taskStatusLabel(value?: string): string {
 
 function runStatusLabel(run: WorkflowRun, events: AgentEvent[]): string {
   if (run.status === 'failed') return '处理失败';
-  if (run.status === 'waiting') return run.waitingFor?.nodeId === 'wait-writing-start' ? '等待开始写作' : '等待确认';
+  if (run.status === 'waiting') return waitingStatusLabel(run.waitingFor?.reason);
   if (run.status === 'completed') return '处理完成';
   if (run.status === 'queued') return '等待处理';
   const latest = friendlyProgressEvents(events, run).at(-1);
   return latest?.label ?? '处理中';
+}
+
+function waitingStatusLabel(reason?: string): string {
+  if (reason?.includes('开始写作')) return '等待开始写作';
+  if (reason?.includes('确认')) return '等待确认';
+  return '等待用户处理';
 }
 
 function sectionGenerationStage(progress: SectionGenerationState, events: AgentEvent[]): { title: string; detail: string; percent: number; tone: 'active' | 'done' | 'failed' } {
@@ -1471,7 +1464,7 @@ function friendlyEventLabel(event: AgentEvent): string | undefined {
   if (event.type === 'skill.started') return skillProgressLabel(skillId, 'started');
   if (event.type === 'skill.completed') return skillProgressLabel(skillId, 'completed');
   if (event.type === 'artifact.updated') return artifactProgressLabel(reason);
-  if (event.type === 'workflow.waiting' || event.type === 'review.required') return event.payload?.nodeId === 'wait-writing-start' ? '等待开始写作' : '等待确认';
+  if (event.type === 'workflow.waiting' || event.type === 'review.required') return waitingStatusLabel(typeof event.payload?.reason === 'string' ? event.payload.reason : undefined);
   if (event.type === 'workflow.completed' || event.type === 'queue.completed') return '处理完成';
   if (event.type === 'workflow.failed' || event.type === 'queue.failed') return '处理失败';
   return undefined;

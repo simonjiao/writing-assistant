@@ -30,10 +30,7 @@
 ```mermaid
 flowchart TB
   UI[Web UI] --> API[Writing Workflow API]
-  API --> Engine[WorkflowEngine]
-  Engine --> Queue[WorkflowQueue]
-  Queue --> Runner[PiWorkflowRunner]
-  Engine --> Runner
+  API --> Runner[PiWorkflowRunner]
   Runner --> Session[PiAgentSessionStore]
   Runner --> Planner[AllowedActionPlanner]
   Runner --> Agent[Pi Agent]
@@ -119,7 +116,7 @@ WorkflowPolicy {
 }
 ```
 
-`WorkflowEngine` 仍负责创建 run、取消 run、入队和查询。`PiWorkflowRunner` 不再按固定 `next` 节点推进，而是反复执行：
+API 负责创建、取消和查询 `writing-autopilot` run；`PiWorkflowRunner` 不再按固定 `next` 节点推进，而是反复执行：
 
 1. 读取 run、article、workspace、user、pi session。
 2. 计算 `allowedActions`。
@@ -415,4 +412,3 @@ decision 和工具调用都需要进入 operation/event 记录，便于调试和
 - 覆盖已有大纲或正文时进入 HumanGate，不直接写入。
 - 重试同一个 operationId 不重复写入。
 - revision 冲突会阻止写入。
-

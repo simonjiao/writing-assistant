@@ -9,7 +9,11 @@
 | MemoryStore | 用户长期写作偏好 |
 | ArtifactStore | 任务卡、大纲、正文 block、引用、版本 |
 | KnowledgeStore | 本地知识、通用 HTTP RAG 或 Tonglingyu retriever 检索结果 |
-| EventTraceStore | workflow、queue、RAG、artifact 事件日志 |
+| PiAgentSessionStore | pi-agent workflow 会话状态 |
+| HumanGateStore | 人工确认点 |
+| WorkflowOperationStore | 幂等工具调用记录 |
+| ReviewArtifactStore | 一致性检查和统稿报告 |
+| EventTraceStore | workflow、tool、HumanGate、review、RAG、artifact 事件日志 |
 
 ## Store Driver
 
@@ -27,12 +31,14 @@ DATA_DIR=.data
 - StateStore
 - MemoryStore
 - ArtifactStore
+- PiAgentSessionStore
+- HumanGateStore
+- WorkflowOperationStore
+- ReviewArtifactStore
 - 本地 KnowledgeStore
 - EventTraceStore
 
 注意：本实现使用 Node 22 内置 `node:sqlite`。运行时可能出现 ExperimentalWarning，不影响本地使用。
-
-Redis 不作为持久化 Store 使用；它只用于可选的 `RedisWorkflowQueue`。
 
 ## HTTP RAG KnowledgeStore
 

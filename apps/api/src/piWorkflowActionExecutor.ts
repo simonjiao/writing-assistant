@@ -55,6 +55,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     if (action.type === 'create_task_card_draft') return this.createTaskCardDraft(run, action);
     if (action.type === 'ask_followup') return this.requestTaskCardGate(run, action);
     if (action.type === 'plan_outline') return this.planOutline(run, action);
+    if (action.type === 'request_human_gate') return this.requestHumanGate(run, action);
     if (action.type === 'review_task_card_outline_consistency') return this.reviewTaskCardOutlineConsistency(run, action);
     if (action.type === 'write_next_section' || action.type === 'write_section') return this.writeSection(run, action);
     if (action.type === 'generate_polish_report') return this.generatePolishReport(run, action);
@@ -112,6 +113,22 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     await this.deps.stores.stateStore.updateRun(run.id, { state: { ...run.state, outlineResult: result }, metadata: { ...run.metadata, articleId: article.id, workspaceId: article.workspaceId }, updatedAt: nowIso() });
     await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'artifact.updated', payload: { articleId: article.id, reason: 'pi-outline-planned', userId: run.metadata.userId }, createdAt: nowIso() });
     return { article: updated, summary: result.summary };
+  }
+
+  private async requestHumanGate(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
+    const article = await this.requireArticle(action.articleId);
+    if (!article.outline.length) throw new Error('Outline overwrite gate requires an existing outline.');
+    const gate = await this.createGate(run, action, {
+      targetKind: 'outline',
+      question: `重新生成大纲会替换当前 ${article.outline.length} 个大纲项，并清空已经生成的 ${article.blocks.length} 段正文。确认继续？`,
+      options: [
+        { id: 'replace_outline', label: '确认重新生成' },
+        { id: 'keep_outline', label: '保留当前大纲' },
+      ],
+      baseRevision: article.revision,
+    });
+    await this.deps.stores.stateStore.updateRun(run.id, { status: 'waiting', waitingFor: { nodeId: 'human-gate', reason: gate.question }, state: { ...run.state, pendingHumanGateId: gate.id }, updatedAt: nowIso() });
+    return { article, summary: gate.question };
   }
 
   private async reviewTaskCardOutlineConsistency(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {

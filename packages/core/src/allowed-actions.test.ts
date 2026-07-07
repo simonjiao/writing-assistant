@@ -3,12 +3,12 @@ import { AllowedActionPlanner, type ArticleArtifact, type WorkflowRun } from './
 
 const now = '2026-07-07T00:00:00.000Z';
 
-function run(state: WorkflowRun['state'] = {}): WorkflowRun {
+function run(state: WorkflowRun['state'] = {}, input: WorkflowRun['input'] = {}): WorkflowRun {
   return {
     id: 'run_1',
     workflowId: 'writing-autopilot',
     status: 'running',
-    input: {},
+    input,
     state,
     metadata: { userId: 'u1', articleId: 'art_1', workspaceId: 'wsp_1' },
     history: [],
@@ -80,5 +80,26 @@ describe('AllowedActionPlanner', () => {
     expect(actions).toHaveLength(1);
     expect(actions[0].type).toBe('write_next_section');
     expect(actions[0].sectionId).toBe('sec_1');
+  });
+
+  it('requires a human gate before replacing an existing outline', () => {
+    const planner = new AllowedActionPlanner();
+    const actions = planner.plan({
+      run: run({}, { targetStage: 'outline', replaceExisting: true }),
+      article: article({
+        outline: [{ id: 'sec_1', title: '旧大纲', goal: '旧目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }],
+      }),
+    });
+    expect(actions).toHaveLength(1);
+    expect(actions[0].type).toBe('request_human_gate');
+    expect(actions[0].requiresHumanGate).toBe(true);
+
+    const approved = planner.plan({
+      run: run({ outlineReplacementApprovedRevision: 3 }, { targetStage: 'outline', replaceExisting: true }),
+      article: article({
+        outline: [{ id: 'sec_1', title: '旧大纲', goal: '旧目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }],
+      }),
+    });
+    expect(approved[0].type).toBe('plan_outline');
   });
 });

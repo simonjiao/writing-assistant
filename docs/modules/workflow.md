@@ -2,45 +2,38 @@
 
 ## 文件
 
-- `packages/core/src/workflow.ts`
-- `packages/core/src/queue.ts`
-- `apps/api/src/queue/redisWorkflowQueue.ts`
+- `packages/core/src/pi-workflow-runner.ts`
+- `packages/core/src/allowed-actions.ts`
+- `packages/core/src/pi-agent-decision.ts`
+- `apps/api/src/piWorkflowActionExecutor.ts`
 
 ## 作用
 
-Workflow 模块负责把写作流程拆成可恢复、可暂停、可追踪的节点图。
+Workflow 模块以 `writing-autopilot` 为主流程。Runner 每轮读取 run、article、pi session、HumanGate 和 review artifact，生成当前允许的 `allowedActions`，再让 pi-agent 在这些动作里选择下一步。工具执行结果写入 operation log，所有覆盖性动作必须经过独立建模的 HumanGate。
 
 ## 核心对象
 
 | 对象 | 说明 |
 |---|---|
-| WorkflowDefinition | 静态流程定义，包含 nodes、startNodeId |
-| WorkflowEngine | 注册 workflow，启动/resume/cancel run，可将 run 入队 |
-| WorkflowRunner | 执行某个 run 的节点直到完成或等待用户 |
-| WorkflowQueue | 异步执行队列接口 |
-| LocalWorkflowQueue | 单进程内存队列 |
-| RedisWorkflowQueue | Redis list 队列，支持多进程消费 |
-| WorkflowWorkerPool | 多 runner 并发 worker pool |
-
-## 节点类型
-
-| kind | 说明 |
-|---|---|
-| skill | 调用 AgentRuntime.invokeSkill |
-| function | 执行业务函数，如创建文章、提交版本 |
-| wait | 暂停并等待用户确认 |
+| PiWorkflowRunner | 推进 `writing-autopilot`，每轮计算 allowed actions、调用 pi-agent decision、执行工具或进入等待 |
+| AllowedActionPlanner | 根据任务卡、大纲、正文、revision 和 targetStage 生成单步可执行动作 |
+| PiAgentSession | 保存每个 run 的 agent 会话状态、消息、base revision 和 pending gate |
+| WorkflowOperation | 幂等工具调用记录，使用稳定 operationId 防止重复写入 |
+| HumanGate | 用户确认模型，用于任务卡确认、大纲覆盖等需要人工裁决的步骤 |
+| ReviewArtifact | 一致性检查和统稿报告的结构化结果 |
 
 ## 典型状态
 
 ```text
-queued → running → waiting → queued/running → completed
-queued → running → failed
-running → cancelled
+running -> waiting -> running -> completed
+running -> failed
+running -> cancelled
 ```
 
 ## 设计约束
 
-- Runner 不决定全局调度，只执行当前 run。
-- Engine 不直接拼 prompt，也不直接调用 LLM。
-- wait 节点必须保存 checkpoint，用户 resume 后继续。
-- async 模式下 API 返回 queued/running/waiting 都是合理状态，前端依赖 SSE/WS 跟踪最终状态。
+- 前端按钮只发送 intent，例如 `targetStage=outline` 或 `targetStage=section`。
+- Runner 是流程真相来源，不保留分散的任务卡、大纲、章节旧 workflow 入口。
+- 工具必须幂等；同一 operationId 已完成时不能重复改写 artifact。
+- 覆盖当前大纲、确认任务卡等用户裁决点必须生成 HumanGate。
+- 修改 artifact 时要校验 article revision，防止过期操作覆盖新内容。
