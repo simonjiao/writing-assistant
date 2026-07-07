@@ -1309,6 +1309,115 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   font-size: 12px;
   line-height: 1.45;
 }
+.workflow-support-card {
+  display: grid;
+  gap: 10px;
+}
+.workflow-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.workflow-card-head h3 {
+  margin: 0;
+}
+.workflow-card-head span {
+  color: #6f665b;
+  font-size: 12px;
+}
+.workflow-next-step {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid #ded8cd;
+  border-radius: 10px;
+  background: #fffdf8;
+}
+.workflow-next-step span,
+.workflow-operation span,
+.workflow-finding span {
+  color: #6f665b;
+  font-size: 11px;
+}
+.workflow-next-step strong {
+  font-size: 13px;
+}
+.workflow-next-step p,
+.workflow-gate p {
+  margin: 0;
+  color: #2f3742;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.workflow-section {
+  display: grid;
+  gap: 7px;
+}
+.workflow-section h4 {
+  margin: 0;
+}
+.workflow-gate,
+.workflow-finding,
+.workflow-suggestion,
+.workflow-operation {
+  padding: 7px 8px;
+  border: 1px solid #eee6da;
+  border-radius: 8px;
+  background: #fffdf8;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.workflow-gate {
+  display: grid;
+  gap: 7px;
+}
+.workflow-gate-options,
+.workflow-gate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.workflow-gate-options span {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #f0e8dc;
+  color: #4d5966;
+  font-size: 11px;
+}
+.workflow-gate-actions {
+  justify-content: flex-end;
+}
+.workflow-findings,
+.workflow-suggestions,
+.workflow-operations {
+  display: grid;
+  gap: 6px;
+}
+.workflow-finding {
+  display: grid;
+  gap: 2px;
+}
+.workflow-finding.severity-blocking {
+  border-color: #e2b8a8;
+  background: #fff7f3;
+}
+.workflow-finding.severity-warning {
+  border-color: #e4d4a8;
+  background: #fffaf0;
+}
+.workflow-operation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.workflow-operation strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .block {
   border: 1px solid #d8c8aa;
   background: #fff8e7;

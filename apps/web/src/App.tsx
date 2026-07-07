@@ -1,6 +1,7 @@
 import { type CSSProperties, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, ArticleSummary, DialogueBriefStatus, DialogueContextKind, DialogueMessage, DialogueResponse, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RevisionOperation, RevisionProposal, RunResponse, TaskCardFollowUpPrompt, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
+import { WorkflowSupportCard } from './WorkflowSupportCard';
 
 const userId = 'demo-user';
 const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']);
@@ -746,6 +747,9 @@ export function App() {
       setBusy(false);
     }
   }
+  async function resolveWorkflowHumanGate(gate: NonNullable<RunResponse['humanGates']>[number], decision: 'accept' | 'reject') {
+    await execute(() => api.resolveHumanGate(gate.runId, gate.id, { userId, decision }));
+  }
   async function startWriting() {
     if (!visibleArticle?.outline.length) return;
     setBusy(true);
@@ -813,6 +817,7 @@ export function App() {
           })}</div> : null}
           <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} comments={visibleComments} commentDraft={commentDraft} commentReplyDrafts={commentReplyDrafts} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} onUpdateCommentReplyDraft={updateCommentReplyDraft} onSubmitCommentReply={(commentId) => void submitArticleCommentReply(commentId)} onDeleteComment={(commentId) => void deleteArticleComment(commentId)} onDeleteCommentReply={(commentId, replyId) => void deleteArticleCommentReply(commentId, replyId)} busy={busy} />)}</div>
           {!outlineGenerated ? <div className="editor-support">
+            {lastRun ? <WorkflowSupportCard runResponse={lastRun} busy={writeBusy} onResolveHumanGate={resolveWorkflowHumanGate} /> : null}
             {visibleArticle ? <CommentReviewCard comments={visibleComments} processingSummary={commentProcessingSummary} busy={writeBusy} onProcess={() => void processArticleComments()} /> : null}
             {visibleArticle ? <DialogueBriefCard status={dialogueBriefStatus} /> : null}
             {visibleArticle ? <KnowledgeTagsCard article={visibleArticle} selectedOutline={selectedOutline} outlineWholeSelected={outlineWholeSelected} selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
@@ -840,6 +845,7 @@ export function App() {
               <button aria-label="收起辅助列" className="right-column-collapse-handle" disabled={busy} title="收起辅助列" onClick={() => updateSupportColumnCollapsed(true)}>&gt;</button>
             </div>
             <div className="right-support-content">
+              {lastRun ? <WorkflowSupportCard runResponse={lastRun} busy={writeBusy} onResolveHumanGate={resolveWorkflowHumanGate} /> : null}
               {visibleArticle ? <CommentReviewCard comments={visibleComments} processingSummary={commentProcessingSummary} busy={writeBusy} onProcess={() => void processArticleComments()} /> : null}
               {visibleArticle ? <DialogueBriefCard status={dialogueBriefStatus} /> : null}
               {visibleArticle ? <KnowledgeTagsCard article={visibleArticle} selectedOutline={selectedOutline} outlineWholeSelected={outlineWholeSelected} selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
