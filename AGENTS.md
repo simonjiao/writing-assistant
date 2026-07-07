@@ -15,6 +15,7 @@ This file applies to the whole repository.
 ## Layer References
 
 - Product and architecture: `docs/product-definition.md`, `docs/product-architecture.md`, `docs/technical-architecture.md`
+- Target pi-agent workflow runner redesign: `docs/pi-agent-workflow-runner-design.md`
 - API layer: `docs/modules/api.md`
 - Frontend layer: `docs/modules/frontend.md`
 - Workflow layer: `docs/modules/workflow.md`
