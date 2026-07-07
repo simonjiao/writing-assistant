@@ -211,27 +211,6 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const updatedArticle = await container.stores.artifactStore.getArticle(updated.id);
     return { article: updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle, summary: result.summary, changedFields: result.changedFields };
   });
-  app.post('/api/articles/:articleId/task-card/confirm', async (request, reply) => {
-    const { articleId } = request.params as { articleId: string };
-    const body = (request.body ?? {}) as { userId?: string; sessionId?: string };
-    const userId = readRequestUserId(request, body.userId);
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
-    const access = await requireArticleAccess(container, userId, articleId);
-    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
-    const article = access.article;
-    if (!article.taskCard) return reply.code(400).send({ error: 'Article has no task card to confirm.' });
-    const taskCardForConfirm = article.taskCard.status === 'confirmed' ? article.taskCard : { ...article.taskCard, status: 'confirmed' as const, updatedAt: nowIso() };
-    const normalized = normalizeTaskCardPolicies(taskCardForConfirm);
-    if (article.taskCard.status !== 'confirmed' || normalized.changed) {
-      article.taskCard = normalized.taskCard;
-      await container.stores.artifactStore.updateArticle(article);
-      await container.stores.artifactStore.commitVersion(article.id, '确认任务卡', 'user');
-      await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'task-card-confirmed', userId }, createdAt: nowIso() });
-    }
-    if (body.sessionId) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: article.id, currentWorkspaceId: article.workspaceId });
-    const updatedArticle = await container.stores.artifactStore.getArticle(article.id);
-    return updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle;
-  });
   app.patch('/api/articles/:articleId/outline/:sectionId', async (request, reply) => {
     const { articleId, sectionId } = request.params as { articleId: string; sectionId: string };
     const body = request.body as { title?: string; goal?: string; userId?: string };
@@ -455,16 +434,18 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const workspaceId = articleAccess?.article.workspaceId ?? body.workspaceId?.trim() ?? (await ensureDefaultWorkspace(container, userId)).id;
     const workspace = await requireWorkspaceAccess(container, userId, workspaceId);
     if (!workspace) return reply.code(403).send({ error: 'Workspace access required.' });
-    const pendingWorkflowRun = articleAccess?.article ? await findPendingWorkflowProposalRun(container, articleAccess.article.id, userId) : undefined;
-    if (pendingWorkflowRun) {
+    const pendingGateRun = articleAccess?.article ? await findPendingWorkflowHumanGateRun(container, articleAccess.article.id, userId) : undefined;
+    if (pendingGateRun) return enrichRun(container, pendingGateRun.id);
+    const pendingProposalRun = articleAccess?.article ? await findPendingWorkflowProposalRun(container, articleAccess.article.id, userId) : undefined;
+    if (pendingProposalRun) {
       const message = body.message?.trim();
       if (message) {
-        await appendWorkflowUserMessage(container, pendingWorkflowRun, message);
-        await container.stores.eventTraceStore.append({ id: newId('evt'), runId: pendingWorkflowRun.id, type: 'pi.session.updated', payload: { userId, reason: 'workflow-user-message' }, createdAt: nowIso() });
-        const pendingProposalRun = await handleWorkflowPendingProposalMessage(container, pendingWorkflowRun, message, userId);
-        if (pendingProposalRun) return pendingProposalRun;
+        await appendWorkflowUserMessage(container, pendingProposalRun, message);
+        await container.stores.eventTraceStore.append({ id: newId('evt'), runId: pendingProposalRun.id, type: 'pi.session.updated', payload: { userId, reason: 'workflow-user-message' }, createdAt: nowIso() });
+        const refreshedProposalRun = await handleWorkflowPendingProposalMessage(container, pendingProposalRun, message, userId);
+        if (refreshedProposalRun) return refreshedProposalRun;
       }
-      return enrichRun(container, pendingWorkflowRun.id);
+      return enrichRun(container, pendingProposalRun.id);
     }
     let domainContext: ReturnType<typeof resolveDomainProfileSelection> | undefined;
     let writingStandard: ReturnType<typeof resolveWritingStandardSelection> | undefined;
@@ -795,6 +776,19 @@ function proposalForDialogue(proposal: RevisionProposal): DialogueCoordinatorInp
     operations: proposal.operations,
     warnings: proposal.warnings,
   };
+}
+
+async function findPendingWorkflowHumanGateRun(container: AppContainer, articleId: string, userId: string): Promise<WorkflowRun | undefined> {
+  const gates = (await container.stores.humanGateStore.listGates({ articleId, userId, statuses: ['pending'] }))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  for (const gate of gates) {
+    const run = await container.stores.stateStore.getRun(gate.runId);
+    if (!run || run.workflowId !== WRITING_AUTOPILOT_POLICY.id) continue;
+    if (run.metadata.userId !== userId || run.metadata.articleId !== articleId) continue;
+    if (run.status === 'completed' || run.status === 'cancelled' || run.status === 'failed') continue;
+    return run;
+  }
+  return undefined;
 }
 
 async function findPendingWorkflowProposalRun(container: AppContainer, articleId: string, userId: string): Promise<WorkflowRun | undefined> {

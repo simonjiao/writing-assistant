@@ -982,7 +982,7 @@ describe('api app', () => {
     await app.close();
   });
 
-  it('confirms a draft task card through the article API', async () => {
+  it('confirms a draft task card through workflow HumanGate', async () => {
     const config = testConfig();
     const container = createContainer(config);
     const app = createApp(config, container);
@@ -1003,11 +1003,33 @@ describe('api app', () => {
     };
     const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'confirm-user', name: '确认工作台' });
     const article = await container.stores.artifactStore.createArticle({ userId: 'confirm-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
-    const response = await app.inject({ method: 'POST', url: `/api/articles/${article.id}/task-card/confirm`, payload: { userId: 'confirm-user' } });
+    const started = await app.inject({
+      method: 'POST',
+      url: '/api/workflows/writing/start',
+      payload: { userId: 'confirm-user', articleId: article.id, targetStage: 'task-card', message: '确认任务卡' },
+    });
+    expect(started.statusCode).toBe(200);
+    const startedBody = started.json();
+    expect(startedBody.run.status).toBe('waiting');
+    expect(startedBody.humanGates[0]).toMatchObject({ articleId: article.id, targetKind: 'task-card', status: 'pending' });
+    const repeatedStart = await app.inject({
+      method: 'POST',
+      url: '/api/workflows/writing/start',
+      payload: { userId: 'confirm-user', articleId: article.id, targetStage: 'task-card', message: '确认任务卡' },
+    });
+    expect(repeatedStart.statusCode).toBe(200);
+    expect(repeatedStart.json().run.id).toBe(startedBody.run.id);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${startedBody.run.id}/human-gates/${startedBody.humanGates[0].id}/resolve`,
+      payload: { userId: 'confirm-user', decision: 'accept' },
+    });
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body.taskCard.status).toBe('confirmed');
-    expect(body.versions[body.versions.length - 1].reason).toBe('确认任务卡');
+    expect(body.run.status).toBe('completed');
+    expect(body.article.taskCard.status).toBe('confirmed');
+    expect(body.article.versions.at(-1).reason).toBe('HumanGate 确认任务卡');
     await app.close();
   });
 

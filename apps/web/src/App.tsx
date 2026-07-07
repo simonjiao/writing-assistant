@@ -776,22 +776,18 @@ export function App() {
   }
   async function confirmTaskCard() {
     if (!visibleArticle?.taskCard) return;
-    if (pendingTaskCardGate) {
-      await execute(() => api.resolveHumanGate(pendingTaskCardGate.runId, pendingTaskCardGate.id, { userId, decision: 'accept' }));
+    const articleId = visibleArticle.id;
+    const resolveGate = async (gate: NonNullable<RunResponse['humanGates']>[number]) => {
+      await execute(() => api.resolveHumanGate(gate.runId, gate.id, { userId, decision: 'accept' }));
+    };
+    if (pendingTaskCardGate) return resolveGate(pendingTaskCardGate);
+    const started = await execute(() => api.startWritingWorkflow({ articleId, targetStage: 'task-card', userId, sessionId, message: '确认任务卡' }));
+    const gate = started?.humanGates?.find((item) => item.status === 'pending' && item.targetKind === 'task-card' && item.articleId === articleId);
+    if (gate) {
+      await resolveGate(gate);
       return;
     }
-    setBusy(true);
-    setError(undefined);
-    try {
-      const updated = await api.confirmTaskCard(visibleArticle.id, { userId, sessionId });
-      setArticle(updated);
-      setLastRun(undefined);
-      await refreshArticleSummaries(updated.workspaceId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+    if (started?.article?.taskCard?.status !== 'confirmed') setError('未获得任务卡确认项，请重新打开任务后再试。');
   }
   async function resolveWorkflowHumanGate(gate: NonNullable<RunResponse['humanGates']>[number], decision: 'accept' | 'reject') {
     await execute(() => api.resolveHumanGate(gate.runId, gate.id, { userId, decision }));
