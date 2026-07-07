@@ -3,7 +3,7 @@ import { api } from './api';
 import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, ArticleSummary, DialogueBriefStatus, DialogueContextKind, DialogueMessage, DialogueResponse, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RevisionOperation, RevisionProposal, RunResponse, TaskCardFollowUpPrompt, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
 import { WorkflowSupportCard } from './WorkflowSupportCard';
 
-const userId = 'demo-user';
+const userIdStorageKey = 'writing-assistant.user-id';
 const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']);
 const activeStatuses = new Set(['running']);
 const runRefreshIntervalMs = 1000;
@@ -16,6 +16,8 @@ type TaskCardPromptAnswer = { prompt: TaskCardFollowUpPrompt; answer: string };
 type CommentDraft = { blockId: string; selectedText: string; comment: string };
 
 export function App() {
+  const [userId, setUserId] = useState(() => readUserIdPreference());
+  const [userIdDraft, setUserIdDraft] = useState(userId);
   const [sessionId, setSessionId] = useState<string>();
   const [currentTaskMessage, setCurrentTaskMessage] = useState('');
   const [newTaskMessage, setNewTaskMessage] = useState('');
@@ -114,24 +116,48 @@ export function App() {
   }
 
   useEffect(() => {
+    let cancelled = false;
+    setError(undefined);
+    setBusy(false);
+    setSessionId(undefined);
+    setArticle(undefined);
+    setArticleSummaries([]);
+    setWorkspaces([]);
+    setSelectedWorkspaceId(undefined);
+    setLastRun(undefined);
+    setLiveEvents([]);
+    setProgressVisible(false);
+    setDialogueMessages([]);
+    setDialogueBriefStatus(undefined);
+    setPendingProposals([]);
+    setProposalDirty(false);
     void Promise.all([api.createSession(userId), api.listWorkspaces(userId), api.listDomainProfiles(), api.listWritingStandards()])
       .then(async ([session, workspaceList, profiles, standards]) => {
+        if (cancelled) return;
         setSessionId(session.id);
         setWorkspaces(workspaceList);
         const workspaceId = session.currentWorkspaceId ?? workspaceList[0]?.id;
         setSelectedWorkspaceId(workspaceId);
         if (workspaceId) {
           const summaries = await api.listArticles(userId, workspaceId);
+          if (cancelled) return;
           setArticleSummaries(summaries);
           const firstArticleId = summaries[0]?.id;
-          if (firstArticleId) setArticle(await api.getArticle(firstArticleId, userId));
+          if (firstArticleId) {
+            const loadedArticle = await api.getArticle(firstArticleId, userId);
+            if (cancelled) return;
+            setArticle(loadedArticle);
+          }
         }
+        if (cancelled) return;
         setDomainProfiles(profiles);
         setWritingStandard(standards);
         setSelectedLanguageEra(standards.defaultOptionId);
       })
-      .catch((err) => setError(String(err)));
-  }, []);
+      .catch((err) => { if (!cancelled) setError(String(err)); });
+    return () => { cancelled = true; };
+  }, [userId]);
+  useEffect(() => setUserIdDraft(userId), [userId]);
   useEffect(() => {
     if (!lastRun?.run.id) return;
     const runId = lastRun.run.id;
@@ -463,6 +489,20 @@ export function App() {
       // Local storage can be unavailable in restricted browser modes; in-memory state still works.
     }
   }
+
+  function switchUser() {
+    const nextUserId = normalizeUserId(userIdDraft);
+    if (!nextUserId || nextUserId === userId) {
+      setUserIdDraft(userId);
+      return;
+    }
+    try {
+      window.localStorage.setItem(userIdStorageKey, nextUserId);
+    } catch {
+      // Local storage can be unavailable in restricted browser modes; in-memory state still works.
+    }
+    setUserId(nextUserId);
+  }
   async function selectWorkspace(workspaceId: string) {
     activeRunId.current = undefined;
     window.clearTimeout(refreshTimer.current);
@@ -771,6 +811,13 @@ export function App() {
       <main className={['workspace', navigationCollapsed ? 'nav-collapsed' : '', taskCardConfirmed ? '' : 'task-card-column-hidden', outlineGenerated ? 'support-column-visible' : '', outlineGenerated && supportColumnCollapsed ? 'support-column-collapsed' : ''].filter(Boolean).join(' ')}>
         <aside className={navigationCollapsed ? 'panel navigation-panel collapsed' : 'panel navigation-panel'} role={navigationCollapsed ? 'button' : undefined} tabIndex={navigationCollapsed ? 0 : undefined} aria-label={navigationCollapsed ? '展开左栏' : undefined} onClick={navigationCollapsed ? () => updateNavigationCollapsed(false) : undefined} onKeyDown={navigationCollapsed ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); updateNavigationCollapsed(false); } } : undefined}>
           {navigationCollapsed ? <span className="column-collapse-handle" aria-hidden="true">{'>'}</span> : <>
+            <div className="user-switcher">
+              <label htmlFor="dev-user-id">用户</label>
+              <div className="user-switcher-row">
+                <input id="dev-user-id" value={userIdDraft} disabled={busy} onChange={(event) => setUserIdDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') switchUser(); }} />
+                <button className="secondary-button" disabled={busy || normalizeUserId(userIdDraft) === userId || !normalizeUserId(userIdDraft)} onClick={switchUser}>切换</button>
+              </div>
+            </div>
             <div className="workspace-head">
               <h2>工作台</h2>
               <div className="workspace-actions">
@@ -1523,6 +1570,18 @@ function userFacingRunError(message?: string): string {
   if (message.includes('reused too much source text')) return '生成内容过多复用了资料原文，已阻止保存。';
   if (message.includes('referenced source-backed material without sourceRefs')) return '生成内容缺少来源绑定，已阻止保存。';
   return '生成失败，请调整任务卡或稍后重试。';
+}
+
+function normalizeUserId(value: string): string {
+  return value.trim().replace(/\s+/g, '-').slice(0, 64);
+}
+
+function readUserIdPreference(): string {
+  try {
+    return normalizeUserId(window.localStorage.getItem(userIdStorageKey) ?? '') || 'demo-user';
+  } catch {
+    return 'demo-user';
+  }
 }
 
 function readNavigationCollapsedPreference(): boolean {

@@ -131,6 +131,29 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   margin: 28px 0 0;
   border-radius: 999px;
 }
+.user-switcher {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e7e0d5;
+}
+.user-switcher label {
+  color: #7c7266;
+  font-size: 12px;
+}
+.user-switcher-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.user-switcher-row input {
+  min-width: 0;
+}
+.user-switcher-row .secondary-button {
+  min-width: 56px;
+  padding: 8px 10px;
+}
 .workspace-head {
   display: flex;
   align-items: center;
