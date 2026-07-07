@@ -266,7 +266,87 @@ describe('api app', () => {
       url: `/api/articles/${article.id}/comments/${commentId}/replies/${replyId}`,
       payload: { userId: 'delete-reply-user' },
     });
-    expect(missing.statusCode).toBe(404);
+    expect(missing.statusCode).toBe(200);
+    expect(missing.json().comments[0].replies).toEqual([{ id: 'crp-existing-answer', role: 'assistant', content: '已经解释过这条批注。', createdAt: handledAt }]);
+    const protectedReply = await app.inject({
+      method: 'DELETE',
+      url: `/api/articles/${article.id}/comments/${commentId}/replies/crp-existing-answer`,
+      payload: { userId: 'delete-reply-user' },
+    });
+    expect(protectedReply.statusCode).toBe(409);
+    expect(protectedReply.json().error).toContain('Only unprocessed user replies');
+    await app.close();
+  });
+
+  it('deletes only unprocessed article comments', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'delete-comment-user', name: '删除批注工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'delete-comment-user', workspaceId: workspace.id, title: '删除批注测试' });
+    article.blocks = [{
+      id: 'blk-delete-comment-1',
+      type: 'paragraph',
+      sectionId: 'outline-1',
+      title: '正文',
+      text: '这一段需要添加和删除批注。',
+      sourceRefs: [],
+      themeTags: [],
+      status: 'draft',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    }];
+    await container.stores.artifactStore.updateArticle(article);
+
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/comments`,
+      payload: { userId: 'delete-comment-user', blockId: 'blk-delete-comment-1', selectedText: '添加和删除批注', comment: '这条批注还没处理，可以删除。' },
+    });
+    expect(created.statusCode).toBe(200);
+    const commentId = created.json().comments[0].id;
+    const deleted = await app.inject({
+      method: 'DELETE',
+      url: `/api/articles/${article.id}/comments/${commentId}`,
+      payload: { userId: 'delete-comment-user' },
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json().comments).toEqual([]);
+    const missing = await app.inject({
+      method: 'DELETE',
+      url: `/api/articles/${article.id}/comments/${commentId}`,
+      payload: { userId: 'delete-comment-user' },
+    });
+    expect(missing.statusCode).toBe(200);
+    expect(missing.json().comments).toEqual([]);
+
+    const protectedCreated = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/comments`,
+      payload: { userId: 'delete-comment-user', blockId: 'blk-delete-comment-1', selectedText: '添加和删除批注', comment: '这条批注已经处理。' },
+    });
+    expect(protectedCreated.statusCode).toBe(200);
+    const protectedCommentId = protectedCreated.json().comments[0].id;
+    const stored = await container.stores.artifactStore.getArticle(article.id);
+    const protectedComment = stored?.comments?.[0];
+    expect(protectedComment).toBeDefined();
+    const handledAt = nowIso();
+    Object.assign(protectedComment!, {
+      status: 'resolved',
+      resolutionKind: 'explanation',
+      response: '已经处理，不能通过删除批注撤销。',
+      replies: [{ id: 'crp-protected-answer', role: 'assistant', content: '已经处理，不能通过删除批注撤销。', createdAt: handledAt }],
+      resolvedAt: handledAt,
+      updatedAt: handledAt,
+    });
+    await container.stores.artifactStore.updateArticle(stored!);
+    const protectedDelete = await app.inject({
+      method: 'DELETE',
+      url: `/api/articles/${article.id}/comments/${protectedCommentId}`,
+      payload: { userId: 'delete-comment-user' },
+    });
+    expect(protectedDelete.statusCode).toBe(409);
+    expect(protectedDelete.json().error).toContain('Only unprocessed comments');
     await app.close();
   });
 

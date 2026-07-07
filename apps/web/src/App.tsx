@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api';
 import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, ArticleSummary, DialogueBriefStatus, DialogueContextKind, DialogueMessage, DialogueResponse, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RevisionOperation, RevisionProposal, RunResponse, TaskCardFollowUpPrompt, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
 
@@ -203,6 +203,7 @@ export function App() {
   const workflowActive = Boolean(lastRun && activeStatuses.has(lastRun.run.status));
   const statusBusy = busy || workflowActive;
   const writeBusy = busy || workflowActive;
+  const showGlobalProgress = progressVisible && !sectionGeneration;
 
   function applyRunResponse(response: RunResponse) {
     setLastRun(response);
@@ -345,6 +346,22 @@ export function App() {
         delete next[commentId];
         return next;
       });
+      setCommentProcessingSummary(undefined);
+      await refreshArticleSummaries(updated.workspaceId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function deleteArticleComment(commentId: string) {
+    if (!visibleArticle) return;
+    if (!window.confirm('删除这条未处理批注？')) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const updated = await api.deleteArticleComment(visibleArticle.id, commentId, { userId });
+      setArticle(updated);
       setCommentProcessingSummary(undefined);
       await refreshArticleSummaries(updated.workspaceId);
     } catch (err) {
@@ -795,24 +812,24 @@ export function App() {
             const outlineSelected = selectedOutlineId === item.id || isEditing;
             const roleLabel = outlineRoleLabel(item.rhetoricalRole);
             const specialHandling = item.specialHandling ?? [];
+            const activeSectionProgress = progressVisible && sectionGeneration?.sectionId === item.id ? sectionGeneration : undefined;
             return (
               <div className={['outline-item', outlineCollapsed ? 'collapsed' : '', outlineSelected ? 'selected' : ''].filter(Boolean).join(' ')} key={item.id} onClick={() => { setSelectedOutlineId(item.id); setOutlineWholeSelected(false); setSelectedBlockId(undefined); }}>
-                {isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div className="outline-main"><div className="outline-heading"><button type="button" className="collapse-button" aria-label={outlineCollapsed ? `展开 ${item.title}` : `折叠 ${item.title}`} title={outlineCollapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); setSelectedOutlineId(item.id); toggleOutlineCollapsed(item.id); }}>{outlineCollapsed ? '>' : 'v'}</button><div className="outline-title"><strong>{item.title}</strong><span className="outline-meta">{roleLabel ? <span className="outline-role">{roleLabel}</span> : null}{item.keySection ? <span className="outline-key">关键</span> : null}<span>{outlineStatusLabel(item.status)}{sectionBlocks.length ? ` · ${sectionBlocks.length} 段正文` : ''}</span></span></div></div>{outlineCollapsed ? null : <><p>{item.goal}</p>{specialHandling.length ? <ul className="outline-special">{specialHandling.map((handling) => <li key={handling}>{handling}</li>)}</ul> : null}</>}</div>}
+                {isEditing ? <div className="outline-edit"><input value={editingOutline.title} onChange={(event) => setEditingOutline({ ...editingOutline, title: event.target.value })} /><textarea value={editingOutline.goal} onChange={(event) => setEditingOutline({ ...editingOutline, goal: event.target.value })} /></div> : <div className="outline-main"><div className="outline-heading"><button type="button" className="collapse-button" aria-label={outlineCollapsed ? `展开 ${item.title}` : `折叠 ${item.title}`} title={outlineCollapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); setSelectedOutlineId(item.id); toggleOutlineCollapsed(item.id); }}>{outlineCollapsed ? '>' : 'v'}</button><div className="outline-title"><strong>{item.title}</strong><span className="outline-meta">{roleLabel ? <span className="outline-role">{roleLabel}</span> : null}{item.keySection ? <span className="outline-key">关键</span> : null}<span>{outlineStatusLabel(item.status)}{sectionBlocks.length ? ` · ${sectionBlocks.length} 段正文` : ''}</span></span></div>{activeSectionProgress ? <SectionProgressDot progress={activeSectionProgress} events={liveEvents} /> : null}</div>{outlineCollapsed ? null : <><p>{item.goal}</p>{specialHandling.length ? <ul className="outline-special">{specialHandling.map((handling) => <li key={handling}>{handling}</li>)}</ul> : null}</>}</div>}
                 <OutlineActionBar isEditing={isEditing} requestBusy={busy} writeBusy={writeBusy} canSave={Boolean(editingOutline?.title.trim() && editingOutline.goal.trim())} hasSectionBlocks={Boolean(sectionBlocks.length)} onSave={() => void saveOutlineEdit()} onCancel={() => setEditingOutline(undefined)} onEdit={() => { setSelectedOutlineId(item.id); setEditingOutline({ id: item.id, title: item.title, goal: item.goal }); }} onGenerate={() => void startSectionGeneration(item.id)} />
-                {!outlineCollapsed && progressVisible && sectionGeneration?.sectionId === item.id ? <GenerationProgressView progress={sectionGeneration} events={liveEvents} /> : null}
-                {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} comments={visibleComments} commentDraft={commentDraft} commentReplyDrafts={commentReplyDrafts} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={(blockId) => { setSelectedBlockId(blockId); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleBlockCollapse={toggleBlockCollapsed} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} onUpdateCommentReplyDraft={updateCommentReplyDraft} onSubmitCommentReply={(commentId) => void submitArticleCommentReply(commentId)} onDeleteCommentReply={(commentId, replyId) => void deleteArticleCommentReply(commentId, replyId)} busy={busy} /> : null}
+                {!outlineCollapsed && sectionBlocks.length ? <SectionBlocksView blocks={sectionBlocks} comments={visibleComments} commentDraft={commentDraft} commentReplyDrafts={commentReplyDrafts} selectedBlockId={selectedBlockId} collapsedBlockIds={collapsedBlockIds} onSelectBlock={(blockId) => { setSelectedBlockId(blockId); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleBlockCollapse={toggleBlockCollapsed} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} onUpdateCommentReplyDraft={updateCommentReplyDraft} onSubmitCommentReply={(commentId) => void submitArticleCommentReply(commentId)} onDeleteComment={(commentId) => void deleteArticleComment(commentId)} onDeleteCommentReply={(commentId, replyId) => void deleteArticleCommentReply(commentId, replyId)} busy={busy} /> : null}
               </div>
             );
           })}</div> : null}
-          <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} comments={visibleComments} commentDraft={commentDraft} commentReplyDrafts={commentReplyDrafts} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} onUpdateCommentReplyDraft={updateCommentReplyDraft} onSubmitCommentReply={(commentId) => void submitArticleCommentReply(commentId)} onDeleteCommentReply={(commentId, replyId) => void deleteArticleCommentReply(commentId, replyId)} busy={busy} />)}</div>
+          <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} comments={visibleComments} commentDraft={commentDraft} commentReplyDrafts={commentReplyDrafts} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} onUpdateCommentReplyDraft={updateCommentReplyDraft} onSubmitCommentReply={(commentId) => void submitArticleCommentReply(commentId)} onDeleteComment={(commentId) => void deleteArticleComment(commentId)} onDeleteCommentReply={(commentId, replyId) => void deleteArticleCommentReply(commentId, replyId)} busy={busy} />)}</div>
           {!outlineGenerated ? <div className="editor-support">
             {visibleArticle ? <CommentReviewCard comments={visibleComments} processingSummary={commentProcessingSummary} busy={writeBusy} onProcess={() => void processArticleComments()} /> : null}
             {visibleArticle ? <DialogueBriefCard status={dialogueBriefStatus} /> : null}
             {visibleArticle ? <KnowledgeTagsCard article={visibleArticle} selectedOutline={selectedOutline} outlineWholeSelected={outlineWholeSelected} selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
             <RevisionLogCard article={visibleArticle} />
-            {visibleArticle && progressVisible ? <section className="support-card"><h3>执行进度</h3><ProgressTimeline events={liveEvents} run={lastRun?.run} /></section> : null}
+            {visibleArticle && showGlobalProgress ? <section className="support-card"><h3>执行进度</h3><ProgressTimeline events={liveEvents} run={lastRun?.run} /></section> : null}
           </div> : null}
-          {outlineGenerated && visibleArticle && progressVisible ? <div className="editor-progress-support"><section className="support-card"><h3>执行进度</h3><ProgressTimeline events={liveEvents} run={lastRun?.run} /></section></div> : null}
+          {outlineGenerated && visibleArticle && showGlobalProgress ? <div className="editor-progress-support"><section className="support-card"><h3>执行进度</h3><ProgressTimeline events={liveEvents} run={lastRun?.run} /></section></div> : null}
           </div>
           <div className="task-dialog-panel">
             {taskCardDialogTarget === 'current' && visibleArticle?.taskCard && taskCardFollowUpPrompts.length ? <TaskCardGuidance prompts={taskCardFollowUpPrompts} taskCard={visibleArticle.taskCard} message={currentTaskMessage} clearedPromptIds={clearedTaskCardPromptIds} onChooseOption={chooseTaskCardPromptOption} onClearAnswer={clearTaskCardPromptAnswer} /> : null}
@@ -847,12 +864,12 @@ export function App() {
     </div>
   );
 }
-function ArticleBlockView(props: { block: ArticleBlock; comments: ArticleComment[]; commentDraft?: CommentDraft; commentReplyDrafts: Record<string, string>; selected: boolean; collapsed: boolean; onSelect: () => void; onToggleCollapse: () => void; onCaptureSelection: (block: ArticleBlock) => void; onUpdateCommentDraft: (comment: string) => void; onSubmitComment: () => void; onCancelComment: () => void; onUpdateCommentReplyDraft: (commentId: string, content: string) => void; onSubmitCommentReply: (commentId: string) => void; onDeleteCommentReply: (commentId: string, replyId: string) => void; busy: boolean }) {
+function ArticleBlockView(props: { block: ArticleBlock; comments: ArticleComment[]; commentDraft?: CommentDraft; commentReplyDrafts: Record<string, string>; selected: boolean; collapsed: boolean; onSelect: () => void; onToggleCollapse: () => void; onCaptureSelection: (block: ArticleBlock) => void; onUpdateCommentDraft: (comment: string) => void; onSubmitComment: () => void; onCancelComment: () => void; onUpdateCommentReplyDraft: (commentId: string, content: string) => void; onSubmitCommentReply: (commentId: string) => void; onDeleteComment: (commentId: string) => void; onDeleteCommentReply: (commentId: string, replyId: string) => void; busy: boolean }) {
   const comments = commentsForBlock(props.comments, props.block.id);
-  return <article className={['block', props.selected ? 'selected' : '', props.collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} onClick={props.onSelect}><div className="block-head"><button type="button" className="collapse-button" aria-label={props.collapsed ? `展开 ${props.block.title}` : `折叠 ${props.block.title}`} title={props.collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleCollapse(); }}>{props.collapsed ? '>' : 'v'}</button><h3>{props.block.title}</h3><span>{props.block.text.length} 字</span></div>{props.collapsed ? null : <><pre onMouseUp={(event) => { event.stopPropagation(); props.onCaptureSelection(props.block); }}>{props.block.text}</pre><BlockCommentComposer blockId={props.block.id} draft={props.commentDraft} busy={props.busy} onChange={props.onUpdateCommentDraft} onSubmit={props.onSubmitComment} onCancel={props.onCancelComment} /><BlockCommentsView comments={comments} replyDrafts={props.commentReplyDrafts} busy={props.busy} onUpdateReply={props.onUpdateCommentReplyDraft} onSubmitReply={props.onSubmitCommentReply} onDeleteCommentReply={props.onDeleteCommentReply} /></>}</article>;
+  return <article className={['block', props.selected ? 'selected' : '', props.collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} onClick={props.onSelect}><div className="block-head"><button type="button" className="collapse-button" aria-label={props.collapsed ? `展开 ${props.block.title}` : `折叠 ${props.block.title}`} title={props.collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleCollapse(); }}>{props.collapsed ? '>' : 'v'}</button><h3>{props.block.title}</h3><span>{props.block.text.length} 字</span></div>{props.collapsed ? null : <><pre onMouseUp={(event) => { event.stopPropagation(); props.onCaptureSelection(props.block); }}>{props.block.text}</pre><BlockCommentComposer blockId={props.block.id} draft={props.commentDraft} busy={props.busy} onChange={props.onUpdateCommentDraft} onSubmit={props.onSubmitComment} onCancel={props.onCancelComment} /><BlockCommentsView comments={comments} replyDrafts={props.commentReplyDrafts} busy={props.busy} onUpdateReply={props.onUpdateCommentReplyDraft} onSubmitReply={props.onSubmitCommentReply} onDeleteComment={props.onDeleteComment} onDeleteCommentReply={props.onDeleteCommentReply} /></>}</article>;
 }
 
-function SectionBlocksView(props: { blocks: ArticleBlock[]; comments: ArticleComment[]; commentDraft?: CommentDraft; commentReplyDrafts: Record<string, string>; selectedBlockId?: string; collapsedBlockIds: string[]; onSelectBlock: (blockId: string) => void; onToggleBlockCollapse: (blockId: string) => void; onCaptureSelection: (block: ArticleBlock) => void; onUpdateCommentDraft: (comment: string) => void; onSubmitComment: () => void; onCancelComment: () => void; onUpdateCommentReplyDraft: (commentId: string, content: string) => void; onSubmitCommentReply: (commentId: string) => void; onDeleteCommentReply: (commentId: string, replyId: string) => void; busy: boolean }) {
+function SectionBlocksView(props: { blocks: ArticleBlock[]; comments: ArticleComment[]; commentDraft?: CommentDraft; commentReplyDrafts: Record<string, string>; selectedBlockId?: string; collapsedBlockIds: string[]; onSelectBlock: (blockId: string) => void; onToggleBlockCollapse: (blockId: string) => void; onCaptureSelection: (block: ArticleBlock) => void; onUpdateCommentDraft: (comment: string) => void; onSubmitComment: () => void; onCancelComment: () => void; onUpdateCommentReplyDraft: (commentId: string, content: string) => void; onSubmitCommentReply: (commentId: string) => void; onDeleteComment: (commentId: string) => void; onDeleteCommentReply: (commentId: string, replyId: string) => void; busy: boolean }) {
   const totalLength = props.blocks.reduce((sum, block) => sum + block.text.length, 0);
   return (
     <div className="section-blocks">
@@ -860,7 +877,7 @@ function SectionBlocksView(props: { blocks: ArticleBlock[]; comments: ArticleCom
       {props.blocks.map((block, index) => {
         const collapsed = props.collapsedBlockIds.includes(block.id);
         const comments = commentsForBlock(props.comments, block.id);
-        return <article className={['section-paragraph', props.selectedBlockId === block.id ? 'selected' : '', collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} key={block.id} onClick={() => props.onSelectBlock(block.id)}><div className="paragraph-head"><button type="button" className="collapse-button" aria-label={collapsed ? `展开第 ${index + 1} 段` : `折叠第 ${index + 1} 段`} title={collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleBlockCollapse(block.id); }}>{collapsed ? '>' : 'v'}</button><span>第 {index + 1} 段</span><span>{block.text.length} 字</span></div>{collapsed ? null : <><pre onMouseUp={(event) => { event.stopPropagation(); props.onCaptureSelection(block); }}>{block.text}</pre><BlockCommentComposer blockId={block.id} draft={props.commentDraft} busy={props.busy} onChange={props.onUpdateCommentDraft} onSubmit={props.onSubmitComment} onCancel={props.onCancelComment} /><BlockCommentsView comments={comments} replyDrafts={props.commentReplyDrafts} busy={props.busy} onUpdateReply={props.onUpdateCommentReplyDraft} onSubmitReply={props.onSubmitCommentReply} onDeleteCommentReply={props.onDeleteCommentReply} /></>}</article>;
+        return <article className={['section-paragraph', props.selectedBlockId === block.id ? 'selected' : '', collapsed ? 'collapsed' : ''].filter(Boolean).join(' ')} key={block.id} onClick={() => props.onSelectBlock(block.id)}><div className="paragraph-head"><button type="button" className="collapse-button" aria-label={collapsed ? `展开第 ${index + 1} 段` : `折叠第 ${index + 1} 段`} title={collapsed ? '展开' : '折叠'} onClick={(event) => { event.stopPropagation(); props.onToggleBlockCollapse(block.id); }}>{collapsed ? '>' : 'v'}</button><span>第 {index + 1} 段</span><span>{block.text.length} 字</span></div>{collapsed ? null : <><pre onMouseUp={(event) => { event.stopPropagation(); props.onCaptureSelection(block); }}>{block.text}</pre><BlockCommentComposer blockId={block.id} draft={props.commentDraft} busy={props.busy} onChange={props.onUpdateCommentDraft} onSubmit={props.onSubmitComment} onCancel={props.onCancelComment} /><BlockCommentsView comments={comments} replyDrafts={props.commentReplyDrafts} busy={props.busy} onUpdateReply={props.onUpdateCommentReplyDraft} onSubmitReply={props.onSubmitCommentReply} onDeleteComment={props.onDeleteComment} onDeleteCommentReply={props.onDeleteCommentReply} /></>}</article>;
       })}
     </div>
   );
@@ -871,7 +888,7 @@ function BlockCommentComposer(props: { blockId: string; draft?: CommentDraft; bu
   return (
     <div className="comment-composer" onClick={(event) => event.stopPropagation()}>
       <div className="comment-selection"><span>已选</span><p>{summarizeText(props.draft.selectedText, 120)}</p></div>
-      <textarea value={props.draft.comment} onChange={(event) => props.onChange(event.target.value)} placeholder="添加批注，例如：这里似乎使用了后40回内容" />
+      <textarea value={props.draft.comment} onChange={(event) => props.onChange(event.target.value)} placeholder="填写批注" />
       <div className="comment-composer-actions">
         <button className="secondary-button compact" disabled={props.busy} onClick={props.onCancel}>取消</button>
         <button disabled={props.busy || !props.draft.comment.trim()} onClick={props.onSubmit}>添加批注</button>
@@ -880,27 +897,38 @@ function BlockCommentComposer(props: { blockId: string; draft?: CommentDraft; bu
   );
 }
 
-function BlockCommentsView(props: { comments: ArticleComment[]; replyDrafts: Record<string, string>; busy: boolean; onUpdateReply: (commentId: string, content: string) => void; onSubmitReply: (commentId: string) => void; onDeleteCommentReply: (commentId: string, replyId: string) => void }) {
+function BlockCommentsView(props: { comments: ArticleComment[]; replyDrafts: Record<string, string>; busy: boolean; onUpdateReply: (commentId: string, content: string) => void; onSubmitReply: (commentId: string) => void; onDeleteComment: (commentId: string) => void; onDeleteCommentReply: (commentId: string, replyId: string) => void }) {
   if (!props.comments.length) return null;
   return (
     <div className="block-comments" onClick={(event) => event.stopPropagation()}>
-      {props.comments.map((comment) => <ArticleCommentItem key={comment.id} comment={comment} replyDraft={props.replyDrafts[comment.id] ?? ''} busy={props.busy} onChangeReply={(content) => props.onUpdateReply(comment.id, content)} onSubmitReply={() => props.onSubmitReply(comment.id)} onDeleteReply={(replyId) => props.onDeleteCommentReply(comment.id, replyId)} />)}
+      {props.comments.map((comment) => <ArticleCommentItem key={comment.id} comment={comment} replyDraft={props.replyDrafts[comment.id] ?? ''} busy={props.busy} onChangeReply={(content) => props.onUpdateReply(comment.id, content)} onSubmitReply={() => props.onSubmitReply(comment.id)} onDeleteComment={() => props.onDeleteComment(comment.id)} onDeleteReply={(replyId) => props.onDeleteCommentReply(comment.id, replyId)} />)}
     </div>
   );
 }
 
-function ArticleCommentItem(props: { comment: ArticleComment; replyDraft: string; busy: boolean; onChangeReply: (content: string) => void; onSubmitReply: () => void; onDeleteReply: (replyId: string) => void }) {
+function ArticleCommentItem(props: { comment: ArticleComment; replyDraft: string; busy: boolean; onChangeReply: (content: string) => void; onSubmitReply: () => void; onDeleteComment: () => void; onDeleteReply: (replyId: string) => void }) {
   const replies = commentReplies(props.comment);
+  const processed = props.comment.status === 'resolved';
+  const [collapsed, setCollapsed] = useState(processed);
+  useEffect(() => { setCollapsed(processed); }, [processed, props.comment.id]);
   return (
-    <div className={`article-comment status-${props.comment.status}`}>
-      <div className="article-comment-head"><div><strong>{commentStatusLabel(props.comment.status)}</strong><span>{commentResolutionLabel(props.comment.resolutionKind)}</span></div></div>
-      <p className="commented-text">{summarizeText(props.comment.selectedText, 96)}</p>
-      <p>{props.comment.comment}</p>
-      {replies.length ? <div className="comment-replies">{replies.map((reply) => <div className={`comment-reply role-${reply.role}`} key={reply.id}><div className="comment-reply-head"><span>{commentReplyRoleLabel(reply.role)}</span><button type="button" className="comment-delete-button" aria-label="删除这条回复" title="删除这条回复" disabled={props.busy} onClick={() => props.onDeleteReply(reply.id)}>×</button></div><p>{reply.content}</p></div>)}</div> : null}
-      <div className="comment-reply-composer">
-        <input value={props.replyDraft} onChange={(event) => props.onChangeReply(event.target.value)} placeholder="回复这条批注" />
-        <button className="secondary-button compact" disabled={props.busy || !props.replyDraft.trim()} onClick={props.onSubmitReply}>回复</button>
+    <div className={`article-comment status-${props.comment.status}${collapsed ? ' collapsed' : ''}`}>
+      <div className="article-comment-head">
+        <div><strong>{commentStatusLabel(props.comment.status)}</strong><span>{commentResolutionLabel(props.comment.resolutionKind)}</span></div>
+        <div className="article-comment-actions">
+          {processed ? <button type="button" className="comment-toggle-button" disabled={props.busy} onClick={() => setCollapsed((value) => !value)}>{collapsed ? '展开' : '收起'}</button> : null}
+          {canDeleteArticleComment(props.comment) ? <button type="button" className="comment-delete-button" aria-label="删除这条批注" title="删除这条未处理批注" disabled={props.busy} onClick={props.onDeleteComment}>×</button> : null}
+        </div>
       </div>
+      <p className="commented-text">{summarizeText(props.comment.selectedText, 96)}</p>
+      <p className="comment-root-text">{props.comment.comment}</p>
+      {collapsed ? null : <>
+        {replies.length ? <div className="comment-replies">{replies.map((reply) => <div className={`comment-reply role-${reply.role}`} key={reply.id}><div className="comment-reply-head"><span>{commentReplyRoleLabel(reply.role)}</span>{canDeleteArticleCommentReply(props.comment, reply) ? <button type="button" className="comment-delete-button" aria-label="删除这条未处理回复" title="删除这条未处理回复" disabled={props.busy} onClick={() => props.onDeleteReply(reply.id)}>×</button> : null}</div><p>{reply.content}</p></div>)}</div> : null}
+        <div className="comment-reply-composer">
+          <input value={props.replyDraft} onChange={(event) => props.onChangeReply(event.target.value)} placeholder="回复这条批注" />
+          <button className="secondary-button compact" disabled={props.busy || !props.replyDraft.trim()} onClick={props.onSubmitReply}>回复</button>
+        </div>
+      </>}
     </div>
   );
 }
@@ -938,6 +966,22 @@ function commentsForBlock(comments: ArticleComment[], blockId: string): ArticleC
 function commentReplies(comment: ArticleComment): NonNullable<ArticleComment['replies']> {
   if (comment.replies?.length) return comment.replies;
   return comment.response?.trim() ? [{ id: `${comment.id}-legacy-response`, role: 'assistant', content: comment.response.trim(), createdAt: comment.resolvedAt ?? comment.updatedAt }] : [];
+}
+
+function canDeleteArticleComment(comment: ArticleComment): boolean {
+  return comment.status === 'open'
+    && !commentReplies(comment).length
+    && !comment.response?.trim()
+    && !comment.replacementText?.trim()
+    && !comment.resolvedAt;
+}
+
+function canDeleteArticleCommentReply(comment: ArticleComment, reply: NonNullable<ArticleComment['replies']>[number]): boolean {
+  if (comment.status !== 'open' || reply.role !== 'user') return false;
+  const replies = commentReplies(comment);
+  const replyIndex = replies.findIndex((item) => item.id === reply.id);
+  if (replyIndex < 0) return false;
+  return replies.slice(replyIndex + 1).every((item) => item.role === 'user');
 }
 
 function commentReplyRoleLabel(role: NonNullable<ArticleComment['replies']>[number]['role']): string {
@@ -1140,16 +1184,14 @@ function OutlineActionBar(props: { isEditing: boolean; requestBusy: boolean; wri
   );
 }
 
-function GenerationProgressView(props: { progress: SectionGenerationState; events: AgentEvent[] }) {
+function SectionProgressDot(props: { progress: SectionGenerationState; events: AgentEvent[] }) {
   const stage = sectionGenerationStage(props.progress, props.events);
+  const progressScale = Math.sqrt(Math.max(0, Math.min(stage.percent, 100)) / 100);
+  const label = `${stage.title}：${stage.detail}`;
   return (
-    <div className={`generation-progress ${stage.tone}`}>
-      <div className="generation-progress-head">
-        <strong>{stage.title}</strong>
-        <span>{stage.detail}</span>
-      </div>
-      <div className="generation-progress-bar" aria-hidden="true"><span style={{ width: `${stage.percent}%` }} /></div>
-    </div>
+    <span className={`section-progress-dot ${stage.tone}`} role="status" aria-label={label} title={label} style={{ '--progress-scale': progressScale.toFixed(3) } as CSSProperties}>
+      <span aria-hidden="true" />
+    </span>
   );
 }
 
