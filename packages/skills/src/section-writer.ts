@@ -574,16 +574,11 @@ function validateAvoidedTerms(text: string, mustAvoid: string[]): void {
 
 function validateSourceReferences(blocks: ArticleBlock[], taskCard: WritingTaskCard, knowledge: KnowledgeItem[], writingContinuity: WritingContinuity): void {
   const availableRefs = new Set(knowledge.map((item) => item.sourceRef));
-  const usedRefs = new Set(writingContinuity.usedSourceRefs.map((item) => item.sourceRef));
-  const hasUnusedAvailable = writingContinuity.unusedSourceRefs.length > 0;
   for (const block of blocks) {
     const refs = uniqueStrings(block.sourceRefs ?? []);
     const unknownRefs = knowledge.length ? refs.filter((sourceRef) => !availableRefs.has(sourceRef)) : [];
     if (unknownRefs.length) throw new Error(`Section writer returned sourceRefs not present in knowledge: ${unknownRefs.join('、')}.`);
     if (needsSourceRefs(block.text, taskCard) && !refs.length) throw new SectionSourceReferenceError();
-    if (refs.length && hasUnusedAvailable && refs.every((sourceRef) => usedRefs.has(sourceRef))) {
-      throw new Error('Section writer reused only previously used sourceRefs while unused sources were available.');
-    }
   }
 }
 

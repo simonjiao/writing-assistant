@@ -454,9 +454,9 @@ describe('SectionWriterSkill', () => {
     expect(output.block.sourceRefs).toEqual(['test:c074:commentary', 'test:c074:text']);
   });
 
-  it('rejects reused-only sourceRefs when unused sources are available', async () => {
+  it('allows reused sourceRefs when unused sources are available', async () => {
     const skill = new SectionWriterSkill();
-    await expect(skill.invoke({
+    const output = await skill.invoke({
       input: { articleId: 'art_1', section, taskCard },
       context: {
         knowledge: [...knowledge, secondKnowledge],
@@ -485,7 +485,8 @@ describe('SectionWriterSkill', () => {
         },
         summary: '已生成正文。',
       }),
-    })).rejects.toThrow('reused only previously used sourceRefs');
+    });
+    expect(output.block.sourceRefs).toEqual(['test:k1']);
   });
 
   it('does not require duplicate top-level candidateSources when block sourceRefs are present', async () => {
