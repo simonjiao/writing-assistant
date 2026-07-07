@@ -41,3 +41,4 @@ running -> cancelled
 - 修改 artifact 时要校验 article revision，防止过期操作覆盖新内容。
 - 一致性检查出现 blocking finding 时，runner 先用 `create_revision_proposal` 生成绑定当前 run 的待确认方案，再等待用户应用或取消；同一 revision 上不会继续生成正文。
 - workflow 生成的 `RevisionProposal` 带 `runId`。应用后清理当前一致性阻断并恢复 runner；取消后清理 pending proposal，但保留一致性阻断，让 run 回到 `consistency-review` 等待态。
+- 统稿报告发现可修订 warning 时，也通过同一条 `pendingReviewProposal -> create_revision_proposal` 路径生成待确认修改方案；runner 不自动应用统稿建议。

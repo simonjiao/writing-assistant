@@ -59,3 +59,5 @@ WS /api/events/ws?runId=&userId=
 `RunResponse.revisionProposals` 返回当前文章、当前用户仍待处理的修改方案。workflow review 生成的 proposal 会通过这个字段同步到前端，不要求前端额外猜测或轮询对话接口。
 
 workflow review 生成的 proposal 带 `runId`。`apply` 返回 `DialogueResponse`，其中可以包含恢复后的 `run/article/events/revisionProposals`；`dismiss` 同样返回 `DialogueResponse`，前端应按普通对话响应更新本地状态。
+
+统稿报告的 warning 建议也会走同一套 workflow proposal API。前端不需要为 polish report 单独实现应用入口，只要显示 pending revision proposals 并调用 `apply/dismiss`。

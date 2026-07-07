@@ -17,7 +17,7 @@ export type RevisionOperation =
   | { type: 'patch-block'; blockId: string; instruction: string };
 export interface RevisionProposal { id: string; articleId: string; userId: string; runId?: string; contextKind: DialogueContextKind; summary: string; message: string; operations: RevisionOperation[]; warnings: string[]; status: 'pending' | 'applied' | 'dismissed'; createdAt: string; updatedAt: string }
 export interface DialogueMessage { id: string; articleId: string; userId: string; contextKind: DialogueContextKind; role: 'user' | 'assistant'; content: string; proposalId?: string; createdAt: string }
-export interface DialogueResponse { mode: 'answer' | 'clarify' | 'discuss' | 'proposal' | 'applied'; message: string; proposal?: RevisionProposal; article?: ArticleArtifact; run?: WorkflowRun; events?: AgentEvent[]; messages?: DialogueMessage[] }
+export interface DialogueResponse { mode: 'answer' | 'clarify' | 'discuss' | 'proposal' | 'applied'; message: string; proposal?: RevisionProposal; article?: ArticleArtifact; run?: WorkflowRun; events?: AgentEvent[]; humanGates?: HumanGate[]; operations?: WorkflowOperation[]; reviewArtifacts?: ReviewArtifact[]; revisionProposals?: RevisionProposal[]; messages?: DialogueMessage[] }
 export type DialogueBriefItemKind = 'requirement' | 'avoidance' | 'source' | 'preference' | 'revision' | 'evidence' | 'intent';
 export type DialogueBriefItemStatus = 'active' | 'superseded';
 export interface DialogueBriefItem { id: string; kind: DialogueBriefItemKind; text: string; status: DialogueBriefItemStatus; contextKind?: DialogueContextKind; sourceMessageId?: string; createdAt: string; updatedAt: string }

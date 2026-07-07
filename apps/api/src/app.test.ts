@@ -286,6 +286,73 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('turns polish report warnings into workflow revision proposals without applying them', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = nowIso();
+    const taskCard: WritingTaskCard = {
+      id: 'task-polish-proposal',
+      topic: '统稿建议测试',
+      writingGoal: '测试统稿报告会生成待确认修改方案。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: [], themes: ['统稿'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'polish-proposal-user', name: '统稿建议工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'polish-proposal-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    article.outline = [{
+      id: 'sec-polish-1',
+      title: '已有正文的大纲项',
+      goal: '已有正文，但段落需要修订。',
+      order: 1,
+      expectedBlocks: 1,
+      sourceHints: [],
+      themeTags: ['统稿'],
+      status: 'written',
+    }];
+    article.blocks = [{
+      id: 'blk-polish-1',
+      type: 'paragraph',
+      sectionId: 'sec-polish-1',
+      title: '已有正文的大纲项',
+      text: '这是一段已经生成但需要统稿修订的正文。',
+      sourceRefs: [],
+      themeTags: ['统稿'],
+      status: 'needs_revision',
+      createdAt: now,
+      updatedAt: now,
+    }];
+    await container.stores.artifactStore.updateArticle(article);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/workflows/writing/start',
+      payload: { userId: 'polish-proposal-user', articleId: article.id, targetStage: 'article' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.run.status).toBe('waiting');
+    expect(body.run.waitingFor.nodeId).toBe('revision-proposal');
+    const polishReport = body.reviewArtifacts.find((artifact: { type: string }) => artifact.type === 'polish-report');
+    expect(polishReport.findings).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'warning', targetKind: 'block', targetId: 'blk-polish-1' })]));
+    expect(polishReport.suggestions).toHaveLength(1);
+    expect(body.revisionProposals).toHaveLength(1);
+    expect(body.revisionProposals[0]).toMatchObject({ runId: body.run.id, contextKind: 'block' });
+    expect(body.revisionProposals[0].operations[0]).toMatchObject({ type: 'patch-block', blockId: 'blk-polish-1' });
+    expect(body.article.blocks[0].text).toBe('这是一段已经生成但需要统稿修订的正文。');
+    const operations = await container.stores.workflowOperationStore.listOperations({ runId: body.run.id });
+    expect(operations.map((operation) => operation.toolName).sort()).toEqual(['create_revision_proposal', 'generate_polish_report', 'review_task_card_outline_consistency']);
+    await app.close();
+  });
+
   it('creates article comments and batch processes them into text revisions', async () => {
     const config = testConfig();
     const container = createContainer(config);

@@ -195,9 +195,9 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
       baseRevision: article.revision,
       contextKind: revisionProposalContextKind(reviewArtifact),
       summary,
-      message: '已根据一致性检查生成待确认修改方案，应用后再继续写作。',
+      message: reviewArtifact.type === 'polish-report' ? '已根据统稿报告生成待确认修改方案，确认后才会写入正文。' : '已根据一致性检查生成待确认修改方案，应用后再继续写作。',
       operations,
-      warnings: reviewArtifact.findings.filter((finding) => finding.severity === 'blocking').map((finding) => finding.message),
+      warnings: actionableReviewFindings(reviewArtifact).map((finding) => finding.message),
     });
     await this.deps.stores.stateStore.updateRun(run.id, {
       status: 'waiting',
@@ -246,6 +246,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
   private async generatePolishReport(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
     const article = await this.requireArticle(action.articleId);
     const findings = polishFindings(article);
+    const hasActionableFindings = findings.some((finding) => finding.severity !== 'info');
     const reviewArtifact = await this.deps.stores.reviewArtifactStore.createReviewArtifact({
       articleId: article.id,
       runId: run.id,
@@ -256,7 +257,23 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
         .filter((finding) => finding.severity !== 'info')
         .map((finding) => ({ id: newId('sug'), actionType: 'create_revision_proposal', targetKind: finding.targetKind, targetId: finding.targetId, summary: finding.message })),
     });
-    await this.deps.stores.stateStore.updateRun(run.id, { state: { ...run.state, polishReportRevision: article.revision, polishReportId: reviewArtifact.id }, updatedAt: nowIso() });
+    const firstSuggestion = reviewArtifact.suggestions[0];
+    await this.deps.stores.stateStore.updateRun(run.id, {
+      state: {
+        ...run.state,
+        polishReportRevision: article.revision,
+        polishReportId: reviewArtifact.id,
+        pendingReviewProposal: hasActionableFindings && firstSuggestion ? {
+          articleRevision: article.revision,
+          reviewArtifactId: reviewArtifact.id,
+          suggestionId: firstSuggestion.id,
+          targetKind: firstSuggestion.targetKind,
+          targetId: firstSuggestion.targetId,
+          summary: firstSuggestion.summary,
+        } : undefined,
+      },
+      updatedAt: nowIso(),
+    });
     await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'review_artifact.created', payload: { articleId: article.id, reviewArtifactId: reviewArtifact.id, reviewType: reviewArtifact.type, userId: run.metadata.userId }, createdAt: nowIso() });
     return { article, summary: '统稿报告已生成。' };
   }
@@ -398,6 +415,14 @@ function polishFindings(article: ArticleArtifact): ReviewFinding[] {
   for (const section of article.outline) {
     if (!blocksBySection.get(section.id)?.length) {
       findings.push({ severity: 'blocking', targetKind: 'outline-item', targetId: section.id, message: `大纲项「${section.title}」还没有正文。` });
+    }
+  }
+  for (const block of article.blocks) {
+    if (block.status === 'needs_revision') {
+      findings.push({ severity: 'warning', targetKind: 'block', targetId: block.id, message: `正文段落「${block.title ?? block.id}」已标记为需要修订，应先生成局部修改方案。` });
+    }
+    if (article.taskCard?.constraints.citationRequired && !block.sourceRefs.length) {
+      findings.push({ severity: 'warning', targetKind: 'block', targetId: block.id, message: `正文段落「${block.title ?? block.id}」缺少来源绑定，但任务卡要求引用或来源依据。` });
     }
   }
   if (!findings.length) findings.push({ severity: 'info', targetKind: 'article', message: '所有大纲项均已有正文，可以进入人工统稿审阅。' });

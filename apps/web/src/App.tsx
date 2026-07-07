@@ -705,7 +705,17 @@ export function App() {
       setArticle(response.article);
       void refreshArticleSummaries(response.article.workspaceId).catch((err) => setError(err instanceof Error ? err.message : String(err)));
     }
-    if (response.run && response.events) applyRunResponse({ run: response.run, article: response.article, events: response.events });
+    if (response.run && response.events) {
+      applyRunResponse({
+        run: response.run,
+        article: response.article,
+        events: response.events,
+        humanGates: response.humanGates,
+        operations: response.operations,
+        reviewArtifacts: response.reviewArtifacts,
+        revisionProposals: response.revisionProposals,
+      });
+    }
   }
   async function applyDialogueProposal(proposal: RevisionProposal) {
     if (!visibleArticle) return;

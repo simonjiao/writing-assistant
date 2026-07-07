@@ -46,7 +46,7 @@ export class AllowedActionPlanner {
     if (pendingReviewProposal) {
       return [this.action(input.run, 'create_revision_proposal', {
         article,
-        reason: `根据一致性检查建议生成待确认修改方案：${pendingReviewProposal.summary}`,
+        reason: `根据审阅建议生成待确认修改方案：${pendingReviewProposal.summary}`,
         reviewArtifactId: pendingReviewProposal.reviewArtifactId,
         suggestionId: pendingReviewProposal.suggestionId,
         targetKind: pendingReviewProposal.targetKind,
@@ -128,6 +128,6 @@ function readPendingReviewProposal(state: WorkflowRun['state'], articleRevision:
     suggestionId: typeof proposal.suggestionId === 'string' ? proposal.suggestionId : undefined,
     targetKind: typeof proposal.targetKind === 'string' ? proposal.targetKind : undefined,
     targetId: typeof proposal.targetId === 'string' ? proposal.targetId : undefined,
-    summary: typeof proposal.summary === 'string' ? proposal.summary : '处理一致性检查建议',
+    summary: typeof proposal.summary === 'string' ? proposal.summary : '处理审阅建议',
   };
 }
