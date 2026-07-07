@@ -136,6 +136,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
   private async reviewTaskCardOutlineConsistency(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
     const article = await this.requireArticle(action.articleId);
     const findings = consistencyFindings(article);
+    const hasBlockingFindings = findings.some((finding) => finding.severity === 'blocking');
     const reviewArtifact = await this.deps.stores.reviewArtifactStore.createReviewArtifact({
       articleId: article.id,
       runId: run.id,
@@ -146,9 +147,20 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
         .filter((finding) => finding.severity !== 'info')
         .map((finding) => ({ id: newId('sug'), actionType: 'create_revision_proposal', targetKind: finding.targetKind, targetId: finding.targetId, summary: finding.message })),
     });
-    await this.deps.stores.stateStore.updateRun(run.id, { state: { ...run.state, consistencyReviewRevision: article.revision, consistencyReviewId: reviewArtifact.id }, updatedAt: nowIso() });
+    await this.deps.stores.stateStore.updateRun(run.id, {
+      status: hasBlockingFindings ? 'waiting' : run.status,
+      waitingFor: hasBlockingFindings ? { nodeId: 'consistency-review', reason: '一致性检查发现阻断问题，请先处理右侧建议后再继续写作。' } : run.waitingFor,
+      state: {
+        ...run.state,
+        consistencyReviewRevision: article.revision,
+        consistencyReviewId: reviewArtifact.id,
+        consistencyBlockingReviewId: hasBlockingFindings ? reviewArtifact.id : undefined,
+        consistencyBlockingRevision: hasBlockingFindings ? article.revision : undefined,
+      },
+      updatedAt: nowIso(),
+    });
     await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'review_artifact.created', payload: { articleId: article.id, reviewArtifactId: reviewArtifact.id, reviewType: reviewArtifact.type, userId: run.metadata.userId }, createdAt: nowIso() });
-    return { article, summary: findings.some((finding) => finding.severity === 'blocking') ? '一致性检查发现阻断问题。' : '一致性检查完成。' };
+    return { article, summary: hasBlockingFindings ? '一致性检查发现阻断问题。' : '一致性检查完成。' };
   }
 
   private async writeSection(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {

@@ -43,6 +43,9 @@ export class PiWorkflowRunner {
       const article = await this.loadArticle(run);
       const pendingGate = await this.pendingHumanGate(run);
       const session = await this.getOrCreateSession(run, article, pendingGate);
+      if (isBlockedByCurrentConsistencyReview(run, article)) {
+        return this.wait(run, '一致性检查发现阻断问题，请先处理右侧建议后再继续写作。', 'consistency-review');
+      }
       const allowedActions = this.planner.plan({
         run,
         article,
@@ -128,8 +131,8 @@ export class PiWorkflowRunner {
     });
   }
 
-  private async wait(run: WorkflowRun, reason: string): Promise<WorkflowRun> {
-    const waiting = await this.deps.stores.stateStore.updateRun(run.id, { status: 'waiting', waitingFor: { nodeId: 'pi-agent', reason }, updatedAt: nowIso() });
+  private async wait(run: WorkflowRun, reason: string, nodeId = 'pi-agent'): Promise<WorkflowRun> {
+    const waiting = await this.deps.stores.stateStore.updateRun(run.id, { status: 'waiting', waitingFor: { nodeId, reason }, updatedAt: nowIso() });
     await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'workflow.waiting', payload: { workflowId: run.workflowId, reason, userId: run.metadata.userId, runMetadata: run.metadata }, createdAt: nowIso() });
     return waiting;
   }
@@ -145,4 +148,10 @@ export class PiWorkflowRunner {
     if (!run) throw new Error(`Run not found: ${runId}`);
     return run;
   }
+}
+
+function isBlockedByCurrentConsistencyReview(run: WorkflowRun, article?: ArticleArtifact): boolean {
+  if (!article) return false;
+  return typeof run.state.consistencyBlockingReviewId === 'string'
+    && run.state.consistencyBlockingRevision === article.revision;
 }

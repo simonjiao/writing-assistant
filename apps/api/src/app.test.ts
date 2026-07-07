@@ -201,6 +201,68 @@ describe('api app', () => {
     await container.close();
   });
 
+  it('blocks writing while the current consistency review has blocking findings', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = nowIso();
+    const taskCard: WritingTaskCard = {
+      id: 'task-consistency-blocking',
+      topic: '一致性阻断测试',
+      writingGoal: '测试 blocking review 不会继续生成正文。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: [], themes: ['一致性'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: ['后40回'], citationRequired: false, sourcePolicy: '仅以前80回和脂批为依据。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'consistency-block-user', name: '一致性阻断工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'consistency-block-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    article.outline = [{
+      id: 'sec-consistency-blocking',
+      title: '误引后40回的段落',
+      goal: '这里故意包含后40回，触发一致性阻断。',
+      order: 1,
+      expectedBlocks: 1,
+      sourceHints: ['后40回'],
+      themeTags: ['一致性'],
+      status: 'confirmed',
+    }];
+    await container.stores.artifactStore.updateArticle(article);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/workflows/writing/start',
+      payload: { userId: 'consistency-block-user', articleId: article.id, targetStage: 'article' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.run.status).toBe('waiting');
+    expect(body.run.waitingFor.nodeId).toBe('consistency-review');
+    expect(body.article.blocks).toHaveLength(0);
+    expect(body.reviewArtifacts[0].findings.some((finding: { severity: string }) => finding.severity === 'blocking')).toBe(true);
+
+    const resumed = await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${body.run.id}/message`,
+      payload: { userId: 'consistency-block-user', message: '继续写正文。', targetStage: 'article' },
+    });
+
+    expect(resumed.statusCode).toBe(200);
+    const resumedBody = resumed.json();
+    expect(resumedBody.run.status).toBe('waiting');
+    expect(resumedBody.run.waitingFor.nodeId).toBe('consistency-review');
+    expect(resumedBody.article.blocks).toHaveLength(0);
+    const operations = await container.stores.workflowOperationStore.listOperations({ runId: body.run.id });
+    expect(operations.map((operation) => operation.toolName)).toEqual(['review_task_card_outline_consistency']);
+    await app.close();
+  });
+
   it('creates article comments and batch processes them into text revisions', async () => {
     const config = testConfig();
     const container = createContainer(config);
