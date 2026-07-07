@@ -1,6 +1,6 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
-import Fastify, { FastifyReply } from 'fastify';
+import Fastify, { FastifyReply, FastifyRequest } from 'fastify';
 import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, KnowledgeItem, KnowledgeSearchOptions, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WritingTaskCard, WritingWorkspace } from '@wa/core';
 import { normalizeTaskCardPolicies } from '@wa/skills';
 import type { ArticleCommentResolverInput, ArticleCommentResolverOutput, DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, TaskCardReviserOutput } from '@wa/skills';
@@ -9,6 +9,7 @@ import { AppContainer } from './bootstrap';
 import { addKnowledgeEvidenceToBrief, buildCompactDialogueConversation, compactDialogueBriefForPrompt, enqueueDialogueBriefUpdate, ensureDialogueBriefSettled, getDialogueBriefStatus, getOrCreateDialogueBrief } from './dialogueBrief';
 import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfileSummaries, recommendDomainProfiles, resolveDomainProfileSelection } from './domainProfiles';
 import { getWritingStandardDisplaySummary, getWritingStandardSummary, resolveWritingStandardSelection, WritingStandardSelectionRequest } from './writingStandards';
+import { resolveUserContext } from './userContext';
 
 export function createApp(config: AppConfig, container: AppContainer) {
   const app = Fastify({ logger: true });
@@ -23,7 +24,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
 
   app.post('/api/sessions', async (request, reply) => {
     const body = request.body as { userId?: string };
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const workspace = await ensureDefaultWorkspace(container, userId);
     const session = await container.stores.sessionStore.createSession(userId);
@@ -31,14 +32,14 @@ export function createApp(config: AppConfig, container: AppContainer) {
   });
   app.get('/api/workspaces', async (request, reply) => {
     const query = request.query as { userId?: string; includeDeleted?: string };
-    const userId = readUserId(query.userId);
+    const userId = readRequestUserId(request, query.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     await ensureDefaultWorkspace(container, userId);
     return sortWorkspaces(await container.stores.workspaceStore.listWorkspaces(userId, { includeDeleted: query.includeDeleted === 'true' }));
   });
   app.post('/api/workspaces', async (request, reply) => {
     const body = request.body as { userId?: string; name?: string; memberUserIds?: string[] };
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const name = body.name?.trim();
     if (!name) return reply.code(400).send({ error: 'Workspace name is required.' });
@@ -49,7 +50,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.delete('/api/workspaces/:workspaceId', async (request, reply) => {
     const { workspaceId } = request.params as { workspaceId: string };
     const body = (request.body ?? {}) as { userId?: string };
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const workspace = await container.stores.workspaceStore.getWorkspace(workspaceId);
     if (!workspace) return reply.code(404).send({ error: 'Workspace not found.' });
@@ -71,7 +72,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   });
   app.get('/api/articles', async (request, reply) => {
     const query = request.query as { userId?: string; view?: string; includeDeleted?: string; workspaceId?: string };
-    const userId = readUserId(query.userId);
+    const userId = readRequestUserId(request, query.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const workspaceId = query.workspaceId?.trim() || (await ensureDefaultWorkspace(container, userId)).id;
     const workspace = await requireWorkspaceAccess(container, userId, workspaceId);
@@ -79,11 +80,11 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const articles = await container.stores.artifactStore.listArticles(workspace.id, { includeDeleted: query.includeDeleted === 'true' });
     return query.view === 'summary' ? articles.map(articleSummary) : articles.map(withWritingStandardSummary);
   });
-  app.get('/api/articles/:articleId', async (request, reply) => { const { articleId } = request.params as { articleId: string }; const query = request.query as { userId?: string }; const userId = readUserId(query.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); return withWritingStandardSummary(access.article); });
+  app.get('/api/articles/:articleId', async (request, reply) => { const { articleId } = request.params as { articleId: string }; const query = request.query as { userId?: string }; const userId = readRequestUserId(request, query.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); return withWritingStandardSummary(access.article); });
   app.post('/api/articles/:articleId/comments', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
     const body = (request.body ?? {}) as { userId?: string; blockId?: string; selectedText?: string; comment?: string };
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
@@ -118,7 +119,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.post('/api/articles/:articleId/comments/:commentId/replies', async (request, reply) => {
     const { articleId, commentId } = request.params as { articleId: string; commentId: string };
     const body = (request.body ?? {}) as { userId?: string; content?: string };
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
@@ -135,7 +136,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.delete('/api/articles/:articleId/comments/:commentId', async (request, reply) => {
     const { articleId, commentId } = request.params as { articleId: string; commentId: string };
     const body = (request.body ?? {}) as { userId?: string };
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
@@ -151,7 +152,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.delete('/api/articles/:articleId/comments/:commentId/replies/:replyId', async (request, reply) => {
     const { articleId, commentId, replyId } = request.params as { articleId: string; commentId: string; replyId: string };
     const body = (request.body ?? {}) as { userId?: string };
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
@@ -174,7 +175,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.post('/api/articles/:articleId/comments/process', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
     const body = (request.body ?? {}) as { userId?: string; sessionId?: string; commentIds?: string[] };
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
@@ -184,7 +185,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.delete('/api/articles/:articleId', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
     const body = (request.body ?? {}) as { userId?: string };
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
@@ -201,7 +202,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (!instruction) return reply.code(400).send({ error: 'Task card revision instruction is required.' });
     const article = await container.stores.artifactStore.getArticle(articleId);
     if (!article) return reply.code(404).send({ error: 'Article not found' });
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     if (!(await canAccessArticle(container, userId, article))) return reply.code(403).send({ error: 'Workspace access required.' });
     if (!article.taskCard) return reply.code(400).send({ error: 'Article has no task card to revise.' });
@@ -223,7 +224,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.post('/api/articles/:articleId/task-card/confirm', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
     const body = (request.body ?? {}) as { userId?: string; sessionId?: string };
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
@@ -249,7 +250,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (!title || !goal) return reply.code(400).send({ error: 'Outline title and goal are required.' });
     const article = await container.stores.artifactStore.getArticle(articleId);
     if (!article) return reply.code(404).send({ error: 'Article not found' });
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     if (!(await canAccessArticle(container, userId, article))) return reply.code(403).send({ error: 'Workspace access required.' });
     const existing = article.outline.find((item) => item.id === sectionId);
@@ -269,7 +270,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (!instruction) return reply.code(400).send({ error: 'Outline revision instruction is required.' });
     const article = await container.stores.artifactStore.getArticle(articleId);
     if (!article) return reply.code(404).send({ error: 'Article not found' });
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     if (!(await canAccessArticle(container, userId, article))) return reply.code(403).send({ error: 'Workspace access required.' });
     const existing = article.outline.find((item) => item.id === sectionId);
@@ -295,7 +296,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const body = (request.body ?? {}) as { message?: string; userId?: string; sessionId?: string; context?: DialogueContextRequest; pendingProposalId?: string };
     const message = body.message?.trim();
     if (!message) return reply.code(400).send({ error: 'Dialogue message is required.' });
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
@@ -376,6 +377,8 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const proposal = await container.stores.revisionProposalStore.createProposal({
       articleId: access.article.id,
       userId,
+      authorUserId: userId,
+      baseRevision: access.article.revision,
       contextKind: context.value.context.kind,
       summary: result.summary ?? result.message,
       message: result.message,
@@ -388,7 +391,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.get('/api/articles/:articleId/dialogue/brief', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
     const query = request.query as { userId?: string };
-    const userId = readUserId(query.userId);
+    const userId = readRequestUserId(request, query.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
@@ -397,7 +400,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.get('/api/articles/:articleId/dialogue/messages', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
     const query = request.query as { userId?: string; limit?: string };
-    const userId = readUserId(query.userId);
+    const userId = readRequestUserId(request, query.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
@@ -407,7 +410,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.get('/api/articles/:articleId/dialogue/proposals', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
     const query = request.query as { userId?: string };
-    const userId = readUserId(query.userId);
+    const userId = readRequestUserId(request, query.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
@@ -416,7 +419,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.post('/api/articles/:articleId/dialogue/:proposalId/apply', async (request, reply) => {
     const { articleId, proposalId } = request.params as { articleId: string; proposalId: string };
     const body = (request.body ?? {}) as { userId?: string; sessionId?: string };
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
     if (!proposal || proposal.articleId !== articleId) return reply.code(404).send({ error: 'Revision proposal not found.' });
@@ -427,7 +430,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.post('/api/articles/:articleId/dialogue/:proposalId/dismiss', async (request, reply) => {
     const { articleId, proposalId } = request.params as { articleId: string; proposalId: string };
     const body = (request.body ?? {}) as { userId?: string };
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
     if (!proposal || proposal.articleId !== articleId) return reply.code(404).send({ error: 'Revision proposal not found.' });
@@ -439,7 +442,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.post('/api/articles/:articleId/writing/start', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
     const body = (request.body ?? {}) as { userId?: string; sessionId?: string };
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
@@ -471,7 +474,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
 
   app.post('/api/workflows/task-card/start', async (request, reply) => {
     const body = request.body as { rawRequirement: string; userId?: string; sessionId?: string; workspaceId?: string; domainProfile?: DomainProfileSelectionRequest; writingStandard?: WritingStandardSelectionRequest };
-    const userId = readUserId(body.userId);
+    const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const workspaceId = body.workspaceId?.trim() || (await ensureDefaultWorkspace(container, userId)).id;
     const workspace = await requireWorkspaceAccess(container, userId, workspaceId);
@@ -487,9 +490,9 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const run = await container.engine.startWorkflow('task-card-workflow', { rawRequirement: body.rawRequirement, userId, sessionId: body.sessionId, workspaceId, domainContext, writingStandard }, { userId, sessionId: body.sessionId, workspaceId });
     return enrichRun(container, run.id);
   });
-  app.post('/api/workflows/outline/start', async (request, reply) => { const body = request.body as { articleId: string; userId?: string; sessionId?: string }; const userId = readUserId(body.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, body.articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); if (access.article.taskCard?.status !== 'confirmed') return reply.code(400).send({ error: 'Task card must be confirmed before outlining.' }); if (body.sessionId) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: body.articleId, currentWorkspaceId: access.article.workspaceId }); const run = await container.engine.startWorkflow('outline-workflow', { articleId: body.articleId }, { userId, sessionId: body.sessionId, articleId: body.articleId, workspaceId: access.article.workspaceId }); return enrichRun(container, run.id); });
-  app.post('/api/workflows/section/start', async (request, reply) => { const body = request.body as { articleId: string; sectionId: string; userId?: string; sessionId?: string }; const userId = readUserId(body.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, body.articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); if (access.article.taskCard?.status !== 'confirmed') return reply.code(400).send({ error: 'Task card must be confirmed before writing.' }); const section = access.article.outline.find((item) => item.id === body.sectionId); if (!section) return reply.code(404).send({ error: 'Outline section not found.' }); if (section.status === 'draft') return reply.code(400).send({ error: 'Outline must be ready before writing.' }); const run = await container.engine.startWorkflow('section-writing-workflow', { articleId: body.articleId, sectionId: body.sectionId }, { userId, sessionId: body.sessionId, articleId: body.articleId, workspaceId: access.article.workspaceId }); return enrichRun(container, run.id); });
-  app.post('/api/workflows/patch/start', async (request, reply) => { const body = request.body as { articleId: string; blockId: string; instruction: string; userId?: string; sessionId?: string }; const userId = readUserId(body.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, body.articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); if (body.sessionId) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: body.articleId, currentWorkspaceId: access.article.workspaceId, currentBlockId: body.blockId }); const run = await container.engine.startWorkflow('patch-workflow', { articleId: body.articleId, blockId: body.blockId, instruction: body.instruction }, { userId, sessionId: body.sessionId, articleId: body.articleId, workspaceId: access.article.workspaceId }); return enrichRun(container, run.id); });
+  app.post('/api/workflows/outline/start', async (request, reply) => { const body = request.body as { articleId: string; userId?: string; sessionId?: string }; const userId = readRequestUserId(request, body.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, body.articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); if (access.article.taskCard?.status !== 'confirmed') return reply.code(400).send({ error: 'Task card must be confirmed before outlining.' }); if (body.sessionId) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: body.articleId, currentWorkspaceId: access.article.workspaceId }); const run = await container.engine.startWorkflow('outline-workflow', { articleId: body.articleId }, { userId, sessionId: body.sessionId, articleId: body.articleId, workspaceId: access.article.workspaceId }); return enrichRun(container, run.id); });
+  app.post('/api/workflows/section/start', async (request, reply) => { const body = request.body as { articleId: string; sectionId: string; userId?: string; sessionId?: string }; const userId = readRequestUserId(request, body.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, body.articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); if (access.article.taskCard?.status !== 'confirmed') return reply.code(400).send({ error: 'Task card must be confirmed before writing.' }); const section = access.article.outline.find((item) => item.id === body.sectionId); if (!section) return reply.code(404).send({ error: 'Outline section not found.' }); if (section.status === 'draft') return reply.code(400).send({ error: 'Outline must be ready before writing.' }); const run = await container.engine.startWorkflow('section-writing-workflow', { articleId: body.articleId, sectionId: body.sectionId }, { userId, sessionId: body.sessionId, articleId: body.articleId, workspaceId: access.article.workspaceId }); return enrichRun(container, run.id); });
+  app.post('/api/workflows/patch/start', async (request, reply) => { const body = request.body as { articleId: string; blockId: string; instruction: string; userId?: string; sessionId?: string }; const userId = readRequestUserId(request, body.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, body.articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); if (body.sessionId) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: body.articleId, currentWorkspaceId: access.article.workspaceId, currentBlockId: body.blockId }); const run = await container.engine.startWorkflow('patch-workflow', { articleId: body.articleId, blockId: body.blockId, instruction: body.instruction }, { userId, sessionId: body.sessionId, articleId: body.articleId, workspaceId: access.article.workspaceId }); return enrichRun(container, run.id); });
   app.post('/api/workflows/:runId/resume', async (request) => { const { runId } = request.params as { runId: string }; await container.engine.resumeWorkflow(runId, request.body ?? {}); return enrichRun(container, runId); });
   app.post('/api/workflows/:runId/cancel', async (request) => { const { runId } = request.params as { runId: string }; await container.engine.cancelWorkflow(runId); return enrichRun(container, runId); });
   app.get('/api/runs/:runId', async (request, reply) => { const { runId } = request.params as { runId: string }; const run = await container.engine.getRun(runId); if (!run) return reply.code(404).send({ error: 'Run not found' }); return enrichRun(container, runId); });
@@ -767,6 +770,9 @@ async function applyRevisionProposal(container: AppContainer, proposalId: string
   const access = await requireArticleAccess(container, userId, proposal.articleId);
   if (!access.ok) throw new Error(access.error);
   let article = access.article;
+  if (typeof proposal.baseRevision === 'number' && article.revision !== proposal.baseRevision) {
+    throw new Error(`Revision proposal is stale: article revision is ${article.revision}, proposal was created at ${proposal.baseRevision}.`);
+  }
   let runPayload: Awaited<ReturnType<typeof enrichRun>> | undefined;
   for (const operation of proposal.operations) {
     const result = await applyRevisionOperation(container, article, operation, userId, sessionId);
@@ -1038,9 +1044,8 @@ function clearBlocksForOutlineSections(article: ArticleArtifact, sectionIds: str
   return { blockCount };
 }
 
-function readUserId(value: string | undefined): string | undefined {
-  const userId = value?.trim();
-  return userId || undefined;
+function readRequestUserId(request: FastifyRequest, explicitUserId?: string): string | undefined {
+  return resolveUserContext(request, explicitUserId)?.userId;
 }
 
 async function ensureDefaultWorkspace(container: AppContainer, userId: string): Promise<WritingWorkspace> {

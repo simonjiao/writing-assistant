@@ -144,6 +144,12 @@ export interface ArticleArtifact {
   deletedAt?: string;
 }
 
+export interface ArticleRevisionWrite {
+  article: ArticleArtifact;
+  baseRevision: number;
+  operationId: string;
+}
+
 export interface WritingWorkspace {
   id: string;
   userId: string;

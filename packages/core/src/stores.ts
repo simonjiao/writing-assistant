@@ -1,6 +1,7 @@
 import {
   AgentEvent,
   ArticleArtifact,
+  ArticleRevisionWrite,
   ArticleVersion,
   DialogueBrief,
   DialogueBriefUpdateJob,
@@ -45,6 +46,7 @@ export interface ArtifactStore {
   getArticle(articleId: string): Promise<ArticleArtifact | undefined>;
   listArticles(workspaceId: string, options?: { includeDeleted?: boolean }): Promise<ArticleArtifact[]>;
   updateArticle(article: ArticleArtifact): Promise<ArticleArtifact>;
+  updateArticleWithRevision(write: ArticleRevisionWrite): Promise<ArticleArtifact>;
   deleteArticle(articleId: string): Promise<ArticleArtifact>;
   commitVersion(articleId: string, reason: string, author: ArticleVersion['author']): Promise<ArticleVersion>;
   applyPatch(patch: TextPatch): Promise<ArticleArtifact>;
