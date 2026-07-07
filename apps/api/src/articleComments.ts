@@ -79,8 +79,7 @@ export function updateComment(comment: ArticleComment, patch: Partial<ArticleCom
 export function appendCommentReply(comment: ArticleComment, role: 'user' | 'assistant' | 'system', content: string, createdAt = nowIso()): void {
   const text = content.trim();
   if (!text) return;
-  const existingReplies = comment.replies ?? [];
-  const replies = existingReplies.length ? existingReplies : legacyResponseReply(comment);
+  const replies = comment.replies ?? [];
   const last = replies[replies.length - 1];
   comment.replies = last?.role === role && last.content === text ? replies : [...replies, { id: newId('crp'), role, content: text, createdAt }];
   comment.updatedAt = createdAt;
@@ -164,11 +163,6 @@ function applyArticleCommentResolution(article: ArticleArtifact, comment: Articl
   article.blocks = article.blocks.map((item) => item.id === block.id ? { ...item, text, status: 'draft', updatedAt: nowIso() } : item);
   updateComment(comment, { status: 'resolved', resolutionKind: 'revision', response: output.response, replacementText });
   return { changed: true };
-}
-
-function legacyResponseReply(comment: ArticleComment): NonNullable<ArticleComment['replies']> {
-  const response = comment.response?.trim();
-  return response ? [{ id: newId('crp'), role: 'assistant', content: response, createdAt: comment.resolvedAt ?? comment.updatedAt }] : [];
 }
 
 function locateCommentSelection(text: string, comment: ArticleComment): { start: number; end: number } | undefined {

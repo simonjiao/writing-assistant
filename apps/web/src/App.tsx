@@ -982,8 +982,7 @@ function commentsForBlock(comments: ArticleComment[], blockId: string): ArticleC
 }
 
 function commentReplies(comment: ArticleComment): NonNullable<ArticleComment['replies']> {
-  if (comment.replies?.length) return comment.replies;
-  return comment.response?.trim() ? [{ id: `${comment.id}-legacy-response`, role: 'assistant', content: comment.response.trim(), createdAt: comment.resolvedAt ?? comment.updatedAt }] : [];
+  return comment.replies ?? [];
 }
 
 function canDeleteArticleComment(comment: ArticleComment): boolean {
