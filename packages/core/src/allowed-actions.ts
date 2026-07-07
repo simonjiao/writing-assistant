@@ -37,6 +37,7 @@ export class AllowedActionPlanner {
     if (section) {
       return [this.action(input.run, input.requestedSectionId ? 'write_section' : 'write_next_section', { article, section, reason: `下一步写作大纲项：${section.title}` })];
     }
+    if (input.run.state.polishReportRevision === article.revision) return [];
     return [this.action(input.run, 'generate_polish_report', { article, reason: '所有大纲项均已有正文，可以生成整篇统稿报告。' })];
   }
 

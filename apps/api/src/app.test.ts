@@ -121,6 +121,31 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('starts writing-autopilot through pi session, operation log, and human gate', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { userId: 'pi-user', message: '写一篇关于宝黛关系的文章。' } });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.run.workflowId).toBe('writing-autopilot');
+    expect(body.run.status).toBe('waiting');
+    expect(body.article.taskCard.status).toBe('draft');
+
+    const sessions = await container.stores.piAgentSessionStore.listSessions({ runId: body.run.id });
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].articleId).toBe(body.article.id);
+
+    const operations = await container.stores.workflowOperationStore.listOperations({ runId: body.run.id });
+    expect(operations.map((operation) => operation.toolName)).toEqual(['ask_followup', 'create_task_card_draft']);
+    expect(operations.every((operation) => operation.status === 'completed')).toBe(true);
+
+    const gates = await container.stores.humanGateStore.listGates({ runId: body.run.id, statuses: ['pending'] });
+    expect(gates).toHaveLength(1);
+    expect(gates[0].targetKind).toBe('task-card');
+    await app.close();
+  });
+
   it('creates article comments and batch processes them into text revisions', async () => {
     const config = testConfig();
     const container = createContainer(config);

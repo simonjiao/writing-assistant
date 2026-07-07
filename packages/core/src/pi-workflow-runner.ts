@@ -9,6 +9,7 @@ import {
 } from './types';
 import { newId, nowIso } from './utils';
 import { AllowedActionPlanner } from './allowed-actions';
+import { WorkflowActionExecutor } from './workflow-action-executor';
 
 export const WRITING_AUTOPILOT_POLICY: WorkflowPolicy = {
   id: 'writing-autopilot',
@@ -21,6 +22,8 @@ export const WRITING_AUTOPILOT_POLICY: WorkflowPolicy = {
 export interface PiWorkflowRunnerDeps {
   stores: ExternalStores;
   planner?: AllowedActionPlanner;
+  actionExecutor?: WorkflowActionExecutor;
+  maxTurns?: number;
 }
 
 export class PiWorkflowRunner {
@@ -31,22 +34,33 @@ export class PiWorkflowRunner {
   }
 
   async runUntilBlocked(runId: string): Promise<WorkflowRun> {
-    const run = await this.requireRun(runId);
+    let run = await this.requireRun(runId);
     if (run.workflowId !== this.policy.id) throw new Error(`PiWorkflowRunner only supports ${this.policy.id}; got ${run.workflowId}.`);
-    const article = await this.loadArticle(run);
-    const pendingGate = await this.pendingHumanGate(run);
-    const session = await this.getOrCreateSession(run, article, pendingGate);
-    const allowedActions = this.planner.plan({
-      run,
-      article,
-      pendingHumanGate: Boolean(pendingGate),
-      requestedSectionId: typeof run.metadata.sectionId === 'string' ? run.metadata.sectionId : undefined,
-    });
-    const decision = this.buildDecision(allowedActions, pendingGate);
-    const nextRun = await this.persistRunState(run, session, decision, allowedActions, pendingGate);
-    await this.deps.stores.piAgentSessionStore.saveSession({ ...session, pendingHumanGateId: pendingGate?.id, baseArticleRevision: article?.revision });
-    await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'agent.decision', payload: { userId: run.metadata.userId, decision, allowedActions }, createdAt: nowIso() });
-    return nextRun;
+    const maxTurns = this.deps.maxTurns ?? 1;
+    for (let turn = 0; turn < maxTurns && run.status === 'running'; turn += 1) {
+      const article = await this.loadArticle(run);
+      const pendingGate = await this.pendingHumanGate(run);
+      const session = await this.getOrCreateSession(run, article, pendingGate);
+      const allowedActions = this.planner.plan({
+        run,
+        article,
+        pendingHumanGate: Boolean(pendingGate),
+        requestedSectionId: typeof run.metadata.sectionId === 'string' ? run.metadata.sectionId : undefined,
+      });
+      const decision = this.buildDecision(allowedActions, pendingGate);
+      run = await this.persistDecisionState(run, session, decision, allowedActions);
+      await this.deps.stores.piAgentSessionStore.saveSession({ ...session, pendingHumanGateId: pendingGate?.id, baseArticleRevision: article?.revision });
+      await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'agent.decision', payload: { userId: run.metadata.userId, decision, allowedActions }, createdAt: nowIso() });
+      if (pendingGate) return this.wait(run, pendingGate.question);
+      if (!allowedActions.length) return this.complete(run);
+      const selectedAction = allowedActions.find((action) => action.id === decision.selectedActionId) ?? allowedActions[0];
+      if (!this.deps.actionExecutor) return this.wait(run, '等待 agent action tool 执行。');
+      await this.deps.actionExecutor.execute({ policy: this.policy, run, action: selectedAction });
+      run = await this.requireRun(run.id);
+      if (run.status === 'waiting' || run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') return run;
+      if (run.status === 'queued') return run;
+    }
+    return run.status === 'running' ? this.wait(run, '已达到本轮自动执行步数上限。') : run;
   }
 
   private async loadArticle(run: WorkflowRun): Promise<ArticleArtifact | undefined> {
@@ -60,7 +74,15 @@ export class PiWorkflowRunner {
 
   private async getOrCreateSession(run: WorkflowRun, article?: ArticleArtifact, pendingGate?: HumanGate): Promise<PiAgentSession> {
     const existing = await this.deps.stores.piAgentSessionStore.getWorkflowSession(run.id);
-    if (existing) return existing;
+    if (existing) {
+      return this.deps.stores.piAgentSessionStore.saveSession({
+        ...existing,
+        workspaceId: existing.workspaceId ?? (typeof run.metadata.workspaceId === 'string' ? run.metadata.workspaceId : article?.workspaceId),
+        articleId: existing.articleId ?? article?.id,
+        pendingHumanGateId: pendingGate?.id,
+        baseArticleRevision: article?.revision ?? existing.baseArticleRevision,
+      });
+    }
     const now = nowIso();
     const session: PiAgentSession = {
       id: newId('pi_ses'),
@@ -90,14 +112,8 @@ export class PiWorkflowRunner {
     return { intent: selected.type, selectedActionId: selected.id, rationale: selected.reason, requiresHumanGate: selected.requiresHumanGate };
   }
 
-  private async persistRunState(run: WorkflowRun, session: PiAgentSession, decision: AgentDecision, allowedActions: ReturnType<AllowedActionPlanner['plan']>, pendingGate?: HumanGate): Promise<WorkflowRun> {
-    const status: WorkflowRun['status'] = pendingGate || allowedActions.length ? 'waiting' : 'completed';
-    const waitingFor = status === 'waiting'
-      ? { nodeId: 'pi-agent', reason: pendingGate ? pendingGate.question : '等待 agent action tool 执行。' }
-      : undefined;
+  private async persistDecisionState(run: WorkflowRun, session: PiAgentSession, decision: AgentDecision, allowedActions: ReturnType<AllowedActionPlanner['plan']>): Promise<WorkflowRun> {
     return this.deps.stores.stateStore.updateRun(run.id, {
-      status,
-      waitingFor,
       state: {
         ...run.state,
         piAgentSessionId: session.id,
@@ -106,6 +122,18 @@ export class PiWorkflowRunner {
       },
       updatedAt: nowIso(),
     });
+  }
+
+  private async wait(run: WorkflowRun, reason: string): Promise<WorkflowRun> {
+    const waiting = await this.deps.stores.stateStore.updateRun(run.id, { status: 'waiting', waitingFor: { nodeId: 'pi-agent', reason }, updatedAt: nowIso() });
+    await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'workflow.waiting', payload: { workflowId: run.workflowId, reason, userId: run.metadata.userId, runMetadata: run.metadata }, createdAt: nowIso() });
+    return waiting;
+  }
+
+  private async complete(run: WorkflowRun): Promise<WorkflowRun> {
+    const completed = await this.deps.stores.stateStore.updateRun(run.id, { status: 'completed', waitingFor: undefined, updatedAt: nowIso() });
+    await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'workflow.completed', payload: { workflowId: run.workflowId, userId: run.metadata.userId, runMetadata: run.metadata }, createdAt: nowIso() });
+    return completed;
   }
 
   private async requireRun(runId: string): Promise<WorkflowRun> {
