@@ -3,11 +3,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DialogueBrief, WritingTaskCard, nowIso } from '@wa/core';
+import { AllowedAction, DialogueBrief, WorkflowRun, WritingTaskCard, nowIso } from '@wa/core';
 import { createApp } from './app';
 import { createContainer } from './bootstrap';
 import { AppConfig } from './config';
 import { mergeDialogueBrief } from './dialogueBrief';
+import { PiWorkflowActionExecutor } from './piWorkflowActionExecutor';
 
 let dataDir: string | undefined;
 afterEach(async () => { if (dataDir) await rm(dataDir, { recursive: true, force: true }); dataDir = undefined; });
@@ -144,6 +145,60 @@ describe('api app', () => {
     expect(resolvedBody.humanGates.find((gate: { id: string }) => gate.id === gates[0].id).status).toBe('accepted');
     expect(resolvedBody.operations).toHaveLength(operations.length);
     await app.close();
+  });
+
+  it('accepts workflow messages only after pending human gates are resolved', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { userId: 'message-user', message: '写一篇关于司棋的文章。', targetStage: 'task-card' } });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const gateId = body.humanGates[0].id;
+
+    const blocked = await app.inject({ method: 'POST', url: `/api/workflows/${body.run.id}/message`, payload: { userId: 'message-user', message: '补充：不要引用后四十回。' } });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json().gateId).toBe(gateId);
+
+    const rejected = await app.inject({ method: 'POST', url: `/api/workflows/${body.run.id}/human-gates/${gateId}/resolve`, payload: { userId: 'message-user', decision: 'reject' } });
+    expect(rejected.statusCode).toBe(200);
+    const resumed = await app.inject({ method: 'POST', url: `/api/workflows/${body.run.id}/message`, payload: { userId: 'message-user', message: '补充：不要引用后四十回。', targetStage: 'task-card' } });
+    expect(resumed.statusCode).toBe(200);
+    expect(resumed.json().run.status).toBe('waiting');
+    const session = await container.stores.piAgentSessionStore.getWorkflowSession(body.run.id);
+    expect(JSON.stringify(session?.messages)).toContain('补充：不要引用后四十回。');
+    await app.close();
+  });
+
+  it('rejects workflow tool calls that are not in current allowed actions', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const allowedAction: AllowedAction = {
+      id: 'act_allowed',
+      operationId: 'op_allowed',
+      type: 'create_task_card_draft',
+      requiresHumanGate: false,
+      reason: 'allowed',
+    };
+    const forgedAction: AllowedAction = {
+      ...allowedAction,
+      id: 'act_forged',
+      operationId: 'op_forged',
+    };
+    const run: WorkflowRun = {
+      id: 'run_guard',
+      workflowId: 'writing-autopilot',
+      status: 'running',
+      input: { message: '写一篇文章' },
+      state: { allowedActions: [allowedAction] },
+      metadata: { userId: 'guard-user', workspaceId: 'wsp_guard' },
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    const executor = new PiWorkflowActionExecutor({ stores: container.stores, runtime: container.runtime });
+    await expect(executor.execute({ policy: { id: 'writing-autopilot', goal: '', allowedActionPolicy: '', humanGatePolicy: '', completionPolicy: '' }, run, action: forgedAction })).rejects.toThrow('Unauthorized workflow action');
+    expect(await container.stores.workflowOperationStore.listOperations({ runId: run.id })).toEqual([]);
+    await container.close();
   });
 
   it('creates article comments and batch processes them into text revisions', async () => {

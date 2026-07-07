@@ -520,6 +520,37 @@ export function createApp(config: AppConfig, container: AppContainer) {
     return enrichRun(container, runId);
   });
 
+  app.post('/api/workflows/:runId/message', async (request, reply) => {
+    const { runId } = request.params as { runId: string };
+    const body = (request.body ?? {}) as { userId?: string; message?: string; targetStage?: string; sectionId?: string; replaceExisting?: boolean };
+    const userId = readRequestUserId(request, body.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const message = body.message?.trim();
+    if (!message) return reply.code(400).send({ error: 'message is required.' });
+    const run = await container.stores.stateStore.getRun(runId);
+    if (!run) return reply.code(404).send({ error: 'Run not found.' });
+    if (run.metadata.userId !== userId) return reply.code(403).send({ error: 'Run belongs to another user.' });
+    if (run.status === 'completed' || run.status === 'cancelled') return reply.code(400).send({ error: `Run is already ${run.status}.` });
+    const pendingGates = await container.stores.humanGateStore.listGates({ runId, userId, statuses: ['pending'] });
+    if (pendingGates.length) return reply.code(409).send({ error: 'Resolve pending HumanGate before sending a workflow message.', gateId: pendingGates[0].id });
+    const existingInput = readObject(run.input) ?? {};
+    const targetStage = normalizeWorkflowTargetStage(body.targetStage);
+    const sectionId = body.sectionId?.trim() || (typeof run.metadata.sectionId === 'string' ? run.metadata.sectionId : undefined);
+    const updatedInput = { ...existingInput, message, targetStage, sectionId, replaceExisting: body.replaceExisting === true };
+    await appendWorkflowUserMessage(container, run, message);
+    await container.stores.stateStore.updateRun(runId, {
+      status: 'running',
+      input: updatedInput,
+      waitingFor: undefined,
+      metadata: { ...run.metadata, sectionId },
+      state: { ...run.state, lastUserMessage: message, pendingHumanGateId: undefined },
+      updatedAt: nowIso(),
+    });
+    await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'pi.session.updated', payload: { userId, reason: 'workflow-user-message' }, createdAt: nowIso() });
+    await container.piRunner.runUntilBlocked(runId);
+    return enrichRun(container, runId);
+  });
+
   app.post('/api/workflows/:runId/cancel', async (request, reply) => {
     const { runId } = request.params as { runId: string };
     const run = await container.stores.stateStore.getRun(runId);
@@ -1148,6 +1179,33 @@ async function applyAcceptedHumanGate(container: AppContainer, gate: Awaited<Ret
 
 function readObject(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+async function appendWorkflowUserMessage(container: AppContainer, run: WorkflowRun, message: string): Promise<void> {
+  const existing = await container.stores.piAgentSessionStore.getWorkflowSession(run.id);
+  const now = nowIso();
+  const userMessage = { role: 'user', content: message, timestamp: Date.now() };
+  if (existing) {
+    await container.stores.piAgentSessionStore.saveSession({
+      ...existing,
+      messages: [...existing.messages, userMessage],
+      lockVersion: existing.lockVersion + 1,
+      updatedAt: now,
+    });
+    return;
+  }
+  await container.stores.piAgentSessionStore.saveSession({
+    id: newId('pi_ses'),
+    runId: run.id,
+    userId: run.metadata.userId,
+    workspaceId: typeof run.metadata.workspaceId === 'string' ? run.metadata.workspaceId : undefined,
+    articleId: typeof run.metadata.articleId === 'string' ? run.metadata.articleId : undefined,
+    contextKind: 'workflow',
+    messages: [userMessage],
+    lockVersion: 0,
+    createdAt: now,
+    updatedAt: now,
+  });
 }
 
 function sortWorkspaces(workspaces: WritingWorkspace[]): WritingWorkspace[] {

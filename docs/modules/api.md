@@ -16,6 +16,7 @@
 | GET | `/api/articles/:articleId` | 读取文章 artifact |
 | POST | `/api/knowledge/search` | 调用 KnowledgeStore，HTTP RAG 时转发到外部 RAG |
 | POST | `/api/workflows/writing/start` | 启动或继续 writing-autopilot，根据 `targetStage` 推进任务卡、大纲、章节或整篇写作 |
+| POST | `/api/workflows/:runId/message` | 向等待中的 workflow run 发送后续指令；pending HumanGate 必须先处理 |
 | POST | `/api/workflows/:runId/human-gates/:gateId/resolve` | 处理 HumanGate |
 | POST | `/api/workflows/:runId/cancel` | 取消 workflow |
 | GET | `/api/workflows/:runId` | 读取 run、article、events、HumanGate、operation log、review artifact |

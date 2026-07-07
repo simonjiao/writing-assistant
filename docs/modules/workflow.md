@@ -35,5 +35,6 @@ running -> cancelled
 - 前端按钮只发送 intent，例如 `targetStage=outline` 或 `targetStage=section`。
 - Runner 是流程真相来源，不保留分散的任务卡、大纲、章节旧 workflow 入口。
 - 工具必须幂等；同一 operationId 已完成时不能重复改写 artifact。
+- 工具层必须二次校验 action 是否来自当前 run 的 allowedActions，并校验 workspace/article 权限。
 - 覆盖当前大纲、确认任务卡等用户裁决点必须生成 HumanGate。
 - 修改 artifact 时要校验 article revision，防止过期操作覆盖新内容。

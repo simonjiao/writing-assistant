@@ -30,6 +30,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
   constructor(private readonly deps: { stores: ExternalStores; runtime: AgentRuntime }) {}
 
   async execute(input: WorkflowActionExecutionInput): Promise<WorkflowActionExecutionResult> {
+    await this.assertAuthorizedAction(input.run, input.action);
     const existing = await this.deps.stores.workflowOperationStore.getOperation(input.action.operationId);
     if (existing?.status === 'completed') return { summary: `Operation already completed: ${input.action.operationId}` };
     if (existing?.status === 'running') throw new Error(`Workflow operation is already running: ${input.action.operationId}`);
@@ -65,6 +66,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
   private async createTaskCardDraft(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
     const rawRequirement = this.readRunMessage(run);
     const workspaceId = this.requireString(run.metadata.workspaceId, 'workspaceId');
+    await this.requireWorkspaceAccess(run, workspaceId);
     const result = await this.deps.runtime.invokeSkill<TaskCardBuilderInput, TaskCardBuilderOutput>(
       'task-card-builder',
       { rawRequirement, userId: run.metadata.userId, sessionId: run.metadata.sessionId, domainContext: (run.input as { domainContext?: TaskCardBuilderInput['domainContext'] }).domainContext, writingStandard: (run.input as { writingStandard?: TaskCardBuilderInput['writingStandard'] }).writingStandard },
@@ -251,6 +253,30 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     return article;
   }
 
+  private async assertAuthorizedAction(run: WorkflowRun, action: AllowedAction): Promise<void> {
+    const allowedActions = readAllowedActions(run.state.allowedActions);
+    const authorized = allowedActions.find((item) => item.id === action.id);
+    if (!authorized) throw new Error(`Unauthorized workflow action: ${action.id}`);
+    if (authorized.operationId !== action.operationId) throw new Error(`Unauthorized operationId for action ${action.id}.`);
+    if (authorized.type !== action.type) throw new Error(`Unauthorized action type for action ${action.id}.`);
+    if (authorized.articleId !== action.articleId) throw new Error(`Unauthorized articleId for action ${action.id}.`);
+    if (authorized.sectionId !== action.sectionId) throw new Error(`Unauthorized sectionId for action ${action.id}.`);
+    if (authorized.baseRevision !== action.baseRevision) throw new Error(`Unauthorized baseRevision for action ${action.id}.`);
+    if (authorized.requiresHumanGate !== action.requiresHumanGate) throw new Error(`Unauthorized HumanGate policy for action ${action.id}.`);
+    if (action.articleId) {
+      const article = await this.requireArticle(action.articleId);
+      await this.requireWorkspaceAccess(run, article.workspaceId);
+    }
+  }
+
+  private async requireWorkspaceAccess(run: WorkflowRun, workspaceId: string): Promise<void> {
+    const workspace = await this.deps.stores.workspaceStore.getWorkspace(workspaceId);
+    if (!workspace || workspace.deletedAt) throw new Error(`Workspace not found: ${workspaceId}`);
+    if (workspace.userId !== run.metadata.userId && !workspace.memberUserIds.includes(run.metadata.userId)) {
+      throw new Error('Workflow action requires workspace access.');
+    }
+  }
+
   private requireTaskCard(article: ArticleArtifact): WritingTaskCard {
     if (!article.taskCard) throw new Error('Task card is required for this workflow action.');
     return article.taskCard;
@@ -265,6 +291,21 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     if (typeof value !== 'string' || !value.trim()) throw new Error(`${field} is required.`);
     return value.trim();
   }
+}
+
+function readAllowedActions(value: unknown): AllowedAction[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isAllowedAction);
+}
+
+function isAllowedAction(value: unknown): value is AllowedAction {
+  if (!value || typeof value !== 'object') return false;
+  const action = value as Partial<AllowedAction>;
+  return typeof action.id === 'string'
+    && typeof action.operationId === 'string'
+    && typeof action.type === 'string'
+    && typeof action.requiresHumanGate === 'boolean'
+    && typeof action.reason === 'string';
 }
 
 function consistencyFindings(article: ArticleArtifact): ReviewFinding[] {

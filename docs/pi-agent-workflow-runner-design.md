@@ -2,7 +2,9 @@
 
 ## 状态
 
-目标设计，尚未实现。
+实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、开发期多用户工作台隔离、统一 `/api/workflows/writing/start` 和旧节点式 runner/queue 删除。
+
+仍需补齐的重点：`create_revision_proposal` workflow action、workflow message 到修改提案的完整闭环，以及更完整的验收场景自动化覆盖。
 
 本文记录一次破坏式重构方案：以 `@earendil-works/pi-agent-core` 作为 workflow runner 基座，让 agent 在受控边界内自主选择下一步，并统一工具调用。重构后不保留旧节点式 workflow 双轨兼容。
 
