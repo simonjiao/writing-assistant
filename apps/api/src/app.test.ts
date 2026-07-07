@@ -171,6 +171,29 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('requires the workflow owner when cancelling a run', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { userId: 'cancel-user', message: '写一篇关于司棋的文章。', targetStage: 'task-card' } });
+    expect(response.statusCode).toBe(200);
+    const runId = response.json().run.id;
+
+    const missingUser = await app.inject({ method: 'POST', url: `/api/workflows/${runId}/cancel`, payload: {} });
+    expect(missingUser.statusCode).toBe(400);
+
+    const otherUser = await app.inject({ method: 'POST', url: `/api/workflows/${runId}/cancel`, payload: { userId: 'other-user' } });
+    expect(otherUser.statusCode).toBe(403);
+
+    const cancelled = await app.inject({ method: 'POST', url: `/api/workflows/${runId}/cancel`, payload: { userId: 'cancel-user' } });
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json().run.status).toBe('cancelled');
+
+    const repeated = await app.inject({ method: 'POST', url: `/api/workflows/${runId}/cancel`, payload: { userId: 'cancel-user' } });
+    expect(repeated.statusCode).toBe(400);
+    await app.close();
+  });
+
   it('rejects workflow tool calls that are not in current allowed actions', async () => {
     const config = testConfig();
     const container = createContainer(config);

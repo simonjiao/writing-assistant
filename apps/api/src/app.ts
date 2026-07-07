@@ -493,10 +493,15 @@ export function createApp(config: AppConfig, container: AppContainer) {
 
   app.post('/api/workflows/:runId/cancel', async (request, reply) => {
     const { runId } = request.params as { runId: string };
+    const body = (request.body ?? {}) as { userId?: string };
+    const userId = readRequestUserId(request, body.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const run = await container.stores.stateStore.getRun(runId);
     if (!run) return reply.code(404).send({ error: 'Run not found.' });
+    if (run.metadata.userId !== userId) return reply.code(403).send({ error: 'Run belongs to another user.' });
+    if (run.status === 'completed' || run.status === 'cancelled') return reply.code(400).send({ error: `Run is already ${run.status}.` });
     await container.stores.stateStore.updateRun(runId, { status: 'cancelled', updatedAt: nowIso() });
-    await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'workflow.failed', payload: { workflowId: run.workflowId, cancelled: true, userId: run.metadata.userId }, createdAt: nowIso() });
+    await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'workflow.failed', payload: { workflowId: run.workflowId, cancelled: true, userId }, createdAt: nowIso() });
     return enrichRun(container, runId);
   });
   app.get('/api/workflows/:runId/events', async (request) => { const { runId } = request.params as { runId: string }; return container.stores.eventTraceStore.listByRun(runId); });
