@@ -27,6 +27,7 @@ import {
   TaskCardBuilderInput,
   TaskCardBuilderOutput,
 } from '@wa/skills';
+import { processArticleComments } from './articleComments';
 
 export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
   constructor(private readonly deps: { stores: ExternalStores; runtime: AgentRuntime }) {}
@@ -62,6 +63,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     if (action.type === 'review_task_card_outline_consistency') return this.reviewTaskCardOutlineConsistency(run, action);
     if (action.type === 'create_revision_proposal') return this.createRevisionProposal(run, action);
     if (action.type === 'write_next_section' || action.type === 'write_section') return this.writeSection(run, action);
+    if (action.type === 'process_article_comments') return this.processArticleComments(run, action);
     if (action.type === 'generate_polish_report') return this.generatePolishReport(run, action);
     throw new Error(`Unsupported workflow action: ${action.type}`);
   }
@@ -241,6 +243,35 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     await this.deps.stores.artifactStore.commitVersion(article.id, `pi 生成章节正文：${section.title}`, 'agent');
     await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'artifact.updated', payload: { articleId: article.id, reason: 'pi-section-written', sectionId, blockIds: blocks.map((block) => block.id), userId: run.metadata.userId }, createdAt: nowIso() });
     return { article: updated, summary: result.summary };
+  }
+
+  private async processArticleComments(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
+    const article = await this.requireArticle(action.articleId);
+    this.requireBaseRevision(action, article);
+    const result = await processArticleComments(this.deps, article, run.metadata.userId, {
+      sessionId: typeof run.metadata.sessionId === 'string' ? run.metadata.sessionId : undefined,
+      commentIds: readCommentIds(run.input),
+      runId: run.id,
+      baseRevision: action.baseRevision as number,
+      operationId: action.operationId,
+    });
+    const revised = result.results.filter((item) => item.action === 'revise' && item.changed).length;
+    const explained = result.results.filter((item) => item.action === 'explain').length;
+    const questions = result.results.filter((item) => item.action === 'ask').length;
+    await this.deps.stores.stateStore.updateRun(run.id, {
+      state: {
+        ...run.state,
+        commentProcessResult: {
+          articleRevision: result.article.revision,
+          processedCount: result.results.length,
+          revised,
+          explained,
+          questions,
+        },
+      },
+      updatedAt: nowIso(),
+    });
+    return { article: result.article, summary: result.results.length ? `已处理 ${result.results.length} 条批注：修订 ${revised} 条，解释 ${explained} 条，追问 ${questions} 条。` : '没有可处理批注。' };
   }
 
   private async generatePolishReport(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
@@ -446,6 +477,13 @@ function revisionOperationsForReview(reviewArtifact: ReviewArtifact): RevisionOp
 
 function actionableReviewFindings(reviewArtifact: ReviewArtifact): ReviewFinding[] {
   return reviewArtifact.findings.filter((finding) => finding.severity !== 'info');
+}
+
+function readCommentIds(input: unknown): string[] {
+  if (!input || typeof input !== 'object') return [];
+  const value = (input as { commentIds?: unknown }).commentIds;
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean);
 }
 
 function revisionInstruction(reviewArtifact: ReviewArtifact, findings: ReviewFinding[]): string {

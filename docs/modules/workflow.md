@@ -43,4 +43,5 @@ running -> cancelled
 - workflow 生成的 `RevisionProposal` 带 `runId`。应用后清理当前一致性阻断并恢复 runner；取消后清理 pending proposal，但保留一致性阻断，让 run 回到 `consistency-review` 等待态。
 - run 等待 pending proposal 时，workflow message 会先处理这个 proposal：应用、取消、或基于新意见刷新 proposal；普通“继续写作”不会绕过未处理的 pending proposal。
 - 同一文章、同一用户已有 workflow pending proposal 时，新的 `/api/workflows/writing/start` intent 会复用原 run，不创建并行 run。
+- 批注处理是 `process_article_comments` workflow action：只在明确批注意图时触发，处理后完成本次 run，不顺手继续写正文。
 - 统稿报告发现可修订 warning 时，也通过同一条 `pendingReviewProposal -> create_revision_proposal` 路径生成待确认修改方案；runner 不自动应用统稿建议。

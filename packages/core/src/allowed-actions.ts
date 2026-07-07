@@ -39,6 +39,16 @@ export class AllowedActionPlanner {
     if (!article.outline.length) {
       return [this.action(input.run, 'plan_outline', { article, reason: '任务卡已确认，尚未生成大纲。' })];
     }
+    if (isCommentProcessingIntent(input.run.input)) {
+      const commentTargets = writableCommentTargets(input.run, article);
+      if (!commentTargets.length || hasProcessedCommentsForCurrentRevision(input.run, article)) return [];
+      return [this.action(input.run, 'process_article_comments', {
+        article,
+        reason: `处理 ${commentTargets.length} 条正文批注。`,
+        targetKind: 'article-comments',
+        targetId: stableCommentTargetId(commentTargets.map((comment) => comment.id)),
+      })];
+    }
     if (this.needsConsistencyReview(input.run, article)) {
       return [this.action(input.run, 'review_task_card_outline_consistency', { article, reason: '任务卡或大纲 revision 变化后，需要先做一致性检查。' })];
     }
@@ -130,4 +140,34 @@ function readPendingReviewProposal(state: WorkflowRun['state'], articleRevision:
     targetId: typeof proposal.targetId === 'string' ? proposal.targetId : undefined,
     summary: typeof proposal.summary === 'string' ? proposal.summary : '处理审阅建议',
   };
+}
+
+function writableCommentTargets(run: WorkflowRun, article: ArticleArtifact) {
+  if (!isCommentProcessingIntent(run.input)) return [];
+  const requestedIds = readRequestedCommentIds(run.input);
+  const targets = (article.comments ?? []).filter((comment) => comment.status === 'open');
+  return requestedIds.length ? targets.filter((comment) => requestedIds.includes(comment.id)) : targets;
+}
+
+function isCommentProcessingIntent(input: unknown): boolean {
+  if (!input || typeof input !== 'object') return false;
+  const message = typeof (input as { message?: unknown }).message === 'string' ? (input as { message: string }).message : '';
+  return /批注|注释|评论/.test(message) && /处理|解决|修订|应用|批量/.test(message);
+}
+
+function readRequestedCommentIds(input: unknown): string[] {
+  if (!input || typeof input !== 'object') return [];
+  const value = (input as { commentIds?: unknown }).commentIds;
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean);
+}
+
+function hasProcessedCommentsForCurrentRevision(run: WorkflowRun, article: ArticleArtifact): boolean {
+  const value = run.state.commentProcessResult;
+  if (!value || typeof value !== 'object') return false;
+  return (value as { articleRevision?: unknown }).articleRevision === article.revision;
+}
+
+function stableCommentTargetId(commentIds: string[]): string {
+  return hashOperationArgs({ commentIds: [...commentIds].sort() }).slice(0, 24);
 }

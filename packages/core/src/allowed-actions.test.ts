@@ -112,6 +112,27 @@ describe('AllowedActionPlanner', () => {
     });
   });
 
+  it('routes explicit comment-processing intent to a comment workflow action only', () => {
+    const planner = new AllowedActionPlanner();
+    const withOpenComment = article({
+      outline: [{ id: 'sec_1', title: '第一节', goal: '写第一节', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'written' }],
+      blocks: [{ id: 'blk_1', type: 'paragraph', sectionId: 'sec_1', text: '这是一段正文。', sourceRefs: [], themeTags: [], status: 'draft', createdAt: now, updatedAt: now }],
+      comments: [{ id: 'cmt_1', articleId: 'art_1', blockId: 'blk_1', selectedText: '正文', comment: '处理这条批注', status: 'open', createdAt: now, updatedAt: now }],
+    });
+    const actions = planner.plan({
+      run: run({}, { targetStage: 'article', message: '处理正文批注', commentIds: ['cmt_1'] }),
+      article: withOpenComment,
+    });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({ type: 'process_article_comments', targetKind: 'article-comments', baseRevision: 3 });
+
+    const completed = planner.plan({
+      run: run({ commentProcessResult: { articleRevision: 4, processedCount: 1, revised: 1, explained: 0, questions: 0 } }, { targetStage: 'article', message: '处理正文批注', commentIds: ['cmt_1'] }),
+      article: { ...withOpenComment, revision: 4, comments: [{ ...withOpenComment.comments![0], status: 'resolved' }] },
+    });
+    expect(completed).toEqual([]);
+  });
+
   it('requires a human gate before replacing an existing outline', () => {
     const planner = new AllowedActionPlanner();
     const actions = planner.plan({

@@ -420,20 +420,11 @@ export function App() {
       setCommentProcessingSummary('没有可处理批注。');
       return;
     }
-    setBusy(true);
-    setError(undefined);
-    try {
-      const response = await api.processArticleComments(visibleArticle.id, { userId, sessionId, commentIds });
-      setArticle(response.article);
-      const revised = response.results.filter((item) => item.action === 'revise' && item.changed).length;
-      const explained = response.results.filter((item) => item.action === 'explain').length;
-      const questions = response.results.filter((item) => item.action === 'ask').length;
-      setCommentProcessingSummary(response.results.length ? `已处理 ${response.results.length} 条：修订 ${revised} 条，解释 ${explained} 条，追问 ${questions} 条。` : '没有待处理批注。');
-      await refreshArticleSummaries(response.article.workspaceId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
+    setCommentProcessingSummary(`准备处理 ${commentIds.length} 条批注。`);
+    const response = await execute(() => api.startWritingWorkflow({ articleId: visibleArticle.id, targetStage: 'article', userId, sessionId, message: '处理正文批注', commentIds }));
+    const result = response?.run.state.commentProcessResult as { processedCount?: unknown; revised?: unknown; explained?: unknown; questions?: unknown } | undefined;
+    if (result) {
+      setCommentProcessingSummary(`已处理 ${Number(result.processedCount ?? 0)} 条：修订 ${Number(result.revised ?? 0)} 条，解释 ${Number(result.explained ?? 0)} 条，追问 ${Number(result.questions ?? 0)} 条。`);
     }
   }
   function openNewTaskPage() {

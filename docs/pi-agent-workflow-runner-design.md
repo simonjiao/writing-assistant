@@ -2,7 +2,7 @@
 
 ## 状态
 
-实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、`create_revision_proposal`、proposal apply/dismiss 回流、workflow message 刷新 pending proposal、统稿建议可应用提案化、开发期多用户工作台隔离、统一 `/api/workflows/writing/start` 和旧节点式 runner/queue 删除。
+实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、`create_revision_proposal`、proposal apply/dismiss 回流、workflow message 刷新 pending proposal、批注处理 workflow action、统稿建议可应用提案化、开发期多用户工作台隔离、统一 `/api/workflows/writing/start` 和旧节点式 runner/queue 删除。
 
 仍需补齐的重点：workflow message 到复杂修改提案的端到端 UI 验收，以及更完整的自动化覆盖。
 
@@ -286,6 +286,7 @@ interface AllowedAction {
     | "review_task_card_outline_consistency"
     | "write_next_section"
     | "write_section"
+    | "process_article_comments"
     | "generate_polish_report"
     | "create_revision_proposal"
     | "request_human_gate";
@@ -320,6 +321,7 @@ interface AllowedAction {
 - `review_task_card_outline_consistency`
 - `write_next_section`
 - `write_section`
+- `process_article_comments`
 - `generate_polish_report`
 - `create_revision_proposal`
 - `request_human_gate`

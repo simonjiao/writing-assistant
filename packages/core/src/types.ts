@@ -400,6 +400,7 @@ export type AllowedActionType =
   | 'review_task_card_outline_consistency'
   | 'write_next_section'
   | 'write_section'
+  | 'process_article_comments'
   | 'generate_polish_report'
   | 'create_revision_proposal'
   | 'request_human_gate';

@@ -430,6 +430,69 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('processes article comments through writing-autopilot operation logs', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = nowIso();
+    const taskCard: WritingTaskCard = {
+      id: 'task-comment-workflow',
+      topic: '司棋人物文章',
+      writingGoal: '依据前80回分析司棋。',
+      audience: '普通读者',
+      scope: { chapters: ['前80回'], characters: ['司棋'], themes: ['人物'] },
+      structure: { articleType: 'analysis', expectedLength: '短文' },
+      style: { register: '自然中文', tone: '清楚', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: ['不得引用《红楼梦》后40回（程高本续书）的情节或任何文本'], citationRequired: false, sourcePolicy: '以前80回和脂批为依据。' },
+      interactionMode: { askBeforeWriting: false, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'workflow-comment-user', name: 'Workflow 批注工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'workflow-comment-user', workspaceId: workspace.id, title: '司棋人物文章', taskCard });
+    article.outline = [{ id: 'sec-comment-workflow', title: '司棋与前80回', goal: '分析司棋人物。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'written' }];
+    article.blocks = [{
+      id: 'blk-comment-workflow',
+      type: 'paragraph',
+      sectionId: 'sec-comment-workflow',
+      title: '同侪人物文章',
+      text: '迎春的判词与《喜冤家》曲文，预示她终被中山狼所噬；司棋虽有批书人为之心动，亦不免触柱而亡。',
+      sourceRefs: [],
+      themeTags: [],
+      status: 'draft',
+      createdAt: now,
+      updatedAt: now,
+    }];
+    await container.stores.artifactStore.updateArticle(article);
+
+    const selectedText = article.blocks[0].text;
+    const created = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/comments`,
+      payload: { userId: 'workflow-comment-user', blockId: 'blk-comment-workflow', selectedText, comment: '这里似乎是后40回内容，不要引用程高本续书。' },
+    });
+    expect(created.statusCode).toBe(200);
+    const commentId = created.json().comments[0].id;
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/workflows/writing/start',
+      payload: { userId: 'workflow-comment-user', articleId: article.id, targetStage: 'article', message: '处理正文批注', commentIds: [commentId] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.run.status).toBe('completed');
+    expect(body.run.state.commentProcessResult).toMatchObject({ processedCount: 1, revised: 1 });
+    expect(body.article.comments[0]).toMatchObject({ status: 'resolved', resolutionKind: 'revision' });
+    expect(body.article.blocks[0].text).not.toContain('触柱而亡');
+    const operations = await container.stores.workflowOperationStore.listOperations({ runId: body.run.id });
+    expect(operations.map((operation) => operation.toolName)).toEqual(['process_article_comments']);
+    expect(operations[0].articleRevisionBefore).toBe(created.json().revision);
+    await app.close();
+  });
+
   it('adds user replies to article comments and reopens them for processing', async () => {
     const config = testConfig();
     const container = createContainer(config);

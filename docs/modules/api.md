@@ -15,7 +15,7 @@
 | GET | `/api/articles` | 列出文章 |
 | GET | `/api/articles/:articleId` | 读取文章 artifact |
 | POST | `/api/knowledge/search` | 调用 KnowledgeStore，HTTP RAG 时转发到外部 RAG |
-| POST | `/api/workflows/writing/start` | 启动或继续 writing-autopilot，根据 `targetStage` 推进任务卡、大纲、章节或整篇写作 |
+| POST | `/api/workflows/writing/start` | 启动或继续 writing-autopilot，根据 intent 推进任务卡、大纲、章节、批注处理或整篇写作 |
 | POST | `/api/workflows/:runId/message` | 向等待中的 workflow run 发送后续指令；pending HumanGate 必须先处理；pending revision proposal 会优先应用、取消或刷新 |
 | POST | `/api/workflows/:runId/human-gates/:gateId/resolve` | 处理 HumanGate |
 | POST | `/api/workflows/:runId/cancel` | 取消 workflow |
@@ -59,6 +59,8 @@ WS /api/events/ws?runId=&userId=
 `RunResponse.revisionProposals` 返回当前文章、当前用户仍待处理的修改方案。workflow review 生成的 proposal 会通过这个字段同步到前端，不要求前端额外猜测或轮询对话接口。
 
 `/api/workflows/writing/start` 在已有同文章、同用户、绑定 workflow run 的 pending revision proposal 时，不会新建第二条 run；它会返回原 run 的等待态，并把本次 intent 作为 workflow message 处理。
+
+批注处理也通过 `/api/workflows/writing/start` 进入 `writing-autopilot`。前端传入 `message=处理正文批注` 和可选 `commentIds`，runner 会选择 `process_article_comments` action，并写入 operation log、event trace 和 article revision。
 
 workflow review 生成的 proposal 带 `runId`。`apply` 返回 `DialogueResponse`，其中可以包含恢复后的 `run/article/events/revisionProposals`；`dismiss` 同样返回 `DialogueResponse`，前端应按普通对话响应更新本地状态。
 

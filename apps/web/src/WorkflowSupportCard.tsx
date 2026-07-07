@@ -94,6 +94,7 @@ function workflowActionLabel(type?: string): string {
     ask_followup: '确认任务卡',
     plan_outline: '生成大纲',
     review_task_card_outline_consistency: '检查任务卡与大纲',
+    process_article_comments: '处理正文批注',
     write_next_section: '生成下一节',
     write_section: '生成当前节',
     generate_polish_report: '生成统稿建议',

@@ -3,9 +3,10 @@ import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply, FastifyRequest } from 'fastify';
 import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
 import { normalizeTaskCardPolicies } from '@wa/skills';
-import type { ArticleCommentResolverInput, ArticleCommentResolverOutput, DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, PatchEditorInput, PatchEditorOutput, TaskCardReviserOutput } from '@wa/skills';
+import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, PatchEditorInput, PatchEditorOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
+import { appendCommentReply, canDeleteUnprocessedComment, canDeleteUnprocessedReply, processArticleComments, reconcileCommentAfterReplyDeletion, updateComment } from './articleComments';
 import { addKnowledgeEvidenceToBrief, buildCompactDialogueConversation, compactDialogueBriefForPrompt, enqueueDialogueBriefUpdate, ensureDialogueBriefSettled, getDialogueBriefStatus, getOrCreateDialogueBrief } from './dialogueBrief';
 import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfileSummaries, recommendDomainProfiles, resolveDomainProfileSelection } from './domainProfiles';
 import { getWritingStandardDisplaySummary, getWritingStandardSummary, resolveWritingStandardSelection, WritingStandardSelectionRequest } from './writingStandards';
@@ -178,7 +179,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
-    const result = await processArticleComments(container, access.article, userId, body.sessionId, body.commentIds);
+    const result = await processArticleComments(container, access.article, userId, { sessionId: body.sessionId, commentIds: body.commentIds });
     return { article: withWritingStandardSummary(result.article), results: result.results };
   });
   app.delete('/api/articles/:articleId', async (request, reply) => {
@@ -455,7 +456,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   });
 
   app.post('/api/workflows/writing/start', async (request, reply) => {
-    const body = (request.body ?? {}) as { userId?: string; sessionId?: string; workspaceId?: string; articleId?: string; message?: string; sectionId?: string; targetStage?: string; replaceExisting?: boolean; domainProfile?: DomainProfileSelectionRequest; writingStandard?: WritingStandardSelectionRequest };
+    const body = (request.body ?? {}) as { userId?: string; sessionId?: string; workspaceId?: string; articleId?: string; message?: string; sectionId?: string; targetStage?: string; replaceExisting?: boolean; commentIds?: string[]; domainProfile?: DomainProfileSelectionRequest; writingStandard?: WritingStandardSelectionRequest };
     const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const articleId = body.articleId?.trim();
@@ -488,7 +489,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
       id: newId('run'),
       workflowId: WRITING_AUTOPILOT_POLICY.id,
       status: 'running',
-      input: { message: body.message?.trim() || undefined, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined, targetStage: normalizeWorkflowTargetStage(body.targetStage), replaceExisting: body.replaceExisting === true, domainContext, writingStandard },
+      input: { message: body.message?.trim() || undefined, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined, targetStage: normalizeWorkflowTargetStage(body.targetStage), replaceExisting: body.replaceExisting === true, commentIds: normalizeCommentIds(body.commentIds), domainContext, writingStandard },
       state: {},
       metadata: { userId, sessionId: body.sessionId, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined },
       createdAt: now,
@@ -1089,177 +1090,6 @@ async function applyRevisionOperation(container: AppContainer, article: ArticleA
   return { article: updated };
 }
 
-type ArticleCommentProcessResult = {
-  commentId: string;
-  blockId: string;
-  action: ArticleCommentResolverOutput['action'];
-  status: ArticleComment['status'];
-  message: string;
-  changed: boolean;
-};
-
-async function processArticleComments(container: AppContainer, article: ArticleArtifact, userId: string, sessionId?: string, commentIds?: string[]): Promise<{ article: ArticleArtifact; results: ArticleCommentProcessResult[] }> {
-  const targetIds = new Set((commentIds ?? []).map((id) => id.trim()).filter(Boolean));
-  const comments = article.comments ?? [];
-  const targets = comments.filter((comment) => (targetIds.size ? targetIds.has(comment.id) : comment.status === 'open'));
-  if (!targets.length) return { article, results: [] };
-  let revisedCount = 0;
-  const results: ArticleCommentProcessResult[] = [];
-  for (const comment of targets) {
-    const block = article.blocks.find((item) => item.id === comment.blockId);
-    if (!block) {
-      updateComment(comment, { status: 'needs_input', resolutionKind: 'question', response: '这条批注关联的段落已经不存在，需要重新选择正文后再批注。' });
-      results.push({ commentId: comment.id, blockId: comment.blockId, action: 'ask', status: comment.status, message: comment.response ?? '', changed: false });
-      continue;
-    }
-    try {
-      const output = await container.runtime.invokeSkill<ArticleCommentResolverInput, ArticleCommentResolverOutput>(
-        'article-comment-resolver',
-        {
-          articleId: article.id,
-          comment,
-          block,
-          taskCard: article.taskCard,
-          adjacentBlocks: adjacentBlocksForArticle(article.blocks, block.id),
-        },
-        { userId, sessionId, articleId: article.id, blockId: block.id },
-      );
-      const applied = applyArticleCommentResolution(article, comment, output);
-      if (applied.changed) revisedCount += 1;
-      results.push({ commentId: comment.id, blockId: comment.blockId, action: output.action, status: comment.status, message: comment.response ?? output.response, changed: applied.changed });
-    } catch (error) {
-      updateComment(comment, { status: 'needs_input', resolutionKind: 'question', response: `这条批注没有处理成功，需要人工确认：${error instanceof Error ? error.message : String(error)}` });
-      results.push({ commentId: comment.id, blockId: comment.blockId, action: 'ask', status: comment.status, message: comment.response ?? '', changed: false });
-    }
-  }
-  const updated = await container.stores.artifactStore.updateArticle(article);
-  if (revisedCount) {
-    await container.stores.artifactStore.commitVersion(article.id, `处理正文批注：${revisedCount} 处修订`, 'agent');
-  }
-  await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'article-comments-processed', processedCount: results.length, revisedCount, userId }, createdAt: nowIso() });
-  return { article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated, results };
-}
-
-function applyArticleCommentResolution(article: ArticleArtifact, comment: ArticleComment, output: ArticleCommentResolverOutput): { changed: boolean } {
-  if (output.action === 'explain') {
-    updateComment(comment, { status: 'resolved', resolutionKind: 'explanation', response: output.response });
-    return { changed: false };
-  }
-  if (output.action === 'ask') {
-    updateComment(comment, { status: 'needs_input', resolutionKind: 'question', response: output.response });
-    return { changed: false };
-  }
-  const replacementText = output.replacementText?.trim();
-  if (!replacementText) {
-    updateComment(comment, { status: 'needs_input', resolutionKind: 'question', response: '处理器没有给出可替换文本，需要人工确认。' });
-    return { changed: false };
-  }
-  const block = article.blocks.find((item) => item.id === comment.blockId);
-  if (!block) {
-    updateComment(comment, { status: 'needs_input', resolutionKind: 'question', response: '这条批注关联的段落已经不存在，需要重新选择正文后再批注。' });
-    return { changed: false };
-  }
-  const range = locateCommentSelection(block.text, comment);
-  if (!range) {
-    updateComment(comment, { status: 'needs_input', resolutionKind: 'question', response: '选中文本已经变化，无法自动替换；请重新选择最新正文添加批注。' });
-    return { changed: false };
-  }
-  const text = `${block.text.slice(0, range.start)}${replacementText}${block.text.slice(range.end)}`;
-  article.blocks = article.blocks.map((item) => item.id === block.id ? { ...item, text, status: 'draft', updatedAt: nowIso() } : item);
-  updateComment(comment, { status: 'resolved', resolutionKind: 'revision', response: output.response, replacementText });
-  return { changed: true };
-}
-
-function updateComment(comment: ArticleComment, patch: Partial<ArticleComment>): void {
-  const now = nowIso();
-  Object.assign(comment, {
-    ...patch,
-    updatedAt: now,
-    resolvedAt: patch.status === 'resolved' ? now : comment.resolvedAt,
-  });
-  if (typeof patch.response === 'string' && patch.response.trim()) appendCommentReply(comment, 'assistant', patch.response, now);
-}
-
-function appendCommentReply(comment: ArticleComment, role: 'user' | 'assistant' | 'system', content: string, createdAt = nowIso()): void {
-  const text = content.trim();
-  if (!text) return;
-  const existingReplies = comment.replies ?? [];
-  const replies = existingReplies.length ? existingReplies : legacyResponseReply(comment);
-  const last = replies[replies.length - 1];
-  comment.replies = last?.role === role && last.content === text ? replies : [...replies, { id: newId('crp'), role, content: text, createdAt }];
-  comment.updatedAt = createdAt;
-}
-
-function canDeleteUnprocessedComment(comment: ArticleComment): boolean {
-  return comment.status === 'open'
-    && !(comment.replies ?? []).length
-    && !comment.response?.trim()
-    && !comment.replacementText?.trim()
-    && !comment.resolvedAt;
-}
-
-function canDeleteUnprocessedReply(comment: ArticleComment, reply: NonNullable<ArticleComment['replies']>[number]): boolean {
-  if (comment.status !== 'open' || reply.role !== 'user') return false;
-  const replies = comment.replies ?? [];
-  const replyIndex = replies.findIndex((item) => item.id === reply.id);
-  if (replyIndex < 0) return false;
-  return replies.slice(replyIndex + 1).every((item) => item.role === 'user');
-}
-
-function reconcileCommentAfterReplyDeletion(comment: ArticleComment): void {
-  const now = nowIso();
-  const replies = comment.replies ?? [];
-  const latestReply = replies[replies.length - 1];
-  if (latestReply?.role === 'user') {
-    comment.status = 'open';
-    comment.resolutionKind = undefined;
-    comment.updatedAt = now;
-    return;
-  }
-  if (comment.response?.trim()) {
-    if (comment.replacementText?.trim() || comment.resolvedAt) {
-      comment.status = 'resolved';
-      comment.resolutionKind = comment.replacementText?.trim() ? 'revision' : 'explanation';
-      comment.resolvedAt = comment.resolvedAt ?? now;
-    } else {
-      comment.status = 'needs_input';
-      comment.resolutionKind = 'question';
-    }
-    comment.updatedAt = now;
-    return;
-  }
-  if (comment.replacementText?.trim()) {
-    comment.status = 'resolved';
-    comment.resolutionKind = 'revision';
-    comment.resolvedAt = comment.resolvedAt ?? now;
-  } else {
-    comment.status = 'open';
-    comment.resolutionKind = undefined;
-    comment.resolvedAt = undefined;
-  }
-  comment.updatedAt = now;
-}
-
-function legacyResponseReply(comment: ArticleComment): NonNullable<ArticleComment['replies']> {
-  const response = comment.response?.trim();
-  return response ? [{ id: newId('crp'), role: 'assistant', content: response, createdAt: comment.resolvedAt ?? comment.updatedAt }] : [];
-}
-
-function locateCommentSelection(text: string, comment: ArticleComment): { start: number; end: number } | undefined {
-  const directIndex = text.indexOf(comment.selectedText);
-  if (directIndex >= 0) return { start: directIndex, end: directIndex + comment.selectedText.length };
-  if (typeof comment.selectionStart === 'number' && typeof comment.selectionEnd === 'number' && text.slice(comment.selectionStart, comment.selectionEnd) === comment.selectedText) {
-    return { start: comment.selectionStart, end: comment.selectionEnd };
-  }
-  return undefined;
-}
-
-function adjacentBlocksForArticle(blocks: ArticleBlock[], blockId: string): Array<Pick<ArticleBlock, 'id' | 'title' | 'text'>> {
-  const index = blocks.findIndex((block) => block.id === blockId);
-  if (index < 0) return [];
-  return blocks.slice(Math.max(0, index - 1), index + 2).filter((block) => block.id !== blockId).map((block) => ({ id: block.id, title: block.title, text: block.text.slice(0, 600) }));
-}
-
 function defaultWorkspaceId(userId: string): string {
   return `wsp_default_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
 }
@@ -1299,6 +1129,11 @@ function readRequestUserId(request: FastifyRequest, explicitUserId?: string): st
 function normalizeWorkflowTargetStage(value: string | undefined): 'task-card' | 'outline' | 'section' | 'article' {
   if (value === 'task-card' || value === 'outline' || value === 'section' || value === 'article') return value;
   return 'article';
+}
+
+function normalizeCommentIds(value: string[] | undefined): string[] | undefined {
+  const ids = [...new Set((value ?? []).map((item) => item.trim()).filter(Boolean))];
+  return ids.length ? ids : undefined;
 }
 
 async function ensureDefaultWorkspace(container: AppContainer, userId: string): Promise<WritingWorkspace> {
