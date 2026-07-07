@@ -2,7 +2,7 @@
 
 ## 状态
 
-实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、`create_revision_proposal`、proposal apply/dismiss 回流、workflow message 刷新 pending proposal、批注处理 workflow action、统稿建议可应用提案化、开发期多用户工作台隔离、统一 `/api/workflows/writing/start`、旧节点式 runner/queue 删除，并移除批注处理、任务卡确认、任务卡智能修订和大纲项智能修订的直连 REST 入口。
+实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、`create_revision_proposal`、proposal apply/dismiss 回流、workflow message 刷新 pending proposal、批注处理 workflow action、统稿建议可应用提案化、开发期多用户工作台隔离、统一 `/api/workflows/writing/start`、旧节点式 runner/queue 删除，并移除批注处理、任务卡确认、任务卡智能修订和大纲项智能修订的直连 REST 入口。手工大纲编辑、正文批注写入、任务删除也已纳入 revision 校验和 operation 审计。
 
 仍需补齐的重点：workflow message 到复杂修改提案的端到端 UI 验收，以及更完整的自动化覆盖。
 
@@ -167,9 +167,9 @@ GET  /api/workflows/:runId/events
 ```ts
 interface PiAgentSession {
   id: string;
-  runId: string;
+  runId?: string;
   userId: string;
-  workspaceId: string;
+  workspaceId?: string;
   articleId?: string;
   contextKind: "workflow" | "task-card" | "outline" | "outline-item" | "block" | "article-review";
   targetId?: string;
