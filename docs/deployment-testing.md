@@ -32,6 +32,22 @@ LLM_PROVIDER=mock
 curl http://localhost:8787/api/queue/status
 ```
 
+## Pi Workflow 状态重置
+
+从旧 workflow 运行态切到 pi-agent 时，保留工作台、文章、会话、知识和对话数据；清理 run、event、pi session、HumanGate、operation、review artifact，清掉 session 中悬挂的 `currentRunId`，并补齐缺失的文章 revision。
+
+先 dry-run：
+
+```bash
+npm run workflow:reset-pi:dry-run
+```
+
+确认后执行：
+
+```bash
+npm run workflow:reset-pi
+```
+
 ## HTTP RAG 测试
 
 启动一个通用兼容服务，提供：
