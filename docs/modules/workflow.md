@@ -37,6 +37,7 @@ running -> cancelled
 - Runner 是流程真相来源，不保留分散的任务卡、大纲、章节旧 workflow 入口。
 - 工具必须幂等；同一 operationId 已完成时不能重复改写 artifact。
 - 工具层必须二次校验 action 是否来自当前 run 的 allowedActions，并校验 workspace/article 权限。
+- agent 决策必须显式选择一个授权 action；runner 不能在缺少 selectedActionId 或缺少 decision provider 时默认执行第一个 action。
 - 覆盖当前大纲、确认任务卡等用户裁决点必须生成 HumanGate。
 - 修改 artifact 时要校验 article revision，防止过期操作覆盖新内容。
 - 一致性检查出现 blocking finding 时，runner 先用 `create_revision_proposal` 生成绑定当前 run 的待确认方案，再等待用户应用或取消；同一 revision 上不会继续生成正文。

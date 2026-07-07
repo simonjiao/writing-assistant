@@ -55,17 +55,18 @@ export class PiWorkflowRunner {
         pendingHumanGate: Boolean(pendingGate),
         requestedSectionId: typeof run.metadata.sectionId === 'string' ? run.metadata.sectionId : undefined,
       });
-      const decisionResult = pendingGate || !this.deps.decisionProvider
-        ? { decision: this.buildDecision(allowedActions, pendingGate), messages: session.messages }
-        : await this.deps.decisionProvider.decide({ policy: this.policy, run, article, session, allowedActions });
+      const decisionResult = await this.resolveDecision(run, article, session, pendingGate, allowedActions).catch((error) => this.fail(run, error));
+      if ('status' in decisionResult) return decisionResult;
       const decision = decisionResult.decision;
       run = await this.persistDecisionState(run, session, decision, allowedActions);
       await this.deps.stores.piAgentSessionStore.saveSession({ ...session, messages: decisionResult.messages, pendingHumanGateId: pendingGate?.id, baseArticleRevision: article?.revision });
       await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'agent.decision', payload: { userId: run.metadata.userId, decision, allowedActions }, createdAt: nowIso() });
       if (pendingGate) return this.wait(run, pendingGate.question);
       if (!allowedActions.length) return this.complete(run);
-      const selectedAction = allowedActions.find((action) => action.id === decision.selectedActionId) ?? allowedActions[0];
-      if (!this.deps.actionExecutor) return this.wait(run, '等待 agent action tool 执行。');
+      if (!decision.selectedActionId) return this.fail(run, new Error('Pi agent did not select an action while allowedActions is non-empty.'));
+      const selectedAction = allowedActions.find((action) => action.id === decision.selectedActionId);
+      if (!selectedAction) return this.fail(run, new Error(`Pi agent selected unauthorized action: ${decision.selectedActionId}`));
+      if (!this.deps.actionExecutor) return this.fail(run, new Error('PiWorkflowRunner requires an actionExecutor when actions are available.'));
       await this.deps.actionExecutor.execute({ policy: this.policy, run, action: selectedAction });
       run = await this.requireRun(run.id);
       if (run.status === 'waiting' || run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') return run;
@@ -113,13 +114,26 @@ export class PiWorkflowRunner {
     return session;
   }
 
-  private buildDecision(allowedActions: ReturnType<AllowedActionPlanner['plan']>, pendingGate?: HumanGate): AgentDecision {
+  private async resolveDecision(
+    run: WorkflowRun,
+    article: ArticleArtifact | undefined,
+    session: PiAgentSession,
+    pendingGate: HumanGate | undefined,
+    allowedActions: ReturnType<AllowedActionPlanner['plan']>,
+  ): Promise<{ decision: AgentDecision; messages: PiAgentSession['messages'] }> {
+    if (pendingGate || !allowedActions.length) {
+      return { decision: this.buildInternalDecision(allowedActions, pendingGate), messages: session.messages };
+    }
+    if (!this.deps.decisionProvider) throw new Error('PiWorkflowRunner requires a decisionProvider when actions are available.');
+    return this.deps.decisionProvider.decide({ policy: this.policy, run, article, session, allowedActions });
+  }
+
+  private buildInternalDecision(allowedActions: ReturnType<AllowedActionPlanner['plan']>, pendingGate?: HumanGate): AgentDecision {
     if (pendingGate) {
       return { intent: 'wait_for_human_gate', rationale: pendingGate.question, requiresHumanGate: true, stopReason: 'waiting' };
     }
-    const selected = allowedActions[0];
-    if (!selected) return { intent: 'complete', rationale: '没有可继续执行的动作。', requiresHumanGate: false, stopReason: 'completed' };
-    return { intent: selected.type, selectedActionId: selected.id, rationale: selected.reason, requiresHumanGate: selected.requiresHumanGate };
+    if (!allowedActions.length) return { intent: 'complete', rationale: '没有可继续执行的动作。', requiresHumanGate: false, stopReason: 'completed' };
+    throw new Error('Internal decision can only wait for HumanGate or complete with no allowed actions.');
   }
 
   private async persistDecisionState(run: WorkflowRun, session: PiAgentSession, decision: AgentDecision, allowedActions: ReturnType<AllowedActionPlanner['plan']>): Promise<WorkflowRun> {
@@ -144,6 +158,13 @@ export class PiWorkflowRunner {
     const completed = await this.deps.stores.stateStore.updateRun(run.id, { status: 'completed', waitingFor: undefined, updatedAt: nowIso() });
     await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'workflow.completed', payload: { workflowId: run.workflowId, userId: run.metadata.userId, runMetadata: run.metadata }, createdAt: nowIso() });
     return completed;
+  }
+
+  private async fail(run: WorkflowRun, error: unknown): Promise<WorkflowRun> {
+    const message = error instanceof Error ? error.message : String(error);
+    const failed = await this.deps.stores.stateStore.updateRun(run.id, { status: 'failed', error: message, updatedAt: nowIso() });
+    await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'workflow.failed', payload: { workflowId: run.workflowId, error: message, userId: run.metadata.userId, runMetadata: run.metadata }, createdAt: nowIso() });
+    return failed;
   }
 
   private async requireRun(runId: string): Promise<WorkflowRun> {
