@@ -21,6 +21,7 @@ Workflow 模块以 `writing-autopilot` 为主流程。Runner 每轮读取 run、
 | WorkflowOperation | 幂等工具调用记录，使用稳定 operationId 防止重复写入 |
 | HumanGate | 用户确认模型，用于任务卡确认、大纲覆盖等需要人工裁决的步骤 |
 | ReviewArtifact | 一致性检查和统稿报告的结构化结果 |
+| RevisionProposal | 由对话或 workflow review 生成的待确认修改方案，应用前不改写正文 |
 
 ## 典型状态
 
@@ -38,3 +39,4 @@ running -> cancelled
 - 工具层必须二次校验 action 是否来自当前 run 的 allowedActions，并校验 workspace/article 权限。
 - 覆盖当前大纲、确认任务卡等用户裁决点必须生成 HumanGate。
 - 修改 artifact 时要校验 article revision，防止过期操作覆盖新内容。
+- 一致性检查出现 blocking finding 时，runner 先用 `create_revision_proposal` 生成待确认方案，再等待用户应用或取消；同一 revision 上不会继续生成正文。

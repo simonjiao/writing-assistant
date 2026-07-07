@@ -249,6 +249,8 @@ describe('api app', () => {
     const proposals = await container.stores.revisionProposalStore.listPendingProposals(article.id, 'consistency-block-user');
     expect(proposals).toHaveLength(1);
     expect(proposals[0].operations[0]).toMatchObject({ type: 'revise-outline' });
+    expect(body.revisionProposals).toHaveLength(1);
+    expect(body.revisionProposals[0].id).toBe(proposals[0].id);
 
     const resumed = await app.inject({
       method: 'POST',

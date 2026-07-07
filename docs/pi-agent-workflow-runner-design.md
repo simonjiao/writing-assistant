@@ -2,9 +2,9 @@
 
 ## 状态
 
-实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、开发期多用户工作台隔离、统一 `/api/workflows/writing/start` 和旧节点式 runner/queue 删除。
+实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、`create_revision_proposal`、开发期多用户工作台隔离、统一 `/api/workflows/writing/start` 和旧节点式 runner/queue 删除。
 
-仍需补齐的重点：`create_revision_proposal` workflow action、workflow message 到修改提案的完整闭环，以及更完整的验收场景自动化覆盖。
+仍需补齐的重点：workflow message 到修改提案的完整闭环、proposal apply/dismiss 后对 run 等待状态的回流，以及更完整的验收场景自动化覆盖。
 
 本文记录一次破坏式重构方案：以 `@earendil-works/pi-agent-core` 作为 workflow runner 基座，让 agent 在受控边界内自主选择下一步，并统一工具调用。重构后不保留旧节点式 workflow 双轨兼容。
 
@@ -291,6 +291,10 @@ interface AllowedAction {
     | "request_human_gate";
   articleId?: string;
   sectionId?: string;
+  reviewArtifactId?: string;
+  suggestionId?: string;
+  targetKind?: string;
+  targetId?: string;
   baseRevision?: number;
   requiresHumanGate: boolean;
   reason: string;
@@ -304,6 +308,7 @@ interface AllowedAction {
 - agent 只能选择 `allowedActions` 中的 action。
 - tool registry 拒绝任何未授权 action。
 - 每次写正文最多只暴露一个 `write_next_section` action。
+- 一致性检查出现 blocking issue 时，下一轮只暴露 `create_revision_proposal`；生成待确认修改方案后 workflow 等待用户处理，不继续写正文。
 
 ## 工具集合
 

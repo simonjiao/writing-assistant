@@ -1255,11 +1255,12 @@ async function enrichRun(container: AppContainer, runId: string) {
   if (!run) throw new Error('Run not found after execution.');
   const articleId = (run.state.draftArticle as { articleId?: string } | undefined)?.articleId ?? (run.state.finalizedTaskCard as { articleId?: string } | undefined)?.articleId ?? (run.state.outlineDraft as { articleId?: string } | undefined)?.articleId ?? (run.state.writingStarted as { articleId?: string } | undefined)?.articleId ?? (run.state.finalizedOutline as { articleId?: string } | undefined)?.articleId ?? (run.state.committedSection as { articleId?: string } | undefined)?.articleId ?? (run.state.appliedPatch as { articleId?: string } | undefined)?.articleId ?? (typeof run.metadata.articleId === 'string' ? run.metadata.articleId : undefined);
   const article = articleId ? await container.stores.artifactStore.getArticle(articleId) : undefined;
-  const [events, humanGates, operations, reviewArtifacts] = await Promise.all([
+  const [events, humanGates, operations, reviewArtifacts, revisionProposals] = await Promise.all([
     container.stores.eventTraceStore.listByRun(run.id),
     container.stores.humanGateStore.listGates({ runId: run.id }),
     container.stores.workflowOperationStore.listOperations({ runId: run.id }),
     container.stores.reviewArtifactStore.listReviewArtifacts({ runId: run.id }),
+    article ? container.stores.revisionProposalStore.listPendingProposals(article.id, run.metadata.userId) : Promise.resolve([]),
   ]);
-  return { run, article: article ? withWritingStandardSummary(article) : article, events, humanGates, operations, reviewArtifacts };
+  return { run, article: article ? withWritingStandardSummary(article) : article, events, humanGates, operations, reviewArtifacts, revisionProposals };
 }

@@ -234,6 +234,10 @@ export function App() {
     setLastRun(response);
     setProgressVisible(true);
     window.clearTimeout(progressDismissTimer.current);
+    if (response.revisionProposals) {
+      setPendingProposals(response.revisionProposals);
+      if (!response.revisionProposals.length) setProposalDirty(false);
+    }
     if (response.article) {
       const updatedArticle = response.article;
       setArticle((current) => (!current || current.id === updatedArticle.id || taskCardDialogTarget === 'new') ? updatedArticle : current);

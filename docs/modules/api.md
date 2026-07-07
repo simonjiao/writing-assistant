@@ -19,7 +19,7 @@
 | POST | `/api/workflows/:runId/message` | 向等待中的 workflow run 发送后续指令；pending HumanGate 必须先处理 |
 | POST | `/api/workflows/:runId/human-gates/:gateId/resolve` | 处理 HumanGate |
 | POST | `/api/workflows/:runId/cancel` | 取消 workflow |
-| GET | `/api/workflows/:runId` | 读取 run、article、events、HumanGate、operation log、review artifact |
+| GET | `/api/workflows/:runId` | 读取 run、article、events、HumanGate、operation log、review artifact、pending revision proposals |
 | GET | `/api/workflows/:runId/events` | 读取 run 事件日志 |
 
 ## SSE
@@ -53,3 +53,5 @@ WS /api/events/ws?runId=&userId=
 4. 选择 mock/openai-compatible LLM。
 5. 创建 PiWorkflowRunner，并注入幂等 action executor。
 6. 创建 pi-agent decision provider；每轮只允许选择 runner 提供的 allowed action。
+
+`RunResponse.revisionProposals` 返回当前文章、当前用户仍待处理的修改方案。workflow review 生成的 proposal 会通过这个字段同步到前端，不要求前端额外猜测或轮询对话接口。
