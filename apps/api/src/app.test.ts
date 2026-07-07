@@ -143,7 +143,8 @@ describe('api app', () => {
     expect(resolvedBody.run.status).toBe('completed');
     expect(resolvedBody.article.taskCard.status).toBe('confirmed');
     expect(resolvedBody.humanGates.find((gate: { id: string }) => gate.id === gates[0].id).status).toBe('accepted');
-    expect(resolvedBody.operations).toHaveLength(operations.length);
+    expect(resolvedBody.operations).toHaveLength(operations.length + 1);
+    expect(resolvedBody.operations).toEqual(expect.arrayContaining([expect.objectContaining({ toolName: 'human_gate_accept', status: 'completed', articleId: body.article.id })]));
     await app.close();
   });
 
@@ -1008,6 +1009,13 @@ describe('api app', () => {
     expect(body.run.status).toBe('completed');
     expect(body.article.taskCard.status).toBe('confirmed');
     expect(body.article.versions.at(-1).reason).toBe('HumanGate 确认任务卡');
+    const operations = await container.stores.workflowOperationStore.listOperations({ runId: startedBody.run.id });
+    expect(operations).toEqual(expect.arrayContaining([expect.objectContaining({
+      toolName: 'human_gate_accept',
+      status: 'completed',
+      articleRevisionBefore: article.revision,
+      articleRevisionAfter: body.article.revision,
+    })]));
     await app.close();
   });
 

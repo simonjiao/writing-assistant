@@ -1,7 +1,7 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply, FastifyRequest } from 'fastify';
-import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, hashOperationArgs, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
 import { normalizeTaskCardPolicies } from '@wa/skills';
 import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, PatchEditorInput, PatchEditorOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
@@ -437,15 +437,21 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const gate = await container.stores.humanGateStore.getGate(gateId);
     if (!gate || gate.runId !== runId) return reply.code(404).send({ error: 'Human gate not found.' });
     if (gate.userId !== userId) return reply.code(403).send({ error: 'Human gate belongs to another user.' });
-    if (gate.status !== 'pending') return reply.code(400).send({ error: `Human gate is already ${gate.status}.` });
     if (body.decision !== 'accept' && body.decision !== 'reject') return reply.code(400).send({ error: 'decision must be accept or reject.' });
-    const resolvedGate = await container.stores.humanGateStore.updateGate({ ...gate, status: body.decision === 'accept' ? 'accepted' : 'rejected', resolvedByUserId: userId });
-    await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'human_gate.resolved', payload: { userId, gateId, decision: body.decision, articleId: gate.articleId, actionType: gate.actionType }, createdAt: nowIso() });
+    if (gate.status !== 'pending') {
+      const requestedStatus = body.decision === 'accept' ? 'accepted' : 'rejected';
+      if (gate.status === requestedStatus && gate.resolvedByUserId === userId) return enrichRun(container, runId);
+      return reply.code(400).send({ error: `Human gate is already ${gate.status}.` });
+    }
     if (body.decision === 'reject') {
+      const resolvedGate = await container.stores.humanGateStore.updateGate({ ...gate, status: 'rejected', resolvedByUserId: userId, resolvedAt: nowIso() });
+      await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'human_gate.resolved', payload: { userId, gateId, decision: body.decision, articleId: gate.articleId, actionType: gate.actionType }, createdAt: nowIso() });
       await container.stores.stateStore.updateRun(runId, { status: 'waiting', waitingFor: { nodeId: 'human-gate', reason: '用户拒绝了当前确认项，需要新的指令。' }, state: { ...run.state, pendingHumanGateId: undefined, lastResolvedHumanGateId: resolvedGate.id }, updatedAt: nowIso() });
       return enrichRun(container, runId);
     }
-    const gateResult = await applyAcceptedHumanGate(container, resolvedGate, body.payload ?? {});
+    const gateResult = await applyAcceptedHumanGate(container, gate, body.payload ?? {});
+    const resolvedGate = await container.stores.humanGateStore.updateGate({ ...gate, status: 'accepted', resolvedByUserId: userId, resolvedAt: nowIso() });
+    await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'human_gate.resolved', payload: { userId, gateId, decision: body.decision, articleId: gate.articleId, actionType: gate.actionType }, createdAt: nowIso() });
     const statePatch = readObject(gateResult.statePatch) ?? {};
     await container.stores.stateStore.updateRun(runId, { status: 'running', waitingFor: undefined, state: { ...run.state, ...statePatch, pendingHumanGateId: undefined, lastResolvedHumanGateId: resolvedGate.id, humanGateResult: gateResult }, updatedAt: nowIso() });
     await container.piRunner.runUntilBlocked(runId);
@@ -1096,10 +1102,10 @@ async function applyAcceptedHumanGate(container: AppContainer, gate: Awaited<Ret
   if (!gate.articleId) throw new Error('HumanGate is missing articleId.');
   const article = await container.stores.artifactStore.getArticle(gate.articleId);
   if (!article) throw new Error('Article not found for HumanGate.');
-  if (typeof gate.baseRevision === 'number' && article.revision !== gate.baseRevision) {
-    throw new Error(`HumanGate is stale: article revision is ${article.revision}, gate was created at ${gate.baseRevision}.`);
-  }
   if (gate.targetKind === 'outline') {
+    if (typeof gate.baseRevision === 'number' && article.revision !== gate.baseRevision) {
+      throw new Error(`HumanGate is stale: article revision is ${article.revision}, gate was created at ${gate.baseRevision}.`);
+    }
     return {
       articleId: article.id,
       revision: article.revision,
@@ -1109,17 +1115,39 @@ async function applyAcceptedHumanGate(container: AppContainer, gate: Awaited<Ret
   }
   if (gate.targetKind !== 'task-card') throw new Error(`Unsupported accepted HumanGate target: ${gate.targetKind}`);
   if (!article.taskCard) throw new Error('Article task card not found for HumanGate.');
+  const operationId = `op_human_gate_${gate.id}`;
+  const operation = await container.stores.workflowOperationStore.startOperation({
+    operationId,
+    runId: gate.runId,
+    userId: gate.userId,
+    articleId: article.id,
+    toolName: 'human_gate_accept',
+    allowedActionId: gate.id,
+    argsHash: hashOperationArgs({ gateId: gate.id, targetKind: gate.targetKind, targetId: gate.targetId, actionType: gate.actionType, payload }),
+    articleRevisionBefore: gate.baseRevision,
+  });
+  if (operation.status === 'completed') return { articleId: article.id, revision: article.revision, taskCardStatus: article.taskCard.status, operationId, idempotent: true };
   const taskCardPatch = readObject(payload.taskCardPatch) ?? readObject(payload.taskCard);
   const mergedTaskCard = taskCardPatch
     ? mergeDeep(article.taskCard as unknown as Record<string, unknown>, taskCardPatch) as unknown as WritingTaskCard
     : article.taskCard;
-  mergedTaskCard.status = 'confirmed';
-  mergedTaskCard.updatedAt = nowIso();
-  article.taskCard = normalizeTaskCardPolicies(mergedTaskCard).taskCard;
-  const updated = await container.stores.artifactStore.updateArticle(article);
-  await container.stores.artifactStore.commitVersion(article.id, 'HumanGate 确认任务卡', 'user');
-  await container.stores.eventTraceStore.append({ id: newId('evt'), runId: gate.runId, type: 'artifact.updated', payload: { articleId: article.id, reason: 'human-gate-task-card-confirmed', userId: gate.userId, gateId: gate.id }, createdAt: nowIso() });
-  return { articleId: updated.id, revision: updated.revision, taskCardStatus: updated.taskCard?.status };
+  try {
+    mergedTaskCard.status = 'confirmed';
+    mergedTaskCard.updatedAt = nowIso();
+    article.taskCard = normalizeTaskCardPolicies(mergedTaskCard).taskCard;
+    const updated = await container.stores.artifactStore.updateArticleWithRevision({
+      article,
+      baseRevision: gate.baseRevision ?? article.revision,
+      operationId,
+    });
+    await container.stores.artifactStore.commitVersion(article.id, 'HumanGate 确认任务卡', 'user');
+    await container.stores.workflowOperationStore.updateOperation({ ...operation, status: 'completed', articleRevisionAfter: updated.revision, resultRef: updated.id });
+    await container.stores.eventTraceStore.append({ id: newId('evt'), runId: gate.runId, type: 'artifact.updated', payload: { articleId: article.id, reason: 'human-gate-task-card-confirmed', userId: gate.userId, gateId: gate.id, operationId }, createdAt: nowIso() });
+    return { articleId: updated.id, revision: updated.revision, taskCardStatus: updated.taskCard?.status, operationId };
+  } catch (error) {
+    await container.stores.workflowOperationStore.updateOperation({ ...operation, status: 'failed', error: error instanceof Error ? error.message : String(error) });
+    throw error;
+  }
 }
 
 function readObject(value: unknown): Record<string, unknown> | undefined {
