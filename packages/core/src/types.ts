@@ -348,7 +348,7 @@ export type WorkflowOperationStatus = 'running' | 'completed' | 'failed';
 
 export interface WorkflowOperation {
   operationId: string;
-  runId: string;
+  runId?: string;
   userId: string;
   articleId?: string;
   toolName: string;

@@ -981,6 +981,13 @@ describe('api app', () => {
     expect(body.article.themeTags).toHaveLength(0);
     expect(body.article.versions[body.article.versions.length - 1].reason).toContain('清空下游内容');
     expect(body.proposal.status).toBe('applied');
+    const operations = await container.stores.workflowOperationStore.listOperations({ articleId: article.id, userId: 'consistency-user' });
+    expect(operations).toEqual(expect.arrayContaining([expect.objectContaining({
+      toolName: 'apply_revise-task-card',
+      status: 'completed',
+      articleRevisionBefore: body.article.revision - 1,
+      articleRevisionAfter: body.article.revision,
+    })]));
     await app.close();
   });
 

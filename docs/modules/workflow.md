@@ -18,7 +18,7 @@ Workflow 模块以 `writing-autopilot` 为主流程。Runner 每轮读取 run、
 | PiWorkflowRunner | 推进 `writing-autopilot`，每轮计算 allowed actions、调用 pi-agent decision、执行工具或进入等待 |
 | AllowedActionPlanner | 根据任务卡、大纲、正文、revision 和 targetStage 生成单步可执行动作 |
 | PiAgentSession | 保存每个 run 的 agent 会话状态、消息、base revision 和 pending gate |
-| WorkflowOperation | 幂等工具调用记录，使用稳定 operationId 防止重复写入 |
+| WorkflowOperation | 幂等工具调用记录，使用稳定 operationId 防止重复写入；workflow 动作绑定 run，普通对话 proposal 写入绑定 article/user |
 | HumanGate | 用户确认模型，用于任务卡确认、大纲覆盖等需要人工裁决的步骤 |
 | ReviewArtifact | 一致性检查和统稿报告的结构化结果 |
 | RevisionProposal | 由对话或 workflow review 生成的待确认修改方案，应用前不改写正文 |

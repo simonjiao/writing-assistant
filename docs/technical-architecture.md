@@ -34,7 +34,7 @@ flowchart TB
 | Agent | pi-agent-core Agent | 在 runner 给定的动作集合内选择下一步 |
 | Execution | WorkflowActionExecutor | 执行幂等工具，写入 task card、outline、section、review artifact |
 | HumanGate | HumanGateStore | 独立保存用户确认点，例如确认任务卡、覆盖当前大纲 |
-| Operation | WorkflowOperationStore | 保存幂等 operationId、工具状态和 article revision |
+| Operation | WorkflowOperationStore | 保存幂等 operationId、工具状态和 article revision；workflow 工具绑定 run，普通对话 proposal 写入绑定 article/user |
 | Skill | SkillRegistry | 管理任务卡、大纲、章节、对话、批注处理等能力包 |
 | Context | DefaultContextBuilder | 动态组合 Session/State/Memory/Artifact/Knowledge |
 | Store | SQLite stores | 外部化保存 Session/State/Memory/Artifact/Knowledge/EventTrace/pi session |

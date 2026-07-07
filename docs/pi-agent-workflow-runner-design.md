@@ -214,7 +214,7 @@ interface HumanGate {
 ```ts
 interface WorkflowOperation {
   operationId: string;
-  runId: string;
+  runId?: string;
   userId: string;
   articleId?: string;
   toolName: string;
@@ -230,7 +230,7 @@ interface WorkflowOperation {
 }
 ```
 
-`WorkflowOperation` 是幂等和审计依据，不能只依赖 `EventTraceStore`。
+`WorkflowOperation` 是幂等和审计依据，不能只依赖 `EventTraceStore`。Workflow runner 内的工具操作必须绑定 `runId`；普通对话 proposal 应用产生的写入可以只绑定 `articleId + userId + operationId`，不创建伪 workflow run。
 
 ### ReviewArtifact
 

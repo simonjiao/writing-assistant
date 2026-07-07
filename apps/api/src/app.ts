@@ -886,8 +886,32 @@ async function applyRevisionProposal(container: AppContainer, proposalId: string
     throw new Error(`Revision proposal is stale: article revision is ${article.revision}, proposal was created at ${proposal.baseRevision}.`);
   }
   let runPayload: Awaited<ReturnType<typeof enrichRun>> | undefined;
-  for (const operation of proposal.operations) {
-    const result = await applyRevisionOperation(container, article, operation, userId, sessionId);
+  for (const [operationIndex, operation] of proposal.operations.entries()) {
+    const operationId = revisionProposalOperationId(proposal.id, operationIndex);
+    const operationRecord = await container.stores.workflowOperationStore.startOperation({
+      operationId,
+      runId: proposal.runId,
+      userId,
+      articleId: article.id,
+      toolName: revisionOperationToolName(operation),
+      allowedActionId: proposal.id,
+      argsHash: hashOperationArgs({ proposalId: proposal.id, operationIndex, operation }),
+      articleRevisionBefore: article.revision,
+    });
+    if (operationRecord.status === 'completed') {
+      const currentArticle = await container.stores.artifactStore.getArticle(article.id);
+      if (!currentArticle) throw new Error('Article not found after completed revision operation.');
+      article = currentArticle;
+      continue;
+    }
+    let result: Awaited<ReturnType<typeof applyRevisionOperation>>;
+    try {
+      result = await applyRevisionOperation(container, article, operation, userId, sessionId, { baseRevision: article.revision, operationId });
+      await container.stores.workflowOperationStore.updateOperation({ ...operationRecord, status: 'completed', error: undefined, articleRevisionAfter: result.article.revision, resultRef: result.article.id });
+    } catch (error) {
+      await container.stores.workflowOperationStore.updateOperation({ ...operationRecord, status: 'failed', error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
     if (result.runPayload) runPayload = result.runPayload;
     article = result.article;
   }
@@ -902,6 +926,14 @@ async function applyRevisionProposal(container: AppContainer, proposalId: string
     article: articlePayload ? withWritingStandardSummary(articlePayload) : articlePayload,
     ...(finalRunPayload ?? {}),
   };
+}
+
+function revisionProposalOperationId(proposalId: string, operationIndex: number): string {
+  return `op_revision_proposal_${proposalId}_${operationIndex + 1}`;
+}
+
+function revisionOperationToolName(operation: RevisionOperation): string {
+  return `apply_${operation.type}`;
 }
 
 async function dismissRevisionProposal(container: AppContainer, proposal: RevisionProposal, userId: string): Promise<{ proposal: RevisionProposal; runPayload?: Awaited<ReturnType<typeof enrichRun>> }> {
@@ -975,7 +1007,7 @@ async function syncWorkflowRunAfterProposal(container: AppContainer, proposal: R
   return enrichRun(container, run.id);
 }
 
-async function applyRevisionOperation(container: AppContainer, article: ArticleArtifact, operation: RevisionOperation, userId: string, sessionId?: string): Promise<{ article: ArticleArtifact; runPayload?: Awaited<ReturnType<typeof enrichRun>> }> {
+async function applyRevisionOperation(container: AppContainer, article: ArticleArtifact, operation: RevisionOperation, userId: string, sessionId: string | undefined, write: { baseRevision: number; operationId: string }): Promise<{ article: ArticleArtifact; runPayload?: Awaited<ReturnType<typeof enrichRun>> }> {
   if (operation.type === 'revise-task-card') {
     if (!article.taskCard) throw new Error('Article has no task card to revise.');
     const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; currentTaskCard: WritingTaskCard; skipKnowledge: boolean }, TaskCardReviserOutput>(
@@ -986,9 +1018,9 @@ async function applyRevisionOperation(container: AppContainer, article: ArticleA
     const invalidation = clearDownstreamForTaskCardChange(article);
     article.taskCard = normalizeTaskCardPolicies(result.taskCard, operation.instruction).taskCard;
     article.title = result.taskCard.topic;
-    const updated = await container.stores.artifactStore.updateArticle(article);
+    const updated = await container.stores.artifactStore.updateArticleWithRevision({ article, baseRevision: write.baseRevision, operationId: write.operationId });
     await container.stores.artifactStore.commitVersion(article.id, invalidation.outlineCount || invalidation.blockCount ? `修订任务卡并清空下游内容：${result.summary.slice(0, 80)}` : `修订任务卡：${result.summary.slice(0, 80)}`, 'user');
-    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'task-card-revised', changedFields: result.changedFields, invalidated: invalidation, userId }, createdAt: nowIso() });
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'task-card-revised', changedFields: result.changedFields, invalidated: invalidation, userId, operationId: write.operationId }, createdAt: nowIso() });
     return { article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated };
   }
   if (operation.type === 'revise-outline-item') {
@@ -1002,9 +1034,9 @@ async function applyRevisionOperation(container: AppContainer, article: ArticleA
     const invalidation = clearBlocksForOutlineSections(article, [operation.outlineItemId]);
     const revisedItem = { ...result.outlineItem, status: result.outlineItem.status === 'written' ? 'confirmed' as const : result.outlineItem.status };
     article.outline = article.outline.map((item) => item.id === operation.outlineItemId ? revisedItem : item);
-    const updated = await container.stores.artifactStore.updateArticle(article);
+    const updated = await container.stores.artifactStore.updateArticleWithRevision({ article, baseRevision: write.baseRevision, operationId: write.operationId });
     await container.stores.artifactStore.commitVersion(article.id, invalidation.blockCount ? `修订大纲章节并清空本节正文：${result.summary.slice(0, 80)}` : `修订大纲章节：${result.summary.slice(0, 80)}`, 'user');
-    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, sectionId: operation.outlineItemId, reason: 'outline-section-revised', changedFields: result.changedFields, invalidated: invalidation, userId }, createdAt: nowIso() });
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, sectionId: operation.outlineItemId, reason: 'outline-section-revised', changedFields: result.changedFields, invalidated: invalidation, userId, operationId: write.operationId }, createdAt: nowIso() });
     return { article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated };
   }
   if (operation.type === 'revise-outline') {
@@ -1016,9 +1048,9 @@ async function applyRevisionOperation(container: AppContainer, article: ArticleA
     );
     const invalidation = clearAllBlocks(article);
     article.outline = result.outline.map((item) => ({ ...item, status: item.status === 'written' ? 'confirmed' as const : item.status }));
-    const updated = await container.stores.artifactStore.updateArticle(article);
+    const updated = await container.stores.artifactStore.updateArticleWithRevision({ article, baseRevision: write.baseRevision, operationId: write.operationId });
     await container.stores.artifactStore.commitVersion(article.id, invalidation.blockCount ? `修订大纲并清空正文：${result.summary.slice(0, 80)}` : `修订大纲：${result.summary.slice(0, 80)}`, 'user');
-    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'outline-revised', changedFields: result.changedFields, warnings: result.warnings, invalidated: invalidation, userId }, createdAt: nowIso() });
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'outline-revised', changedFields: result.changedFields, warnings: result.warnings, invalidated: invalidation, userId, operationId: write.operationId }, createdAt: nowIso() });
     return { article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated };
   }
   const patchResult = await container.runtime.invokeSkill<PatchEditorInput, PatchEditorOutput>(
@@ -1026,8 +1058,10 @@ async function applyRevisionOperation(container: AppContainer, article: ArticleA
     { articleId: article.id, blockId: operation.blockId, instruction: operation.instruction },
     { userId, sessionId, articleId: article.id, blockId: operation.blockId },
   );
-  const updated = await container.stores.artifactStore.applyPatch(patchResult.patch);
-  await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, blockId: operation.blockId, reason: 'dialogue-patch-applied', userId }, createdAt: nowIso() });
+  article.blocks = article.blocks.map((block) => block.id === patchResult.patch.blockId ? { ...block, text: patchResult.patch.after, updatedAt: nowIso(), status: 'draft' } : block);
+  const updated = await container.stores.artifactStore.updateArticleWithRevision({ article, baseRevision: write.baseRevision, operationId: write.operationId });
+  await container.stores.artifactStore.commitVersion(article.id, `应用局部修改：${patchResult.patch.instruction}`, 'agent');
+  await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, blockId: operation.blockId, reason: 'dialogue-patch-applied', userId, operationId: write.operationId }, createdAt: nowIso() });
   if (sessionId) await container.stores.sessionStore.updateSession(sessionId, { currentArticleId: article.id, currentWorkspaceId: article.workspaceId, currentBlockId: operation.blockId });
   return { article: updated };
 }
@@ -1146,7 +1180,7 @@ async function applyAcceptedHumanGate(container: AppContainer, gate: Awaited<Ret
       operationId,
     });
     await container.stores.artifactStore.commitVersion(article.id, 'HumanGate 确认任务卡', 'user');
-    await container.stores.workflowOperationStore.updateOperation({ ...operation, status: 'completed', articleRevisionAfter: updated.revision, resultRef: updated.id });
+    await container.stores.workflowOperationStore.updateOperation({ ...operation, status: 'completed', error: undefined, articleRevisionAfter: updated.revision, resultRef: updated.id });
     await container.stores.eventTraceStore.append({ id: newId('evt'), runId: gate.runId, type: 'artifact.updated', payload: { articleId: article.id, reason: 'human-gate-task-card-confirmed', userId: gate.userId, gateId: gate.id, operationId }, createdAt: nowIso() });
     return { articleId: updated.id, revision: updated.revision, taskCardStatus: updated.taskCard?.status, operationId };
   } catch (error) {
