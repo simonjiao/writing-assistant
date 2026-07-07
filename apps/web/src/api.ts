@@ -1,9 +1,8 @@
-import { AgentEvent, ArticleArtifact, ArticleCommentStatus, ArticleSummary, DialogueBriefStatus, DialogueContextKind, DialogueMessage, DialogueResponse, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, OutlineItem, RevisionProposal, RunResponse, WritingStandardSelection, WritingStandardSummary, WritingWorkspace } from './types';
+import { AgentEvent, ArticleArtifact, ArticleSummary, DialogueBriefStatus, DialogueContextKind, DialogueMessage, DialogueResponse, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, OutlineItem, RevisionProposal, RunResponse, WritingStandardSelection, WritingStandardSummary, WritingWorkspace } from './types';
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8787';
 export interface TaskCardRevisionResponse { article: ArticleArtifact; summary: string; changedFields: string[] }
 export interface OutlineItemRevisionResponse { article: ArticleArtifact; outlineItem: OutlineItem; summary: string; changedFields: string[] }
 export interface SessionResponse { id: string; userId: string; currentWorkspaceId?: string }
-export interface ArticleCommentProcessResponse { article: ArticleArtifact; results: Array<{ commentId: string; blockId: string; action: 'revise' | 'explain' | 'ask'; status: ArticleCommentStatus; message: string; changed: boolean }> }
 async function request<T>(path: string, options?: RequestInit): Promise<T> { const response = await fetch(`${API_BASE}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(options?.headers ?? {}) } }); if (!response.ok) throw new Error(`${response.status} ${await response.text()}`); return response.json() as Promise<T>; }
 function wsBase() { return API_BASE.replace(/^http/, 'ws'); }
 export const api = {
@@ -25,7 +24,6 @@ export const api = {
   addArticleCommentReply(articleId: string, commentId: string, input: { userId?: string; content: string }) { return request<ArticleArtifact>(`/api/articles/${articleId}/comments/${commentId}/replies`, { method: 'POST', body: JSON.stringify(input) }); },
   deleteArticleComment(articleId: string, commentId: string, input: { userId?: string }) { return request<ArticleArtifact>(`/api/articles/${articleId}/comments/${commentId}`, { method: 'DELETE', body: JSON.stringify(input) }); },
   deleteArticleCommentReply(articleId: string, commentId: string, replyId: string, input: { userId?: string }) { return request<ArticleArtifact>(`/api/articles/${articleId}/comments/${commentId}/replies/${replyId}`, { method: 'DELETE', body: JSON.stringify(input) }); },
-  processArticleComments(articleId: string, input: { userId?: string; sessionId?: string; commentIds?: string[] }) { return request<ArticleCommentProcessResponse>(`/api/articles/${articleId}/comments/process`, { method: 'POST', body: JSON.stringify(input) }); },
   listDialogueProposals(articleId: string, userId: string) { return request<RevisionProposal[]>(`/api/articles/${articleId}/dialogue/proposals?userId=${encodeURIComponent(userId)}`); },
   listDialogueMessages(articleId: string, userId: string, limit = 24) { return request<DialogueMessage[]>(`/api/articles/${articleId}/dialogue/messages?userId=${encodeURIComponent(userId)}&limit=${limit}`); },
   getDialogueBrief(articleId: string, userId: string) { return request<DialogueBriefStatus>(`/api/articles/${articleId}/dialogue/brief?userId=${encodeURIComponent(userId)}`); },

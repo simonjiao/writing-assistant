@@ -384,7 +384,7 @@ describe('api app', () => {
     await app.close();
   });
 
-  it('creates article comments and batch processes them into text revisions', async () => {
+  it('creates article comments on selected text', async () => {
     const config = testConfig();
     const container = createContainer(config);
     const app = createApp(config, container);
@@ -411,22 +411,15 @@ describe('api app', () => {
       payload: { userId: 'comment-user', blockId: 'blk-comment-1', selectedText, comment: '这里似乎是后40回内容，不要引用程高本续书。' },
     });
     expect(created.statusCode).toBe(200);
-    expect(created.json().comments[0].status).toBe('open');
-
-    const processed = await app.inject({
-      method: 'POST',
-      url: `/api/articles/${article.id}/comments/process`,
-      payload: { userId: 'comment-user' },
+    const body = created.json();
+    expect(body.comments[0]).toMatchObject({
+      articleId: article.id,
+      blockId: 'blk-comment-1',
+      selectedText,
+      comment: '这里似乎是后40回内容，不要引用程高本续书。',
+      status: 'open',
     });
-    expect(processed.statusCode).toBe(200);
-    const body = processed.json();
-    expect(body.results[0].action).toBe('revise');
-    expect(body.results[0].changed).toBe(true);
-    expect(body.article.comments[0].status).toBe('resolved');
-    expect(body.article.comments[0].resolutionKind).toBe('revision');
-    expect(body.article.comments[0].response).toContain('前80回');
-    expect(body.article.comments[0].replies.at(-1)).toMatchObject({ role: 'assistant' });
-    expect(body.article.blocks[0].text).not.toContain('触柱而亡');
+    expect(body.blocks[0].text).toBe(article.blocks[0].text);
     await app.close();
   });
 

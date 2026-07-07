@@ -6,7 +6,7 @@ import { normalizeTaskCardPolicies } from '@wa/skills';
 import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, PatchEditorInput, PatchEditorOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
-import { appendCommentReply, canDeleteUnprocessedComment, canDeleteUnprocessedReply, processArticleComments, reconcileCommentAfterReplyDeletion, updateComment } from './articleComments';
+import { appendCommentReply, canDeleteUnprocessedComment, canDeleteUnprocessedReply, reconcileCommentAfterReplyDeletion, updateComment } from './articleComments';
 import { addKnowledgeEvidenceToBrief, buildCompactDialogueConversation, compactDialogueBriefForPrompt, enqueueDialogueBriefUpdate, ensureDialogueBriefSettled, getDialogueBriefStatus, getOrCreateDialogueBrief } from './dialogueBrief';
 import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfileSummaries, recommendDomainProfiles, resolveDomainProfileSelection } from './domainProfiles';
 import { getWritingStandardDisplaySummary, getWritingStandardSummary, resolveWritingStandardSelection, WritingStandardSelectionRequest } from './writingStandards';
@@ -171,16 +171,6 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const updated = await container.stores.artifactStore.updateArticle(access.article);
     await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: access.article.id, blockId: comment.blockId, commentId: comment.id, replyId: targetReply.id, reason: 'article-comment-reply-deleted', userId }, createdAt: nowIso() });
     return withWritingStandardSummary(updated);
-  });
-  app.post('/api/articles/:articleId/comments/process', async (request, reply) => {
-    const { articleId } = request.params as { articleId: string };
-    const body = (request.body ?? {}) as { userId?: string; sessionId?: string; commentIds?: string[] };
-    const userId = readRequestUserId(request, body.userId);
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
-    const access = await requireArticleAccess(container, userId, articleId);
-    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
-    const result = await processArticleComments(container, access.article, userId, { sessionId: body.sessionId, commentIds: body.commentIds });
-    return { article: withWritingStandardSummary(result.article), results: result.results };
   });
   app.delete('/api/articles/:articleId', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
