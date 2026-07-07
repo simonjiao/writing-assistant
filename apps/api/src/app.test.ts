@@ -143,6 +143,13 @@ describe('api app', () => {
     const gates = await container.stores.humanGateStore.listGates({ runId: body.run.id, statuses: ['pending'] });
     expect(gates).toHaveLength(1);
     expect(gates[0].targetKind).toBe('task-card');
+
+    const resolved = await app.inject({ method: 'POST', url: `/api/workflows/${body.run.id}/human-gates/${gates[0].id}/resolve`, payload: { userId: 'pi-user', decision: 'accept' } });
+    expect(resolved.statusCode).toBe(200);
+    const resolvedBody = resolved.json();
+    expect(resolvedBody.article.taskCard.status).toBe('confirmed');
+    expect(resolvedBody.humanGates.find((gate: { id: string }) => gate.id === gates[0].id).status).toBe('accepted');
+    expect(resolvedBody.operations.length).toBeGreaterThan(operations.length);
     await app.close();
   });
 

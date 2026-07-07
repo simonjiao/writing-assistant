@@ -1,7 +1,7 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply, FastifyRequest } from 'fastify';
-import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, KnowledgeItem, KnowledgeSearchOptions, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
 import { normalizeTaskCardPolicies } from '@wa/skills';
 import type { ArticleCommentResolverInput, ArticleCommentResolverOutput, DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
@@ -502,6 +502,37 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (body.sessionId) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: articleId, currentWorkspaceId: workspaceId, currentRunId: run.id });
     await container.piRunner.runUntilBlocked(run.id);
     return enrichRun(container, run.id);
+  });
+
+  app.get('/api/workflows/:runId', async (request, reply) => {
+    const { runId } = request.params as { runId: string };
+    const run = await container.stores.stateStore.getRun(runId);
+    if (!run) return reply.code(404).send({ error: 'Run not found.' });
+    return enrichRun(container, runId);
+  });
+
+  app.post('/api/workflows/:runId/human-gates/:gateId/resolve', async (request, reply) => {
+    const { runId, gateId } = request.params as { runId: string; gateId: string };
+    const body = (request.body ?? {}) as { userId?: string; decision?: string; payload?: Record<string, unknown> };
+    const userId = readRequestUserId(request, body.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const run = await container.stores.stateStore.getRun(runId);
+    if (!run) return reply.code(404).send({ error: 'Run not found.' });
+    const gate = await container.stores.humanGateStore.getGate(gateId);
+    if (!gate || gate.runId !== runId) return reply.code(404).send({ error: 'Human gate not found.' });
+    if (gate.userId !== userId) return reply.code(403).send({ error: 'Human gate belongs to another user.' });
+    if (gate.status !== 'pending') return reply.code(400).send({ error: `Human gate is already ${gate.status}.` });
+    if (body.decision !== 'accept' && body.decision !== 'reject') return reply.code(400).send({ error: 'decision must be accept or reject.' });
+    const resolvedGate = await container.stores.humanGateStore.updateGate({ ...gate, status: body.decision === 'accept' ? 'accepted' : 'rejected', resolvedByUserId: userId });
+    await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'human_gate.resolved', payload: { userId, gateId, decision: body.decision, articleId: gate.articleId, actionType: gate.actionType }, createdAt: nowIso() });
+    if (body.decision === 'reject') {
+      await container.stores.stateStore.updateRun(runId, { status: 'waiting', waitingFor: { nodeId: 'human-gate', reason: '用户拒绝了当前确认项，需要新的指令。' }, state: { ...run.state, pendingHumanGateId: undefined, lastResolvedHumanGateId: resolvedGate.id }, updatedAt: nowIso() });
+      return enrichRun(container, runId);
+    }
+    const gateResult = await applyAcceptedHumanGate(container, resolvedGate, body.payload ?? {});
+    await container.stores.stateStore.updateRun(runId, { status: 'running', waitingFor: undefined, state: { ...run.state, pendingHumanGateId: undefined, lastResolvedHumanGateId: resolvedGate.id, humanGateResult: gateResult }, updatedAt: nowIso() });
+    await container.piRunner.runUntilBlocked(runId);
+    return enrichRun(container, runId);
   });
 
   app.post('/api/workflows/task-card/start', async (request, reply) => {
@@ -1104,6 +1135,32 @@ async function requireArticleAccess(container: AppContainer, userId: string, art
   return { ok: true, article };
 }
 
+async function applyAcceptedHumanGate(container: AppContainer, gate: Awaited<ReturnType<AppContainer['stores']['humanGateStore']['getGate']>>, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+  if (!gate) throw new Error('Human gate not found.');
+  if (gate.targetKind !== 'task-card') throw new Error(`Unsupported accepted HumanGate target: ${gate.targetKind}`);
+  if (!gate.articleId) throw new Error('HumanGate is missing articleId.');
+  const article = await container.stores.artifactStore.getArticle(gate.articleId);
+  if (!article?.taskCard) throw new Error('Article task card not found for HumanGate.');
+  if (typeof gate.baseRevision === 'number' && article.revision !== gate.baseRevision) {
+    throw new Error(`HumanGate is stale: article revision is ${article.revision}, gate was created at ${gate.baseRevision}.`);
+  }
+  const taskCardPatch = readObject(payload.taskCardPatch) ?? readObject(payload.taskCard);
+  const mergedTaskCard = taskCardPatch
+    ? mergeDeep(article.taskCard as unknown as Record<string, unknown>, taskCardPatch) as unknown as WritingTaskCard
+    : article.taskCard;
+  mergedTaskCard.status = 'confirmed';
+  mergedTaskCard.updatedAt = nowIso();
+  article.taskCard = normalizeTaskCardPolicies(mergedTaskCard).taskCard;
+  const updated = await container.stores.artifactStore.updateArticle(article);
+  await container.stores.artifactStore.commitVersion(article.id, 'HumanGate 确认任务卡', 'user');
+  await container.stores.eventTraceStore.append({ id: newId('evt'), runId: gate.runId, type: 'artifact.updated', payload: { articleId: article.id, reason: 'human-gate-task-card-confirmed', userId: gate.userId, gateId: gate.id }, createdAt: nowIso() });
+  return { articleId: updated.id, revision: updated.revision, taskCardStatus: updated.taskCard?.status };
+}
+
+function readObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
 function sortWorkspaces(workspaces: WritingWorkspace[]): WritingWorkspace[] {
   return workspaces.slice().sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || b.updatedAt.localeCompare(a.updatedAt));
 }
@@ -1151,6 +1208,11 @@ async function enrichRun(container: AppContainer, runId: string) {
   if (!run) throw new Error('Run not found after execution.');
   const articleId = (run.state.draftArticle as { articleId?: string } | undefined)?.articleId ?? (run.state.finalizedTaskCard as { articleId?: string } | undefined)?.articleId ?? (run.state.outlineDraft as { articleId?: string } | undefined)?.articleId ?? (run.state.writingStarted as { articleId?: string } | undefined)?.articleId ?? (run.state.finalizedOutline as { articleId?: string } | undefined)?.articleId ?? (run.state.committedSection as { articleId?: string } | undefined)?.articleId ?? (run.state.appliedPatch as { articleId?: string } | undefined)?.articleId ?? (typeof run.metadata.articleId === 'string' ? run.metadata.articleId : undefined);
   const article = articleId ? await container.stores.artifactStore.getArticle(articleId) : undefined;
-  const events = await container.stores.eventTraceStore.listByRun(run.id);
-  return { run, article: article ? withWritingStandardSummary(article) : article, events };
+  const [events, humanGates, operations, reviewArtifacts] = await Promise.all([
+    container.stores.eventTraceStore.listByRun(run.id),
+    container.stores.humanGateStore.listGates({ runId: run.id }),
+    container.stores.workflowOperationStore.listOperations({ runId: run.id }),
+    container.stores.reviewArtifactStore.listReviewArtifacts({ runId: run.id }),
+  ]);
+  return { run, article: article ? withWritingStandardSummary(article) : article, events, humanGates, operations, reviewArtifacts };
 }
