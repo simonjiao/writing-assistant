@@ -125,7 +125,7 @@ describe('api app', () => {
     const config = testConfig();
     const container = createContainer(config);
     const app = createApp(config, container);
-    const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { userId: 'pi-user', message: '写一篇关于宝黛关系的文章。' } });
+    const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { userId: 'pi-user', message: '写一篇关于宝黛关系的文章。', targetStage: 'task-card' } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.run.workflowId).toBe('writing-autopilot');
@@ -147,9 +147,10 @@ describe('api app', () => {
     const resolved = await app.inject({ method: 'POST', url: `/api/workflows/${body.run.id}/human-gates/${gates[0].id}/resolve`, payload: { userId: 'pi-user', decision: 'accept' } });
     expect(resolved.statusCode).toBe(200);
     const resolvedBody = resolved.json();
+    expect(resolvedBody.run.status).toBe('completed');
     expect(resolvedBody.article.taskCard.status).toBe('confirmed');
     expect(resolvedBody.humanGates.find((gate: { id: string }) => gate.id === gates[0].id).status).toBe('accepted');
-    expect(resolvedBody.operations.length).toBeGreaterThan(operations.length);
+    expect(resolvedBody.operations).toHaveLength(operations.length);
     await app.close();
   });
 

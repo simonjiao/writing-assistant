@@ -189,6 +189,7 @@ export function App() {
   const canGenerateOutline = visibleArticle?.taskCard?.status === 'confirmed';
   const taskCardConfirmed = visibleArticle?.taskCard?.status === 'confirmed';
   const taskCardDraft = visibleArticle?.taskCard?.status === 'draft';
+  const pendingTaskCardGate = lastRun?.humanGates?.find((gate) => gate.status === 'pending' && gate.targetKind === 'task-card' && (!visibleArticle || gate.articleId === visibleArticle.id));
   const taskCardConfirmationRunId = lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-task-card-confirm' ? lastRun.run.id : undefined;
   const writingStartRunId = lastRun?.run.status === 'waiting' && lastRun.run.waitingFor?.nodeId === 'wait-writing-start' ? lastRun.run.id : undefined;
   const canStartWriting = Boolean(visibleArticle?.outline.length && visibleArticle.outline.some((item) => item.status !== 'confirmed'));
@@ -429,7 +430,7 @@ export function App() {
     if (!article) return;
     setCollapsedOutlineIds((current) => current.filter((id) => id !== sectionId));
     setSectionGeneration({ sectionId, status: 'starting' });
-    const response = await execute(() => api.startSection(article.id, sectionId, userId, sessionId));
+    const response = await execute(() => api.startWritingWorkflow({ articleId: article.id, sectionId, targetStage: 'section', userId, sessionId, message: '生成当前章节正文' }));
     if (!response) {
       setSectionGeneration((current) => current?.sectionId === sectionId ? { ...current, status: 'failed' } : current);
       return;
@@ -442,12 +443,12 @@ export function App() {
       setOutlineRegenerationWarningOpen(true);
       return;
     }
-    await execute(() => api.startOutline(visibleArticle.id, userId, sessionId));
+    await execute(() => api.startWritingWorkflow({ articleId: visibleArticle.id, targetStage: 'outline', userId, sessionId, message: '生成大纲' }));
   }
   async function applyOutlineRegeneration() {
     if (!visibleArticle) return;
     setOutlineRegenerationWarningOpen(false);
-    await execute(() => api.startOutline(visibleArticle.id, userId, sessionId));
+    await execute(() => api.startWritingWorkflow({ articleId: visibleArticle.id, targetStage: 'outline', userId, sessionId, message: '重新生成大纲' }));
   }
   function updateNavigationCollapsed(collapsed: boolean) {
     setNavigationCollapsed(collapsed);
@@ -558,7 +559,7 @@ export function App() {
     rememberDialogInput(message);
     resetHistoryBrowse();
     if (!article?.taskCard || taskCardDialogTarget === 'new') {
-      const response = await execute(() => api.startTaskCard(message, userId, sessionId, selectedWorkspaceId, currentDomainProfileSelection(), currentWritingStandardSelection()));
+      const response = await execute(() => api.startWritingWorkflow({ message, userId, sessionId, workspaceId: selectedWorkspaceId, targetStage: 'task-card', domainProfile: currentDomainProfileSelection(), writingStandard: currentWritingStandardSelection() }));
       if (response?.article) {
         setNewTaskMessage('');
         setCurrentTaskMessage('');
@@ -733,6 +734,10 @@ export function App() {
   }
   async function confirmTaskCard() {
     if (!visibleArticle?.taskCard) return;
+    if (pendingTaskCardGate) {
+      await execute(() => api.resolveHumanGate(pendingTaskCardGate.runId, pendingTaskCardGate.id, { userId, decision: 'accept' }));
+      return;
+    }
     if (taskCardConfirmationRunId) {
       await execute(() => api.resume(taskCardConfirmationRunId, { decision: 'confirm' }));
       return;
@@ -759,10 +764,8 @@ export function App() {
     setBusy(true);
     setError(undefined);
     try {
-      const updated = await api.startWriting(visibleArticle.id, { userId, sessionId });
-      setArticle(updated);
-      setLastRun(undefined);
-      await refreshArticleSummaries(updated.workspaceId);
+      const response = await execute(() => api.startWritingWorkflow({ articleId: visibleArticle.id, targetStage: 'article', userId, sessionId, message: '开始写作' }));
+      if (response?.article) await refreshArticleSummaries(response.article.workspaceId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

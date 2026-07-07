@@ -66,7 +66,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     const workspaceId = this.requireString(run.metadata.workspaceId, 'workspaceId');
     const result = await this.deps.runtime.invokeSkill<TaskCardBuilderInput, TaskCardBuilderOutput>(
       'task-card-builder',
-      { rawRequirement, userId: run.metadata.userId, sessionId: run.metadata.sessionId },
+      { rawRequirement, userId: run.metadata.userId, sessionId: run.metadata.sessionId, domainContext: (run.input as { domainContext?: TaskCardBuilderInput['domainContext'] }).domainContext, writingStandard: (run.input as { writingStandard?: TaskCardBuilderInput['writingStandard'] }).writingStandard },
       this.skillMeta(run),
     );
     const taskCard = normalizeTaskCardPolicies(result.taskCard, rawRequirement).taskCard;

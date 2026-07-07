@@ -476,7 +476,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   });
 
   app.post('/api/workflows/writing/start', async (request, reply) => {
-    const body = (request.body ?? {}) as { userId?: string; sessionId?: string; workspaceId?: string; articleId?: string; message?: string; sectionId?: string };
+    const body = (request.body ?? {}) as { userId?: string; sessionId?: string; workspaceId?: string; articleId?: string; message?: string; sectionId?: string; targetStage?: string; domainProfile?: DomainProfileSelectionRequest; writingStandard?: WritingStandardSelectionRequest };
     const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const articleId = body.articleId?.trim();
@@ -485,12 +485,20 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const workspaceId = articleAccess?.article.workspaceId ?? body.workspaceId?.trim() ?? (await ensureDefaultWorkspace(container, userId)).id;
     const workspace = await requireWorkspaceAccess(container, userId, workspaceId);
     if (!workspace) return reply.code(403).send({ error: 'Workspace access required.' });
+    let domainContext: ReturnType<typeof resolveDomainProfileSelection> | undefined;
+    let writingStandard: ReturnType<typeof resolveWritingStandardSelection> | undefined;
+    try {
+      domainContext = body.domainProfile ? resolveDomainProfileSelection(body.domainProfile) : undefined;
+      writingStandard = body.writingStandard ? resolveWritingStandardSelection(body.writingStandard) : undefined;
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) });
+    }
     const now = nowIso();
     const run: WorkflowRun = {
       id: newId('run'),
       workflowId: WRITING_AUTOPILOT_POLICY.id,
       status: 'running',
-      input: { message: body.message?.trim() || undefined, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined },
+      input: { message: body.message?.trim() || undefined, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined, targetStage: normalizeWorkflowTargetStage(body.targetStage), domainContext, writingStandard },
       state: {},
       metadata: { userId, sessionId: body.sessionId, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined },
       history: [],
@@ -1109,6 +1117,11 @@ function clearBlocksForOutlineSections(article: ArticleArtifact, sectionIds: str
 
 function readRequestUserId(request: FastifyRequest, explicitUserId?: string): string | undefined {
   return resolveUserContext(request, explicitUserId)?.userId;
+}
+
+function normalizeWorkflowTargetStage(value: string | undefined): 'task-card' | 'outline' | 'section' | 'article' {
+  if (value === 'task-card' || value === 'outline' || value === 'section' || value === 'article') return value;
+  return 'article';
 }
 
 async function ensureDefaultWorkspace(container: AppContainer, userId: string): Promise<WritingWorkspace> {
