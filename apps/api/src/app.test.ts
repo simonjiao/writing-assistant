@@ -1138,6 +1138,11 @@ describe('api app', () => {
     expect(messagesResponse.json()).toHaveLength(2);
     expect(invokedSkills).toEqual([]);
     expect(await container.stores.dialogueBriefStore.getBrief(article.id, 'dialogue-answer-user')).toBeUndefined();
+    const piSessions = await container.stores.piAgentSessionStore.listSessions({ userId: 'dialogue-answer-user', articleId: article.id, contextKind: 'outline-item' });
+    expect(piSessions).toHaveLength(1);
+    expect(piSessions[0].runId).toBeUndefined();
+    expect(piSessions[0].targetId).toBe('sec-dialogue-answer');
+    expect(piSessions[0].messages.map((message) => (message as { role: string }).role)).toEqual(['user', 'assistant']);
     await app.close();
   });
 

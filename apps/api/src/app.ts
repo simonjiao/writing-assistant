@@ -230,6 +230,10 @@ export function createApp(config: AppConfig, container: AppContainer) {
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: pendingProposal.contextKind, role: 'user', content: message, proposalId: pendingProposal.id });
       const applied = await applyRevisionProposal(container, pendingProposal.id, userId, body.sessionId);
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: pendingProposal.contextKind, role: 'assistant', content: applied.message, proposalId: pendingProposal.id });
+      await appendDialoguePiMessages(container, applied.article ?? access.article, userId, dialogueSessionTargetFromProposal(pendingProposal), [
+        { role: 'user', content: message, proposalId: pendingProposal.id },
+        { role: 'assistant', content: applied.message, proposalId: pendingProposal.id },
+      ]);
       return { ...applied, messages: await listDialogueMessages(container, access.article.id, userId) };
     }
     if (pendingProposal && route === 'dismiss') {
@@ -237,6 +241,10 @@ export function createApp(config: AppConfig, container: AppContainer) {
       const { proposal: dismissed, runPayload } = await dismissRevisionProposal(container, pendingProposal, userId);
       const assistantMessage = '已取消这次修改方案。';
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: pendingProposal.contextKind, role: 'assistant', content: assistantMessage, proposalId: pendingProposal.id });
+      await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromProposal(pendingProposal), [
+        { role: 'user', content: message, proposalId: pendingProposal.id },
+        { role: 'assistant', content: assistantMessage, proposalId: pendingProposal.id },
+      ]);
       return { mode: 'answer', message: assistantMessage, proposal: dismissed, ...(runPayload ?? {}), messages: await listDialogueMessages(container, access.article.id, userId) };
     }
     const context = resolveDialogueContext(access.article, body.context);
@@ -250,12 +258,20 @@ export function createApp(config: AppConfig, container: AppContainer) {
       }
       const assistantMessage = localDialogueReply(route, context.value.context, access.article, message, pendingProposal);
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id });
+      await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromContext(context.value.context), [
+        { role: 'user', content: message, proposalId: pendingProposal?.id },
+        { role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id },
+      ]);
       return { mode: route, message: assistantMessage, messages: await listDialogueMessages(container, access.article.id, userId) };
     }
     if (route === 'needs-rag') {
       const knowledgeAnswer = await answerWithKnowledge(container, access.article, context.value.context, message);
       await addKnowledgeEvidenceToBrief({ container, articleId: access.article.id, userId, query: knowledgeAnswer.query, items: knowledgeAnswer.items });
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: knowledgeAnswer.message, proposalId: pendingProposal?.id });
+      await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromContext(context.value.context), [
+        { role: 'user', content: message, proposalId: pendingProposal?.id },
+        { role: 'assistant', content: knowledgeAnswer.message, proposalId: pendingProposal?.id },
+      ]);
       return { mode: 'answer', message: knowledgeAnswer.message, messages: await listDialogueMessages(container, access.article.id, userId) };
     }
     const conversationBrief = await getOrCreateDialogueBrief(container, access.article.id, userId);
@@ -283,10 +299,18 @@ export function createApp(config: AppConfig, container: AppContainer) {
       if (!isDialogueCoordinatorRecoverableFailure(error)) throw error;
       const assistantMessage = '这次修改范围较大，方案没有生成成功。请把要改的大纲项、要新增的情节或要删除的部分拆成更明确的一两条再发。';
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id });
+      await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromContext(context.value.context), [
+        { role: 'user', content: message, proposalId: pendingProposal?.id },
+        { role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id },
+      ]);
       return { mode: 'clarify', message: assistantMessage, messages: await listDialogueMessages(container, access.article.id, userId) };
     }
     if (result.mode !== 'proposal') {
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: result.message, proposalId: pendingProposal?.id });
+      await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromContext(context.value.context), [
+        { role: 'user', content: message, proposalId: pendingProposal?.id },
+        { role: 'assistant', content: result.message, proposalId: pendingProposal?.id },
+      ]);
       return { mode: result.mode, message: result.message, messages: await listDialogueMessages(container, access.article.id, userId) };
     }
     if (pendingProposal) await container.stores.revisionProposalStore.updateProposal({ ...pendingProposal, status: 'dismissed' });
@@ -304,6 +328,10 @@ export function createApp(config: AppConfig, container: AppContainer) {
     });
     if (pendingProposal?.runId) await syncWorkflowRunToRefreshedProposal(container, pendingProposal, proposal);
     await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: result.message, proposalId: proposal.id });
+    await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromContext(context.value.context), [
+      { role: 'user', content: message, proposalId: pendingProposal?.id },
+      { role: 'assistant', content: result.message, proposalId: proposal.id },
+    ]);
     return { mode: 'proposal', message: result.message, proposal, messages: await listDialogueMessages(container, access.article.id, userId) };
   });
   app.get('/api/articles/:articleId/dialogue/brief', async (request, reply) => {
@@ -339,10 +367,15 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const body = (request.body ?? {}) as { userId?: string; sessionId?: string };
     const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const access = await requireArticleAccess(container, userId, articleId);
+    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
     const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
     if (!proposal || proposal.articleId !== articleId) return reply.code(404).send({ error: 'Revision proposal not found.' });
     const applied = await applyRevisionProposal(container, proposal.id, userId, body.sessionId);
     await appendDialogueMessage(container, { articleId, userId, contextKind: proposal.contextKind, role: 'assistant', content: applied.message, proposalId: proposal.id });
+    await appendDialoguePiMessages(container, applied.article ?? access.article, userId, dialogueSessionTargetFromProposal(proposal), [
+      { role: 'assistant', content: applied.message, proposalId: proposal.id },
+    ]);
     return { ...applied, messages: await listDialogueMessages(container, articleId, userId) };
   });
   app.post('/api/articles/:articleId/dialogue/:proposalId/dismiss', async (request, reply) => {
@@ -350,11 +383,16 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const body = (request.body ?? {}) as { userId?: string };
     const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const access = await requireArticleAccess(container, userId, articleId);
+    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
     const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
     if (!proposal || proposal.articleId !== articleId) return reply.code(404).send({ error: 'Revision proposal not found.' });
     if (proposal.userId !== userId) return reply.code(403).send({ error: 'Revision proposal belongs to another user.' });
     const { proposal: dismissed, runPayload } = await dismissRevisionProposal(container, proposal, userId);
     await appendDialogueMessage(container, { articleId, userId, contextKind: proposal.contextKind, role: 'assistant', content: '已取消这次修改提案。', proposalId: proposal.id });
+    await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromProposal(proposal), [
+      { role: 'assistant', content: '已取消这次修改提案。', proposalId: proposal.id },
+    ]);
     return { mode: 'answer', message: '已取消这次修改提案。', proposal: dismissed, ...(runPayload ?? {}), messages: await listDialogueMessages(container, articleId, userId) };
   });
   app.post('/api/knowledge/search', async (request) => {
@@ -720,6 +758,54 @@ function knowledgeItemLabel(item: KnowledgeItem): string {
 
 async function appendDialogueMessage(container: AppContainer, input: Omit<DialogueMessage, 'id' | 'createdAt'>): Promise<DialogueMessage> {
   return container.stores.dialogueMessageStore.createMessage(input);
+}
+
+type DialoguePiSessionTarget = { contextKind: DialogueContextKind; targetId?: string };
+type DialoguePiMessage = { role: 'user' | 'assistant'; content: string; proposalId?: string };
+
+async function appendDialoguePiMessages(container: AppContainer, article: ArticleArtifact, userId: string, target: DialoguePiSessionTarget, messages: DialoguePiMessage[]): Promise<void> {
+  const existing = await container.stores.piAgentSessionStore.findSession({ userId, articleId: article.id, contextKind: target.contextKind, targetId: target.targetId });
+  const now = nowIso();
+  const serializedMessages = messages.map((message) => {
+    const serialized: Record<string, string | number> = { role: message.role, content: message.content, timestamp: Date.now() };
+    if (message.proposalId) serialized.proposalId = message.proposalId;
+    return serialized;
+  });
+  const session = existing
+    ? await container.stores.piAgentSessionStore.saveSession({
+      ...existing,
+      workspaceId: article.workspaceId,
+      baseArticleRevision: article.revision,
+      messages: [...existing.messages, ...serializedMessages],
+      lockVersion: existing.lockVersion + 1,
+      updatedAt: now,
+    })
+    : await container.stores.piAgentSessionStore.saveSession({
+      id: newId('pi_ses'),
+      userId,
+      workspaceId: article.workspaceId,
+      articleId: article.id,
+      contextKind: target.contextKind,
+      targetId: target.targetId,
+      messages: serializedMessages,
+      baseArticleRevision: article.revision,
+      lockVersion: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+  await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'pi.session.updated', payload: { userId, articleId: article.id, piAgentSessionId: session.id, contextKind: target.contextKind, targetId: target.targetId, reason: 'dialogue-turn' }, createdAt: nowIso() });
+}
+
+function dialogueSessionTargetFromContext(context: DialogueCoordinatorInput['context']): DialoguePiSessionTarget {
+  return { contextKind: context.kind, targetId: context.outlineItemId ?? context.blockId };
+}
+
+function dialogueSessionTargetFromProposal(proposal: RevisionProposal): DialoguePiSessionTarget {
+  return {
+    contextKind: proposal.contextKind,
+    targetId: proposal.operations.find((operation) => operation.type === 'revise-outline-item')?.outlineItemId
+      ?? proposal.operations.find((operation) => operation.type === 'patch-block')?.blockId,
+  };
 }
 
 function listDialogueMessages(container: AppContainer, articleId: string, userId: string, limit = 24): Promise<DialogueMessage[]> {
