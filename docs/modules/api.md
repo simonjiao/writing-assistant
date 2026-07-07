@@ -58,6 +58,8 @@ WS /api/events/ws?runId=&userId=
 
 `RunResponse.revisionProposals` 返回当前文章、当前用户仍待处理的修改方案。workflow review 生成的 proposal 会通过这个字段同步到前端，不要求前端额外猜测或轮询对话接口。
 
+`/api/workflows/writing/start` 在已有同文章、同用户、绑定 workflow run 的 pending revision proposal 时，不会新建第二条 run；它会返回原 run 的等待态，并把本次 intent 作为 workflow message 处理。
+
 workflow review 生成的 proposal 带 `runId`。`apply` 返回 `DialogueResponse`，其中可以包含恢复后的 `run/article/events/revisionProposals`；`dismiss` 同样返回 `DialogueResponse`，前端应按普通对话响应更新本地状态。
 
 当 workflow run 已等待一个 pending revision proposal 时，`/api/workflows/:runId/message` 不会直接绕过该 proposal 继续写作。确认类消息会应用 proposal，取消类消息会取消 proposal，明确修改意见会通过 `dialogue-coordinator` 刷新 proposal 并保持 run 等待新 proposal；普通讨论消息只返回当前等待状态。

@@ -253,6 +253,21 @@ describe('api app', () => {
     expect(body.revisionProposals).toHaveLength(1);
     expect(body.revisionProposals[0].id).toBe(proposals[0].id);
 
+    const duplicateStart = await app.inject({
+      method: 'POST',
+      url: '/api/workflows/writing/start',
+      payload: { userId: 'consistency-block-user', articleId: article.id, targetStage: 'article', message: '开始写作' },
+    });
+
+    expect(duplicateStart.statusCode).toBe(200);
+    const duplicateStartBody = duplicateStart.json();
+    expect(duplicateStartBody.run.id).toBe(body.run.id);
+    expect(duplicateStartBody.run.status).toBe('waiting');
+    expect(duplicateStartBody.run.waitingFor.nodeId).toBe('revision-proposal');
+    expect(duplicateStartBody.revisionProposals).toHaveLength(1);
+    expect(duplicateStartBody.revisionProposals[0].id).toBe(proposals[0].id);
+    expect(await container.stores.revisionProposalStore.listPendingProposals(article.id, 'consistency-block-user')).toHaveLength(1);
+
     const resumed = await app.inject({
       method: 'POST',
       url: `/api/workflows/${body.run.id}/message`,

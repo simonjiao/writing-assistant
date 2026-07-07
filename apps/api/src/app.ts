@@ -464,6 +464,17 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const workspaceId = articleAccess?.article.workspaceId ?? body.workspaceId?.trim() ?? (await ensureDefaultWorkspace(container, userId)).id;
     const workspace = await requireWorkspaceAccess(container, userId, workspaceId);
     if (!workspace) return reply.code(403).send({ error: 'Workspace access required.' });
+    const pendingWorkflowRun = articleAccess?.article ? await findPendingWorkflowProposalRun(container, articleAccess.article.id, userId) : undefined;
+    if (pendingWorkflowRun) {
+      const message = body.message?.trim();
+      if (message) {
+        await appendWorkflowUserMessage(container, pendingWorkflowRun, message);
+        await container.stores.eventTraceStore.append({ id: newId('evt'), runId: pendingWorkflowRun.id, type: 'pi.session.updated', payload: { userId, reason: 'workflow-user-message' }, createdAt: nowIso() });
+        const pendingProposalRun = await handleWorkflowPendingProposalMessage(container, pendingWorkflowRun, message, userId);
+        if (pendingProposalRun) return pendingProposalRun;
+      }
+      return enrichRun(container, pendingWorkflowRun.id);
+    }
     let domainContext: ReturnType<typeof resolveDomainProfileSelection> | undefined;
     let writingStandard: ReturnType<typeof resolveWritingStandardSelection> | undefined;
     try {
@@ -793,6 +804,20 @@ function proposalForDialogue(proposal: RevisionProposal): DialogueCoordinatorInp
     operations: proposal.operations,
     warnings: proposal.warnings,
   };
+}
+
+async function findPendingWorkflowProposalRun(container: AppContainer, articleId: string, userId: string): Promise<WorkflowRun | undefined> {
+  const proposals = (await container.stores.revisionProposalStore.listPendingProposals(articleId, userId))
+    .filter((proposal) => proposal.runId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  for (const proposal of proposals) {
+    const run = proposal.runId ? await container.stores.stateStore.getRun(proposal.runId) : undefined;
+    if (!run || run.metadata.userId !== userId) continue;
+    if (run.status === 'completed' || run.status === 'cancelled') continue;
+    if (run.state.pendingRevisionProposalId !== proposal.id) continue;
+    return run;
+  }
+  return undefined;
 }
 
 async function handleWorkflowPendingProposalMessage(container: AppContainer, run: WorkflowRun, message: string, userId: string): Promise<Awaited<ReturnType<typeof enrichRun>> | undefined> {
