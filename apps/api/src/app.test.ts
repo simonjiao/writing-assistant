@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { AllowedAction, DialogueBrief, WorkflowRun, WritingTaskCard, nowIso } from '@wa/core';
+import { AllowedAction, ArticleArtifact, DialogueBrief, WorkflowRun, WritingTaskCard, nowIso } from '@wa/core';
 import { createApp } from './app';
 import { createContainer } from './bootstrap';
 import { AppConfig } from './config';
@@ -12,6 +12,13 @@ import { PiWorkflowActionExecutor } from './piWorkflowActionExecutor';
 
 let dataDir: string | undefined;
 afterEach(async () => { if (dataDir) await rm(dataDir, { recursive: true, force: true }); dataDir = undefined; });
+
+let fixtureWriteCounter = 0;
+
+async function saveArticleFixture(container: ReturnType<typeof createContainer>, article: ArticleArtifact): Promise<ArticleArtifact> {
+  const operationId = `test_fixture_${article.id}_${fixtureWriteCounter += 1}`;
+  return container.stores.artifactStore.updateArticleWithRevision({ article, baseRevision: article.revision, operationId });
+}
 
 function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   dataDir = join(tmpdir(), `wa-api-test-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -256,7 +263,7 @@ describe('api app', () => {
       themeTags: ['一致性'],
       status: 'confirmed',
     }];
-    await container.stores.artifactStore.updateArticle(article);
+    await saveArticleFixture(container, article);
 
     const response = await app.inject({
       method: 'POST',
@@ -381,7 +388,7 @@ describe('api app', () => {
       themeTags: ['一致性'],
       status: 'confirmed',
     }];
-    await container.stores.artifactStore.updateArticle(article);
+    await saveArticleFixture(container, article);
 
     const started = await app.inject({
       method: 'POST',
@@ -452,7 +459,7 @@ describe('api app', () => {
       createdAt: now,
       updatedAt: now,
     }];
-    await container.stores.artifactStore.updateArticle(article);
+    await saveArticleFixture(container, article);
 
     const response = await app.inject({
       method: 'POST',
@@ -494,7 +501,7 @@ describe('api app', () => {
       createdAt: nowIso(),
       updatedAt: nowIso(),
     }];
-    const prepared = await container.stores.artifactStore.updateArticle(article);
+    const prepared = await saveArticleFixture(container, article);
 
     const selectedText = article.blocks[0].text;
     const created = await app.inject({
@@ -556,7 +563,7 @@ describe('api app', () => {
       createdAt: now,
       updatedAt: now,
     }];
-    const prepared = await container.stores.artifactStore.updateArticle(article);
+    const prepared = await saveArticleFixture(container, article);
 
     const selectedText = article.blocks[0].text;
     const created = await app.inject({
@@ -603,7 +610,7 @@ describe('api app', () => {
       createdAt: nowIso(),
       updatedAt: nowIso(),
     }];
-    const prepared = await container.stores.artifactStore.updateArticle(article);
+    const prepared = await saveArticleFixture(container, article);
     const created = await app.inject({
       method: 'POST',
       url: `/api/articles/${article.id}/comments`,
@@ -639,7 +646,7 @@ describe('api app', () => {
       createdAt: nowIso(),
       updatedAt: nowIso(),
     }];
-    const prepared = await container.stores.artifactStore.updateArticle(article);
+    const prepared = await saveArticleFixture(container, article);
     const created = await app.inject({
       method: 'POST',
       url: `/api/articles/${article.id}/comments`,
@@ -658,7 +665,7 @@ describe('api app', () => {
       resolvedAt: handledAt,
       updatedAt: handledAt,
     });
-    const handled = await container.stores.artifactStore.updateArticle(stored!);
+    const handled = await saveArticleFixture(container, stored!);
     const replied = await app.inject({
       method: 'POST',
       url: `/api/articles/${article.id}/comments/${commentId}/replies`,
@@ -714,7 +721,7 @@ describe('api app', () => {
       createdAt: nowIso(),
       updatedAt: nowIso(),
     }];
-    const prepared = await container.stores.artifactStore.updateArticle(article);
+    const prepared = await saveArticleFixture(container, article);
 
     const created = await app.inject({
       method: 'POST',
@@ -757,7 +764,7 @@ describe('api app', () => {
       resolvedAt: handledAt,
       updatedAt: handledAt,
     });
-    const handled = await container.stores.artifactStore.updateArticle(stored!);
+    const handled = await saveArticleFixture(container, stored!);
     const protectedDelete = await app.inject({
       method: 'DELETE',
       url: `/api/articles/${article.id}/comments/${protectedCommentId}`,
@@ -843,7 +850,7 @@ describe('api app', () => {
     const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'summary-user', name: '摘要工作台' });
     const article = await container.stores.artifactStore.createArticle({ userId: 'summary-user', workspaceId: workspace.id, title: '摘要测试' });
     article.outline = [{ id: 'sec-1', title: '标题', goal: '目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'draft' }];
-    await container.stores.artifactStore.updateArticle(article);
+    await saveArticleFixture(container, article);
     const response = await app.inject({ method: 'GET', url: `/api/articles?userId=summary-user&workspaceId=${workspace.id}&view=summary` });
     expect(response.statusCode).toBe(200);
     const body = response.json();
@@ -985,7 +992,7 @@ describe('api app', () => {
     const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'outline-user', name: '大纲工作台' });
     const article = await container.stores.artifactStore.createArticle({ userId: 'outline-user', workspaceId: workspace.id, title: '测试文章' });
     article.outline = [{ id: 'sec-1', title: '旧标题', goal: '旧目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }];
-    const prepared = await container.stores.artifactStore.updateArticle(article);
+    const prepared = await saveArticleFixture(container, article);
     const response = await app.inject({ method: 'PATCH', url: `/api/articles/${article.id}/outline/sec-1`, payload: { title: '新标题', goal: '新目标', userId: 'outline-user', baseRevision: prepared.revision } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
@@ -1017,7 +1024,7 @@ describe('api app', () => {
       { id: 'block-1', type: 'paragraph', sectionId: 'sec-1', title: '旧正文', text: '旧大纲项下的正文。', sourceRefs: [], themeTags: [], status: 'draft', createdAt: now, updatedAt: now },
       { id: 'block-2', type: 'paragraph', sectionId: 'sec-2', title: '保留正文', text: '另一节正文。', sourceRefs: [], themeTags: [], status: 'draft', createdAt: now, updatedAt: now },
     ];
-    const prepared = await container.stores.artifactStore.updateArticle(article);
+    const prepared = await saveArticleFixture(container, article);
     const response = await app.inject({ method: 'PATCH', url: `/api/articles/${article.id}/outline/sec-1`, payload: { title: '新标题', goal: '新目标', userId: 'outline-consistency-user', baseRevision: prepared.revision } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
@@ -1053,7 +1060,7 @@ describe('api app', () => {
     article.blocks = [{ id: 'block-old', type: 'paragraph', sectionId: 'sec-old', title: '旧正文', text: '旧任务卡下生成的正文。', sourceRefs: [], themeTags: ['旧主题'], status: 'draft', createdAt: now, updatedAt: now }];
     article.citations = [{ id: 'cite-old', label: '旧引用', sourceRef: 'old-ref' }];
     article.themeTags = [{ id: 'tag-old', label: '旧主题', scope: 'article' }];
-    await container.stores.artifactStore.updateArticle(article);
+    await saveArticleFixture(container, article);
     const proposal = await container.stores.revisionProposalStore.createProposal({
       articleId: article.id,
       userId: 'consistency-user',
@@ -1164,7 +1171,7 @@ describe('api app', () => {
     const article = await container.stores.artifactStore.createArticle({ userId: 'outline-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
     article.outline = [{ id: 'old-sec', title: '旧大纲', goal: '旧目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: ['旧主题'], status: 'confirmed' }];
     article.blocks = [{ id: 'old-block', type: 'paragraph', sectionId: 'old-sec', title: '旧正文', text: '旧大纲下生成过的正文。', sourceRefs: [], themeTags: ['旧主题'], status: 'draft', createdAt: now, updatedAt: now }];
-    await container.stores.artifactStore.updateArticle(article);
+    await saveArticleFixture(container, article);
     const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { articleId: article.id, userId: 'outline-user', targetStage: 'outline', replaceExisting: true, message: '重新生成大纲' } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
@@ -1208,7 +1215,7 @@ describe('api app', () => {
     const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-answer-user', name: '对话解释工作台' });
     const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-answer-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
     article.outline = [{ id: 'sec-dialogue-answer', title: '解释项', goal: '解释项目标。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }];
-    await container.stores.artifactStore.updateArticle(article);
+    await saveArticleFixture(container, article);
     const before = await container.stores.artifactStore.getArticle(article.id);
 
     const response = await app.inject({
@@ -1321,7 +1328,7 @@ describe('api app', () => {
     const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-proposal-user', name: '对话方案工作台' });
     const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-proposal-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
     article.outline = [{ id: 'sec-dialogue-proposal', title: '旧标题', goal: '旧目标。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }];
-    await container.stores.artifactStore.updateArticle(article);
+    await saveArticleFixture(container, article);
 
     const proposalResponse = await app.inject({
       method: 'POST',
@@ -1502,7 +1509,7 @@ describe('api app', () => {
     const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-brief-user', name: '对话摘要工作台' });
     const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-brief-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
     article.outline = [{ id: 'sec-brief-1', title: '旧大纲', goal: '旧目标。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }];
-    await container.stores.artifactStore.updateArticle(article);
+    await saveArticleFixture(container, article);
     const longRagReply = `查到 4 条相关资料：${'司棋脂批资料'.repeat(300)}`;
     await container.stores.dialogueMessageStore.createMessage({ articleId: article.id, userId: 'dialogue-brief-user', contextKind: 'task-card', role: 'assistant', content: longRagReply });
 
@@ -1560,7 +1567,7 @@ describe('api app', () => {
     const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-brief-fail-user', name: '对话摘要失败工作台' });
     const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-brief-fail-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
     article.outline = [{ id: 'sec-brief-fail-1', title: '旧大纲', goal: '旧目标。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }];
-    await container.stores.artifactStore.updateArticle(article);
+    await saveArticleFixture(container, article);
 
     const firstResponse = await app.inject({
       method: 'POST',
@@ -1616,7 +1623,7 @@ describe('api app', () => {
     const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'dialogue-brief-stale-user', name: '对话摘要恢复工作台' });
     const article = await container.stores.artifactStore.createArticle({ userId: 'dialogue-brief-stale-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
     article.outline = [{ id: 'sec-brief-stale-1', title: '旧大纲', goal: '旧目标。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }];
-    await container.stores.artifactStore.updateArticle(article);
+    await saveArticleFixture(container, article);
     const interruptedJob = await container.stores.dialogueBriefUpdateJobStore.createJob({
       articleId: article.id,
       userId: 'dialogue-brief-stale-user',
@@ -1698,7 +1705,7 @@ describe('api app', () => {
     const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'section-log-user', name: '章节日志工作台' });
     const article = await container.stores.artifactStore.createArticle({ userId: 'section-log-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
     article.outline = [{ id: 'sec-readable-log', title: '可读章节标题', goal: '写出章节正文。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: ['章节日志'], status: 'confirmed' }];
-    await container.stores.artifactStore.updateArticle(article);
+    await saveArticleFixture(container, article);
     const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { articleId: article.id, sectionId: 'sec-readable-log', userId: 'section-log-user', targetStage: 'section', message: '生成当前章节正文' } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
