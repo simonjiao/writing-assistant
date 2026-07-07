@@ -346,7 +346,7 @@ export function App() {
     setBusy(true);
     setError(undefined);
     try {
-      const updated = await api.createArticleComment(visibleArticle.id, { userId, blockId: commentDraft.blockId, selectedText: commentDraft.selectedText, comment: commentDraft.comment });
+      const updated = await api.createArticleComment(visibleArticle.id, { userId, blockId: commentDraft.blockId, selectedText: commentDraft.selectedText, comment: commentDraft.comment, baseRevision: visibleArticle.revision });
       setArticle(updated);
       setCommentDraft(undefined);
       await refreshArticleSummaries(updated.workspaceId);
@@ -366,7 +366,7 @@ export function App() {
     setBusy(true);
     setError(undefined);
     try {
-      const updated = await api.addArticleCommentReply(visibleArticle.id, commentId, { userId, content });
+      const updated = await api.addArticleCommentReply(visibleArticle.id, commentId, { userId, content, baseRevision: visibleArticle.revision });
       setArticle(updated);
       setCommentReplyDrafts((current) => {
         const next = { ...current };
@@ -387,7 +387,7 @@ export function App() {
     setBusy(true);
     setError(undefined);
     try {
-      const updated = await api.deleteArticleComment(visibleArticle.id, commentId, { userId });
+      const updated = await api.deleteArticleComment(visibleArticle.id, commentId, { userId, baseRevision: visibleArticle.revision });
       setArticle(updated);
       setCommentProcessingSummary(undefined);
       await refreshArticleSummaries(updated.workspaceId);
@@ -403,7 +403,7 @@ export function App() {
     setBusy(true);
     setError(undefined);
     try {
-      const updated = await api.deleteArticleCommentReply(visibleArticle.id, commentId, replyId, { userId });
+      const updated = await api.deleteArticleCommentReply(visibleArticle.id, commentId, replyId, { userId, baseRevision: visibleArticle.revision });
       setArticle(updated);
       setCommentProcessingSummary(undefined);
       await refreshArticleSummaries(updated.workspaceId);

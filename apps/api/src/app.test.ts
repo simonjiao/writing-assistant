@@ -426,13 +426,13 @@ describe('api app', () => {
       createdAt: nowIso(),
       updatedAt: nowIso(),
     }];
-    await container.stores.artifactStore.updateArticle(article);
+    const prepared = await container.stores.artifactStore.updateArticle(article);
 
     const selectedText = article.blocks[0].text;
     const created = await app.inject({
       method: 'POST',
       url: `/api/articles/${article.id}/comments`,
-      payload: { userId: 'comment-user', blockId: 'blk-comment-1', selectedText, comment: '这里似乎是后40回内容，不要引用程高本续书。' },
+      payload: { userId: 'comment-user', blockId: 'blk-comment-1', selectedText, comment: '这里似乎是后40回内容，不要引用程高本续书。', baseRevision: prepared.revision },
     });
     expect(created.statusCode).toBe(200);
     const body = created.json();
@@ -444,6 +444,13 @@ describe('api app', () => {
       status: 'open',
     });
     expect(body.blocks[0].text).toBe(article.blocks[0].text);
+    const operations = await container.stores.workflowOperationStore.listOperations({ articleId: article.id, userId: 'comment-user' });
+    expect(operations).toEqual(expect.arrayContaining([expect.objectContaining({
+      toolName: 'create_article_comment',
+      status: 'completed',
+      articleRevisionBefore: prepared.revision,
+      articleRevisionAfter: body.revision,
+    })]));
     await app.close();
   });
 
@@ -481,13 +488,13 @@ describe('api app', () => {
       createdAt: now,
       updatedAt: now,
     }];
-    await container.stores.artifactStore.updateArticle(article);
+    const prepared = await container.stores.artifactStore.updateArticle(article);
 
     const selectedText = article.blocks[0].text;
     const created = await app.inject({
       method: 'POST',
       url: `/api/articles/${article.id}/comments`,
-      payload: { userId: 'workflow-comment-user', blockId: 'blk-comment-workflow', selectedText, comment: '这里似乎是后40回内容，不要引用程高本续书。' },
+      payload: { userId: 'workflow-comment-user', blockId: 'blk-comment-workflow', selectedText, comment: '这里似乎是后40回内容，不要引用程高本续书。', baseRevision: prepared.revision },
     });
     expect(created.statusCode).toBe(200);
     const commentId = created.json().comments[0].id;
@@ -528,17 +535,17 @@ describe('api app', () => {
       createdAt: nowIso(),
       updatedAt: nowIso(),
     }];
-    await container.stores.artifactStore.updateArticle(article);
+    const prepared = await container.stores.artifactStore.updateArticle(article);
     const created = await app.inject({
       method: 'POST',
       url: `/api/articles/${article.id}/comments`,
-      payload: { userId: 'reply-user', blockId: 'blk-reply-1', selectedText: '这一段需要继续讨论。', comment: '先解释一下。' },
+      payload: { userId: 'reply-user', blockId: 'blk-reply-1', selectedText: '这一段需要继续讨论。', comment: '先解释一下。', baseRevision: prepared.revision },
     });
     const commentId = created.json().comments[0].id;
     const replied = await app.inject({
       method: 'POST',
       url: `/api/articles/${article.id}/comments/${commentId}/replies`,
-      payload: { userId: 'reply-user', content: '补充：这里其实是想改得更清楚。' },
+      payload: { userId: 'reply-user', content: '补充：这里其实是想改得更清楚。', baseRevision: created.json().revision },
     });
     expect(replied.statusCode).toBe(200);
     expect(replied.json().comments[0].status).toBe('open');
@@ -564,11 +571,11 @@ describe('api app', () => {
       createdAt: nowIso(),
       updatedAt: nowIso(),
     }];
-    await container.stores.artifactStore.updateArticle(article);
+    const prepared = await container.stores.artifactStore.updateArticle(article);
     const created = await app.inject({
       method: 'POST',
       url: `/api/articles/${article.id}/comments`,
-      payload: { userId: 'delete-reply-user', blockId: 'blk-delete-reply-1', selectedText: '删除其中一条回复', comment: '这条批注先解释。' },
+      payload: { userId: 'delete-reply-user', blockId: 'blk-delete-reply-1', selectedText: '删除其中一条回复', comment: '这条批注先解释。', baseRevision: prepared.revision },
     });
     const commentId = created.json().comments[0].id;
     const stored = await container.stores.artifactStore.getArticle(article.id);
@@ -583,11 +590,11 @@ describe('api app', () => {
       resolvedAt: handledAt,
       updatedAt: handledAt,
     });
-    await container.stores.artifactStore.updateArticle(stored!);
+    const handled = await container.stores.artifactStore.updateArticle(stored!);
     const replied = await app.inject({
       method: 'POST',
       url: `/api/articles/${article.id}/comments/${commentId}/replies`,
-      payload: { userId: 'delete-reply-user', content: '这条新回复还没处理，想删掉。' },
+      payload: { userId: 'delete-reply-user', content: '这条新回复还没处理，想删掉。', baseRevision: handled.revision },
     });
     expect(replied.statusCode).toBe(200);
     const replyId = replied.json().comments[0].replies.at(-1).id;
@@ -596,7 +603,7 @@ describe('api app', () => {
     const deleted = await app.inject({
       method: 'DELETE',
       url: `/api/articles/${article.id}/comments/${commentId}/replies/${replyId}`,
-      payload: { userId: 'delete-reply-user' },
+      payload: { userId: 'delete-reply-user', baseRevision: replied.json().revision },
     });
     expect(deleted.statusCode).toBe(200);
     expect(deleted.json().comments[0].status).toBe('resolved');
@@ -607,14 +614,14 @@ describe('api app', () => {
     const missing = await app.inject({
       method: 'DELETE',
       url: `/api/articles/${article.id}/comments/${commentId}/replies/${replyId}`,
-      payload: { userId: 'delete-reply-user' },
+      payload: { userId: 'delete-reply-user', baseRevision: replied.json().revision },
     });
     expect(missing.statusCode).toBe(200);
     expect(missing.json().comments[0].replies).toEqual([{ id: 'crp-existing-answer', role: 'assistant', content: '已经解释过这条批注。', createdAt: handledAt }]);
     const protectedReply = await app.inject({
       method: 'DELETE',
       url: `/api/articles/${article.id}/comments/${commentId}/replies/crp-existing-answer`,
-      payload: { userId: 'delete-reply-user' },
+      payload: { userId: 'delete-reply-user', baseRevision: deleted.json().revision },
     });
     expect(protectedReply.statusCode).toBe(409);
     expect(protectedReply.json().error).toContain('Only unprocessed user replies');
@@ -639,26 +646,26 @@ describe('api app', () => {
       createdAt: nowIso(),
       updatedAt: nowIso(),
     }];
-    await container.stores.artifactStore.updateArticle(article);
+    const prepared = await container.stores.artifactStore.updateArticle(article);
 
     const created = await app.inject({
       method: 'POST',
       url: `/api/articles/${article.id}/comments`,
-      payload: { userId: 'delete-comment-user', blockId: 'blk-delete-comment-1', selectedText: '添加和删除批注', comment: '这条批注还没处理，可以删除。' },
+      payload: { userId: 'delete-comment-user', blockId: 'blk-delete-comment-1', selectedText: '添加和删除批注', comment: '这条批注还没处理，可以删除。', baseRevision: prepared.revision },
     });
     expect(created.statusCode).toBe(200);
     const commentId = created.json().comments[0].id;
     const deleted = await app.inject({
       method: 'DELETE',
       url: `/api/articles/${article.id}/comments/${commentId}`,
-      payload: { userId: 'delete-comment-user' },
+      payload: { userId: 'delete-comment-user', baseRevision: created.json().revision },
     });
     expect(deleted.statusCode).toBe(200);
     expect(deleted.json().comments).toEqual([]);
     const missing = await app.inject({
       method: 'DELETE',
       url: `/api/articles/${article.id}/comments/${commentId}`,
-      payload: { userId: 'delete-comment-user' },
+      payload: { userId: 'delete-comment-user', baseRevision: created.json().revision },
     });
     expect(missing.statusCode).toBe(200);
     expect(missing.json().comments).toEqual([]);
@@ -666,7 +673,7 @@ describe('api app', () => {
     const protectedCreated = await app.inject({
       method: 'POST',
       url: `/api/articles/${article.id}/comments`,
-      payload: { userId: 'delete-comment-user', blockId: 'blk-delete-comment-1', selectedText: '添加和删除批注', comment: '这条批注已经处理。' },
+      payload: { userId: 'delete-comment-user', blockId: 'blk-delete-comment-1', selectedText: '添加和删除批注', comment: '这条批注已经处理。', baseRevision: deleted.json().revision },
     });
     expect(protectedCreated.statusCode).toBe(200);
     const protectedCommentId = protectedCreated.json().comments[0].id;
@@ -682,11 +689,11 @@ describe('api app', () => {
       resolvedAt: handledAt,
       updatedAt: handledAt,
     });
-    await container.stores.artifactStore.updateArticle(stored!);
+    const handled = await container.stores.artifactStore.updateArticle(stored!);
     const protectedDelete = await app.inject({
       method: 'DELETE',
       url: `/api/articles/${article.id}/comments/${protectedCommentId}`,
-      payload: { userId: 'delete-comment-user' },
+      payload: { userId: 'delete-comment-user', baseRevision: handled.revision },
     });
     expect(protectedDelete.statusCode).toBe(409);
     expect(protectedDelete.json().error).toContain('Only unprocessed comments');

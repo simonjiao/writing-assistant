@@ -83,9 +83,11 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.get('/api/articles/:articleId', async (request, reply) => { const { articleId } = request.params as { articleId: string }; const query = request.query as { userId?: string }; const userId = readRequestUserId(request, query.userId); if (!userId) return reply.code(400).send({ error: 'userId is required.' }); const access = await requireArticleAccess(container, userId, articleId); if (!access.ok) return reply.code(access.statusCode).send({ error: access.error }); return withWritingStandardSummary(access.article); });
   app.post('/api/articles/:articleId/comments', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
-    const body = (request.body ?? {}) as { userId?: string; blockId?: string; selectedText?: string; comment?: string };
+    const body = (request.body ?? {}) as { userId?: string; blockId?: string; selectedText?: string; comment?: string; baseRevision?: number };
     const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const baseRevision = parseBaseRevision(body.baseRevision);
+    if (baseRevision === undefined) return reply.code(400).send({ error: 'baseRevision is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
     const blockId = body.blockId?.trim();
@@ -111,49 +113,91 @@ export function createApp(config: AppConfig, container: AppContainer) {
       createdAt: now,
       updatedAt: now,
     };
-    access.article.comments = [...(access.article.comments ?? []), comment];
-    const updated = await container.stores.artifactStore.updateArticle(access.article);
-    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: access.article.id, blockId, commentId: comment.id, reason: 'article-comment-created', userId }, createdAt: nowIso() });
-    return withWritingStandardSummary(updated);
+    const result = await applyAuditedArticleMutation(container, {
+      article: access.article,
+      userId,
+      baseRevision,
+      operationId: articleMutationOperationId('comment_create', { articleId: access.article.id, blockId, selectedText, note, baseRevision }),
+      toolName: 'create_article_comment',
+      allowedActionId: `article-comment-create:${access.article.id}:${blockId}`,
+      argsHash: hashOperationArgs({ articleId: access.article.id, blockId, selectedText, note, baseRevision }),
+      resultRef: comment.id,
+      eventPayload: { articleId: access.article.id, blockId, commentId: comment.id, reason: 'article-comment-created', userId },
+      mutate: (article) => {
+        article.comments = [...(article.comments ?? []), comment];
+      },
+    });
+    if (!result.ok) return reply.code(result.statusCode).send({ error: result.error });
+    return withWritingStandardSummary(result.article);
   });
   app.post('/api/articles/:articleId/comments/:commentId/replies', async (request, reply) => {
     const { articleId, commentId } = request.params as { articleId: string; commentId: string };
-    const body = (request.body ?? {}) as { userId?: string; content?: string };
+    const body = (request.body ?? {}) as { userId?: string; content?: string; baseRevision?: number };
     const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const baseRevision = parseBaseRevision(body.baseRevision);
+    if (baseRevision === undefined) return reply.code(400).send({ error: 'baseRevision is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
     const content = body.content?.trim();
     if (!content) return reply.code(400).send({ error: 'content is required.' });
     const comment = (access.article.comments ?? []).find((item) => item.id === commentId);
     if (!comment) return reply.code(404).send({ error: 'Article comment not found.' });
-    appendCommentReply(comment, 'user', content);
-    updateComment(comment, { status: 'open', resolutionKind: undefined, resolvedAt: undefined });
-    const updated = await container.stores.artifactStore.updateArticle(access.article);
-    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: access.article.id, blockId: comment.blockId, commentId: comment.id, reason: 'article-comment-replied', userId }, createdAt: nowIso() });
-    return withWritingStandardSummary(updated);
+    const result = await applyAuditedArticleMutation(container, {
+      article: access.article,
+      userId,
+      baseRevision,
+      operationId: articleMutationOperationId('comment_reply_create', { articleId: access.article.id, commentId, content, baseRevision }),
+      toolName: 'create_article_comment_reply',
+      allowedActionId: `article-comment-reply-create:${access.article.id}:${commentId}`,
+      argsHash: hashOperationArgs({ articleId: access.article.id, commentId, content, baseRevision }),
+      resultRef: comment.id,
+      eventPayload: { articleId: access.article.id, blockId: comment.blockId, commentId: comment.id, reason: 'article-comment-replied', userId },
+      mutate: () => {
+        appendCommentReply(comment, 'user', content);
+        updateComment(comment, { status: 'open', resolutionKind: undefined, resolvedAt: undefined });
+      },
+    });
+    if (!result.ok) return reply.code(result.statusCode).send({ error: result.error });
+    return withWritingStandardSummary(result.article);
   });
   app.delete('/api/articles/:articleId/comments/:commentId', async (request, reply) => {
     const { articleId, commentId } = request.params as { articleId: string; commentId: string };
-    const body = (request.body ?? {}) as { userId?: string };
+    const body = (request.body ?? {}) as { userId?: string; baseRevision?: number };
     const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const baseRevision = parseBaseRevision(body.baseRevision);
+    if (baseRevision === undefined) return reply.code(400).send({ error: 'baseRevision is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
     const comments = access.article.comments ?? [];
     const comment = comments.find((item) => item.id === commentId);
     if (!comment) return withWritingStandardSummary(access.article);
     if (!canDeleteUnprocessedComment(comment)) return reply.code(409).send({ error: 'Only unprocessed comments can be deleted.' });
-    access.article.comments = comments.filter((item) => item.id !== commentId);
-    const updated = await container.stores.artifactStore.updateArticle(access.article);
-    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: access.article.id, blockId: comment.blockId, commentId: comment.id, reason: 'article-comment-deleted', userId }, createdAt: nowIso() });
-    return withWritingStandardSummary(updated);
+    const result = await applyAuditedArticleMutation(container, {
+      article: access.article,
+      userId,
+      baseRevision,
+      operationId: articleMutationOperationId('comment_delete', { articleId: access.article.id, commentId, baseRevision }),
+      toolName: 'delete_article_comment',
+      allowedActionId: `article-comment-delete:${access.article.id}:${commentId}`,
+      argsHash: hashOperationArgs({ articleId: access.article.id, commentId, baseRevision }),
+      resultRef: comment.id,
+      eventPayload: { articleId: access.article.id, blockId: comment.blockId, commentId: comment.id, reason: 'article-comment-deleted', userId },
+      mutate: (article) => {
+        article.comments = comments.filter((item) => item.id !== commentId);
+      },
+    });
+    if (!result.ok) return reply.code(result.statusCode).send({ error: result.error });
+    return withWritingStandardSummary(result.article);
   });
   app.delete('/api/articles/:articleId/comments/:commentId/replies/:replyId', async (request, reply) => {
     const { articleId, commentId, replyId } = request.params as { articleId: string; commentId: string; replyId: string };
-    const body = (request.body ?? {}) as { userId?: string };
+    const body = (request.body ?? {}) as { userId?: string; baseRevision?: number };
     const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const baseRevision = parseBaseRevision(body.baseRevision);
+    if (baseRevision === undefined) return reply.code(400).send({ error: 'baseRevision is required.' });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
     const comments = access.article.comments ?? [];
@@ -163,14 +207,26 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const targetReply = replies.find((item) => item.id === replyId);
     if (!targetReply) return withWritingStandardSummary(access.article);
     if (!canDeleteUnprocessedReply(comment, targetReply)) return reply.code(409).send({ error: 'Only unprocessed user replies can be deleted.' });
-    comment.replies = replies.filter((item) => item.id !== replyId);
-    if (targetReply.role === 'assistant' && comment.response?.trim() === targetReply.content.trim()) {
-      comment.response = undefined;
-    }
-    reconcileCommentAfterReplyDeletion(comment);
-    const updated = await container.stores.artifactStore.updateArticle(access.article);
-    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: access.article.id, blockId: comment.blockId, commentId: comment.id, replyId: targetReply.id, reason: 'article-comment-reply-deleted', userId }, createdAt: nowIso() });
-    return withWritingStandardSummary(updated);
+    const result = await applyAuditedArticleMutation(container, {
+      article: access.article,
+      userId,
+      baseRevision,
+      operationId: articleMutationOperationId('comment_reply_delete', { articleId: access.article.id, commentId, replyId, baseRevision }),
+      toolName: 'delete_article_comment_reply',
+      allowedActionId: `article-comment-reply-delete:${access.article.id}:${commentId}:${replyId}`,
+      argsHash: hashOperationArgs({ articleId: access.article.id, commentId, replyId, baseRevision }),
+      resultRef: targetReply.id,
+      eventPayload: { articleId: access.article.id, blockId: comment.blockId, commentId: comment.id, replyId: targetReply.id, reason: 'article-comment-reply-deleted', userId },
+      mutate: () => {
+        comment.replies = replies.filter((item) => item.id !== replyId);
+        if (targetReply.role === 'assistant' && comment.response?.trim() === targetReply.content.trim()) {
+          comment.response = undefined;
+        }
+        reconcileCommentAfterReplyDeletion(comment);
+      },
+    });
+    if (!result.ok) return reply.code(result.statusCode).send({ error: result.error });
+    return withWritingStandardSummary(result.article);
   });
   app.delete('/api/articles/:articleId', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
@@ -1050,6 +1106,67 @@ function revisionProposalOperationId(proposalId: string, operationIndex: number)
 
 function manualOutlineEditOperationId(articleId: string, sectionId: string, baseRevision: number, title: string, goal: string): string {
   return `op_manual_outline_${hashOperationArgs({ articleId, sectionId, baseRevision, title, goal }).slice(0, 24)}`;
+}
+
+function articleMutationOperationId(kind: string, args: Record<string, unknown>): string {
+  return `op_article_${kind}_${hashOperationArgs(args).slice(0, 24)}`;
+}
+
+function parseBaseRevision(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) ? value : undefined;
+}
+
+type AuditedArticleMutationResult =
+  | { ok: true; article: ArticleArtifact }
+  | { ok: false; statusCode: number; error: string };
+
+async function applyAuditedArticleMutation(
+  container: AppContainer,
+  input: {
+    article: ArticleArtifact;
+    userId: string;
+    baseRevision: number;
+    operationId: string;
+    toolName: string;
+    allowedActionId: string;
+    argsHash: string;
+    resultRef?: string;
+    eventPayload: Record<string, unknown>;
+    mutate: (article: ArticleArtifact) => void;
+  },
+): Promise<AuditedArticleMutationResult> {
+  const existingOperation = await container.stores.workflowOperationStore.getOperation(input.operationId);
+  if (existingOperation?.status === 'completed') {
+    const currentArticle = await container.stores.artifactStore.getArticle(input.article.id);
+    if (!currentArticle) throw new Error('Article not found after completed article mutation.');
+    return { ok: true, article: currentArticle };
+  }
+  if (existingOperation?.status === 'running') {
+    return { ok: false, statusCode: 409, error: `Workflow operation is already running: ${input.operationId}` };
+  }
+  const operationInput = {
+    operationId: input.operationId,
+    userId: input.userId,
+    articleId: input.article.id,
+    toolName: input.toolName,
+    allowedActionId: input.allowedActionId,
+    argsHash: input.argsHash,
+    articleRevisionBefore: input.baseRevision,
+  };
+  const runningOperation = existingOperation?.status === 'failed'
+    ? await container.stores.workflowOperationStore.updateOperation({ ...existingOperation, ...operationInput, status: 'running', error: undefined })
+    : await container.stores.workflowOperationStore.startOperation(operationInput);
+  try {
+    input.mutate(input.article);
+    const updated = await container.stores.artifactStore.updateArticleWithRevision({ article: input.article, baseRevision: input.baseRevision, operationId: input.operationId });
+    await container.stores.workflowOperationStore.updateOperation({ ...runningOperation, status: 'completed', error: undefined, articleRevisionAfter: updated.revision, resultRef: input.resultRef ?? updated.id });
+    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { ...input.eventPayload, operationId: input.operationId }, createdAt: nowIso() });
+    return { ok: true, article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated };
+  } catch (error) {
+    await container.stores.workflowOperationStore.updateOperation({ ...runningOperation, status: 'failed', error: error instanceof Error ? error.message : String(error) });
+    if (error instanceof ArticleRevisionConflictError) return { ok: false, statusCode: 409, error: error.message };
+    throw error;
+  }
 }
 
 function revisionOperationToolName(operation: RevisionOperation): string {
