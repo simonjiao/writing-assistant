@@ -97,6 +97,10 @@ export class MockLLMProvider implements LLMProvider {
     const lastUser = [...request.messages].reverse().find((message) => message.role === 'user')?.content ?? '';
     const system = request.messages.find((message) => message.role === 'system')?.content ?? '';
     const payload = safeJsonParse<Record<string, any>>(lastUser) ?? {};
+    if (request.jsonMode && system.includes('action selector')) {
+      const action = Array.isArray(payload.allowedActions) ? payload.allowedActions[0] : undefined;
+      return { content: JSON.stringify(action ? { intent: action.type, selectedActionId: action.id, rationale: action.reason ?? 'Mock selected first allowed action.', requiresHumanGate: Boolean(action.requiresHumanGate) } : { intent: 'complete', rationale: 'No allowed actions.', requiresHumanGate: false, stopReason: 'completed' }), raw: { provider: 'mock' } };
+    }
     if (request.jsonMode && system.includes('任务卡规划器')) {
       const rawRequirement = String(payload.rawRequirement ?? '测试写作任务');
       return { content: JSON.stringify(mockTaskCard(rawRequirement)), raw: { provider: 'mock' } };

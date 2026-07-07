@@ -18,6 +18,7 @@ import {
   newId,
   nowIso,
   OpenAICompatibleProvider,
+  PiAgentDecisionProvider,
   PiWorkflowRunner,
   PublishingEventTraceStore,
   PiAgentSessionStore,
@@ -87,7 +88,7 @@ export function createContainer(config: AppConfig): AppContainer {
   const runtime = new AgentRuntime({ llm, skillRegistry: skills, contextBuilder, eventTraceStore });
   const queue = config.workflowExecutionMode === 'async' ? createQueue(config) : undefined;
   const engine = new WorkflowEngine({ stateStore: stores.stateStore, eventTraceStore, runtime, queue, executionMode: config.workflowExecutionMode });
-  const piRunner = new PiWorkflowRunner({ stores, actionExecutor: new PiWorkflowActionExecutor({ stores, runtime }), maxTurns: 20 });
+  const piRunner = new PiWorkflowRunner({ stores, actionExecutor: new PiWorkflowActionExecutor({ stores, runtime }), decisionProvider: new PiAgentDecisionProvider(llm), maxTurns: 20 });
   registerWorkflows(engine, { artifactStore: stores.artifactStore, sessionStore: stores.sessionStore, eventTraceStore });
   const workerPool = queue && config.enableWorkers ? new WorkflowWorkerPool({ queue, stateStore: stores.stateStore, eventTraceStore, runnerFactory: () => engine.createRunner() }, { concurrency: config.runnerConcurrency, reserveTimeoutMs: 1000 }) : undefined;
   workerPool?.start();

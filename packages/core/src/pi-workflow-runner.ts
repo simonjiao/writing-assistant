@@ -10,6 +10,7 @@ import {
 import { newId, nowIso } from './utils';
 import { AllowedActionPlanner } from './allowed-actions';
 import { WorkflowActionExecutor } from './workflow-action-executor';
+import { PiAgentDecisionProvider } from './pi-agent-decision';
 
 export const WRITING_AUTOPILOT_POLICY: WorkflowPolicy = {
   id: 'writing-autopilot',
@@ -23,6 +24,7 @@ export interface PiWorkflowRunnerDeps {
   stores: ExternalStores;
   planner?: AllowedActionPlanner;
   actionExecutor?: WorkflowActionExecutor;
+  decisionProvider?: PiAgentDecisionProvider;
   maxTurns?: number;
 }
 
@@ -47,9 +49,12 @@ export class PiWorkflowRunner {
         pendingHumanGate: Boolean(pendingGate),
         requestedSectionId: typeof run.metadata.sectionId === 'string' ? run.metadata.sectionId : undefined,
       });
-      const decision = this.buildDecision(allowedActions, pendingGate);
+      const decisionResult = pendingGate || !this.deps.decisionProvider
+        ? { decision: this.buildDecision(allowedActions, pendingGate), messages: session.messages }
+        : await this.deps.decisionProvider.decide({ policy: this.policy, run, article, session, allowedActions });
+      const decision = decisionResult.decision;
       run = await this.persistDecisionState(run, session, decision, allowedActions);
-      await this.deps.stores.piAgentSessionStore.saveSession({ ...session, pendingHumanGateId: pendingGate?.id, baseArticleRevision: article?.revision });
+      await this.deps.stores.piAgentSessionStore.saveSession({ ...session, messages: decisionResult.messages, pendingHumanGateId: pendingGate?.id, baseArticleRevision: article?.revision });
       await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'agent.decision', payload: { userId: run.metadata.userId, decision, allowedActions }, createdAt: nowIso() });
       if (pendingGate) return this.wait(run, pendingGate.question);
       if (!allowedActions.length) return this.complete(run);

@@ -135,6 +135,7 @@ describe('api app', () => {
     const sessions = await container.stores.piAgentSessionStore.listSessions({ runId: body.run.id });
     expect(sessions).toHaveLength(1);
     expect(sessions[0].articleId).toBe(body.article.id);
+    expect(sessions[0].messages.length).toBeGreaterThan(0);
 
     const operations = await container.stores.workflowOperationStore.listOperations({ runId: body.run.id });
     expect(operations.map((operation) => operation.toolName)).toEqual(['ask_followup', 'create_task_card_draft']);
