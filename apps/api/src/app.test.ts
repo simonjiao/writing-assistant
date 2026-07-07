@@ -912,39 +912,7 @@ describe('api app', () => {
     await app.close();
   });
 
-  it('revises a task card through the article API', async () => {
-    const config = testConfig();
-    const container = createContainer(config);
-    const app = createApp(config, container);
-    const now = new Date().toISOString();
-    const taskCard: WritingTaskCard = {
-      id: 'task-1',
-      topic: '旧主题',
-      writingGoal: '写一篇分析文章。',
-      audience: '普通读者',
-      scope: { editions: [], chapters: [], characters: [], themes: ['旧主题'] },
-      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
-      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
-      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
-      interactionMode: { askBeforeWriting: true, localEditFirst: true },
-      status: 'draft',
-      createdAt: now,
-      updatedAt: now,
-    };
-    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'task-card-user', name: '任务卡工作台' });
-    const article = await container.stores.artifactStore.createArticle({ userId: 'task-card-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
-    const response = await app.inject({ method: 'POST', url: `/api/articles/${article.id}/task-card/revise`, payload: { instruction: '主题改为新主题，目标更偏论证。', userId: 'task-card-user' } });
-    expect(response.statusCode).toBe(200);
-    const body = response.json();
-    expect(body.article.title).toBe('新主题');
-    expect(body.article.taskCard.topic).toBe('新主题');
-    expect(body.article.taskCard.status).toBe('draft');
-    expect(body.changedFields).toContain('topic');
-    expect(body.article.versions[body.article.versions.length - 1].reason).toContain('修订任务卡');
-    await app.close();
-  });
-
-  it('clears outline and generated text when a task card changes', async () => {
+  it('clears outline and generated text when applying a task-card revision proposal', async () => {
     const config = testConfig();
     const container = createContainer(config);
     const app = createApp(config, container);
@@ -970,7 +938,16 @@ describe('api app', () => {
     article.citations = [{ id: 'cite-old', label: '旧引用', sourceRef: 'old-ref' }];
     article.themeTags = [{ id: 'tag-old', label: '旧主题', scope: 'article' }];
     await container.stores.artifactStore.updateArticle(article);
-    const response = await app.inject({ method: 'POST', url: `/api/articles/${article.id}/task-card/revise`, payload: { instruction: '主题改为新主题，目标更偏论证。', userId: 'consistency-user' } });
+    const proposal = await container.stores.revisionProposalStore.createProposal({
+      articleId: article.id,
+      userId: 'consistency-user',
+      contextKind: 'task-card',
+      summary: '修订任务卡',
+      message: '应用后会更新任务卡并清空下游内容。',
+      operations: [{ type: 'revise-task-card', instruction: '主题改为新主题，目标更偏论证。' }],
+      warnings: [],
+    });
+    const response = await app.inject({ method: 'POST', url: `/api/articles/${article.id}/dialogue/${proposal.id}/apply`, payload: { userId: 'consistency-user' } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.article.taskCard.topic).toBe('新主题');
@@ -979,6 +956,7 @@ describe('api app', () => {
     expect(body.article.citations).toHaveLength(0);
     expect(body.article.themeTags).toHaveLength(0);
     expect(body.article.versions[body.article.versions.length - 1].reason).toContain('清空下游内容');
+    expect(body.proposal.status).toBe('applied');
     await app.close();
   });
 
@@ -1069,49 +1047,6 @@ describe('api app', () => {
     expect(resolvedBody.article.outline.map((item: { id: string }) => item.id)).not.toContain('old-sec');
     expect(resolvedBody.article.outline[0].goal).toContain('更新后的主题');
     expect(resolvedBody.article.blocks).toHaveLength(0);
-    await app.close();
-  });
-
-  it('revises a single outline section through the outline revision API', async () => {
-    const config = testConfig();
-    const container = createContainer(config);
-    const app = createApp(config, container);
-    const now = new Date().toISOString();
-    const taskCard: WritingTaskCard = {
-      id: 'task-outline-revise',
-      topic: '大纲局部修订',
-      writingGoal: '测试只修订一个大纲项。',
-      audience: '普通读者',
-      scope: { editions: [], chapters: [], characters: [], themes: ['大纲局部修订'] },
-      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
-      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
-      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
-      interactionMode: { askBeforeWriting: true, localEditFirst: true },
-      status: 'confirmed',
-      createdAt: now,
-      updatedAt: now,
-    };
-    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'outline-revise-user', name: '大纲修订工作台' });
-    const article = await container.stores.artifactStore.createArticle({ userId: 'outline-revise-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
-    article.outline = [
-      { id: 'sec-revise-1', title: '旧标题', goal: '旧目标。', order: 1, expectedBlocks: 2, sourceHints: ['旧来源'], themeTags: ['旧标签'], status: 'confirmed' },
-      { id: 'sec-revise-2', title: '保留标题', goal: '保留目标。', order: 2, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' },
-    ];
-    await container.stores.artifactStore.updateArticle(article);
-    const response = await app.inject({
-      method: 'POST',
-      url: `/api/articles/${article.id}/outline/sec-revise-1/revise`,
-      payload: { userId: 'outline-revise-user', instruction: '标题改成新标题，目标不要说成完全反对。' },
-    });
-    expect(response.statusCode).toBe(200);
-    const body = response.json();
-    expect(body.outlineItem.id).toBe('sec-revise-1');
-    expect(body.outlineItem.title).toBe('新标题');
-    expect(body.outlineItem.order).toBe(1);
-    expect(body.outlineItem.status).toBe('confirmed');
-    expect(body.article.taskCard.topic).toBe('大纲局部修订');
-    expect(body.article.outline.find((item: { id: string }) => item.id === 'sec-revise-2')?.title).toBe('保留标题');
-    expect(body.article.versions[body.article.versions.length - 1].reason).toContain('修订大纲章节');
     await app.close();
   });
 

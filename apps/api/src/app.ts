@@ -185,32 +185,6 @@ export function createApp(config: AppConfig, container: AppContainer) {
     await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'article-deleted', userId }, createdAt: nowIso() });
     return articleSummary(deleted);
   });
-  app.post('/api/articles/:articleId/task-card/revise', async (request, reply) => {
-    const { articleId } = request.params as { articleId: string };
-    const body = request.body as { instruction?: string; userId?: string; sessionId?: string };
-    const instruction = body.instruction?.trim();
-    if (!instruction) return reply.code(400).send({ error: 'Task card revision instruction is required.' });
-    const article = await container.stores.artifactStore.getArticle(articleId);
-    if (!article) return reply.code(404).send({ error: 'Article not found' });
-    const userId = readRequestUserId(request, body.userId);
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
-    if (!(await canAccessArticle(container, userId, article))) return reply.code(403).send({ error: 'Workspace access required.' });
-    if (!article.taskCard) return reply.code(400).send({ error: 'Article has no task card to revise.' });
-    const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; currentTaskCard: WritingTaskCard; skipKnowledge: boolean }, TaskCardReviserOutput>(
-      'task-card-reviser',
-      { articleId: article.id, instruction, currentTaskCard: article.taskCard, skipKnowledge: true },
-      { userId, sessionId: body.sessionId, articleId: article.id },
-    );
-    const invalidation = clearDownstreamForTaskCardChange(article);
-    article.taskCard = normalizeTaskCardPolicies(result.taskCard, instruction).taskCard;
-    article.title = result.taskCard.topic;
-    const updated = await container.stores.artifactStore.updateArticle(article);
-    const reason = invalidation.outlineCount || invalidation.blockCount ? `修订任务卡并清空下游内容：${result.summary.slice(0, 80)}` : `修订任务卡：${result.summary.slice(0, 80)}`;
-    await container.stores.artifactStore.commitVersion(article.id, reason, 'user');
-    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'task-card-revised', changedFields: result.changedFields, invalidated: invalidation, userId }, createdAt: nowIso() });
-    const updatedArticle = await container.stores.artifactStore.getArticle(updated.id);
-    return { article: updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle, summary: result.summary, changedFields: result.changedFields };
-  });
   app.patch('/api/articles/:articleId/outline/:sectionId', async (request, reply) => {
     const { articleId, sectionId } = request.params as { articleId: string; sectionId: string };
     const body = request.body as { title?: string; goal?: string; userId?: string };
@@ -231,33 +205,6 @@ export function createApp(config: AppConfig, container: AppContainer) {
     await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, sectionId, reason: 'outline-section-edited', invalidated: invalidation, userId }, createdAt: nowIso() });
     const updatedArticle = await container.stores.artifactStore.getArticle(updated.id);
     return updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle;
-  });
-  app.post('/api/articles/:articleId/outline/:sectionId/revise', async (request, reply) => {
-    const { articleId, sectionId } = request.params as { articleId: string; sectionId: string };
-    const body = request.body as { instruction?: string; userId?: string; sessionId?: string };
-    const instruction = body.instruction?.trim();
-    if (!instruction) return reply.code(400).send({ error: 'Outline revision instruction is required.' });
-    const article = await container.stores.artifactStore.getArticle(articleId);
-    if (!article) return reply.code(404).send({ error: 'Article not found' });
-    const userId = readRequestUserId(request, body.userId);
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
-    if (!(await canAccessArticle(container, userId, article))) return reply.code(403).send({ error: 'Workspace access required.' });
-    const existing = article.outline.find((item) => item.id === sectionId);
-    if (!existing) return reply.code(404).send({ error: 'Outline section not found' });
-    const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; currentOutlineItem: typeof existing; taskCard?: WritingTaskCard; articleOutline: typeof article.outline }, OutlineItemReviserOutput>(
-      'outline-item-reviser',
-      { articleId: article.id, instruction, currentOutlineItem: existing, taskCard: article.taskCard, articleOutline: article.outline },
-      { userId, sessionId: body.sessionId, articleId: article.id },
-    );
-    const invalidation = clearBlocksForOutlineSections(article, [sectionId]);
-    const revisedItem = { ...result.outlineItem, status: result.outlineItem.status === 'written' ? 'confirmed' as const : result.outlineItem.status };
-    article.outline = article.outline.map((item) => item.id === sectionId ? revisedItem : item);
-    const updated = await container.stores.artifactStore.updateArticle(article);
-    const reason = invalidation.blockCount ? `修订大纲章节并清空本节正文：${result.summary.slice(0, 80)}` : `修订大纲章节：${result.summary.slice(0, 80)}`;
-    await container.stores.artifactStore.commitVersion(article.id, reason, 'user');
-    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, sectionId, reason: 'outline-section-revised', changedFields: result.changedFields, invalidated: invalidation, userId }, createdAt: nowIso() });
-    const updatedArticle = await container.stores.artifactStore.getArticle(updated.id);
-    return { article: updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle, outlineItem: revisedItem, summary: result.summary, changedFields: result.changedFields };
   });
   app.post('/api/articles/:articleId/dialogue', async (request, reply) => {
     const articleId = ((request.params as { articleId?: string }).articleId ?? '').trim();

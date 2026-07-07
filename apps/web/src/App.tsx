@@ -743,37 +743,6 @@ export function App() {
       setBusy(false);
     }
   }
-  async function reviseTaskCard(instruction: string) {
-    if (!article?.taskCard || !instruction.trim()) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      const response = await api.reviseTaskCard(article.id, { instruction, userId, sessionId });
-      setArticle(response.article);
-      setCurrentTaskMessage('');
-      if (response.article.taskCard?.status === 'confirmed') setLastRun(undefined);
-      await refreshArticleSummaries();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function reviseOutlineItem(instruction: string) {
-    if (!visibleArticle || !selectedOutline || !instruction.trim()) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      const response = await api.reviseOutlineItem(visibleArticle.id, selectedOutline.id, { instruction, userId, sessionId });
-      setArticle(response.article);
-      setCurrentTaskMessage('');
-      await refreshArticleSummaries(response.article.workspaceId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
   async function confirmTaskCard() {
     if (!visibleArticle?.taskCard) return;
     const articleId = visibleArticle.id;
