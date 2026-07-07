@@ -592,22 +592,6 @@ describe('api app', () => {
     await app.close();
   });
 
-  it('starts writing by accepting the current outline through the article API', async () => {
-    const config = testConfig();
-    const container = createContainer(config);
-    const app = createApp(config, container);
-    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'outline-confirm-user', name: '开始写作工作台' });
-    const article = await container.stores.artifactStore.createArticle({ userId: 'outline-confirm-user', workspaceId: workspace.id, title: '待开始写作' });
-    article.outline = [{ id: 'sec-1', title: '草稿标题', goal: '草稿目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'draft' }];
-    await container.stores.artifactStore.updateArticle(article);
-    const response = await app.inject({ method: 'POST', url: `/api/articles/${article.id}/writing/start`, payload: { userId: 'outline-confirm-user' } });
-    expect(response.statusCode).toBe(200);
-    const body = response.json();
-    expect(body.outline[0].status).toBe('confirmed');
-    expect(body.versions[body.versions.length - 1].reason).toBe('开始写作');
-    await app.close();
-  });
-
   it('clears generated section text when an outline item is edited', async () => {
     const config = testConfig();
     const container = createContainer(config);

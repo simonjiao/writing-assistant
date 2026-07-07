@@ -438,25 +438,6 @@ export function createApp(config: AppConfig, container: AppContainer) {
     await appendDialogueMessage(container, { articleId, userId, contextKind: proposal.contextKind, role: 'assistant', content: '已取消这次修改提案。', proposalId: proposal.id });
     return dismissed;
   });
-  app.post('/api/articles/:articleId/writing/start', async (request, reply) => {
-    const { articleId } = request.params as { articleId: string };
-    const body = (request.body ?? {}) as { userId?: string; sessionId?: string };
-    const userId = readRequestUserId(request, body.userId);
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
-    const access = await requireArticleAccess(container, userId, articleId);
-    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
-    const article = access.article;
-    if (!article.outline.length) return reply.code(400).send({ error: 'Article has no outline to start writing.' });
-    if (article.outline.some((item) => item.status !== 'confirmed')) {
-      article.outline = article.outline.map((item) => ({ ...item, status: 'confirmed' as const }));
-      await container.stores.artifactStore.updateArticle(article);
-      await container.stores.artifactStore.commitVersion(article.id, '开始写作', 'user');
-      await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'writing-started', userId }, createdAt: nowIso() });
-    }
-    if (body.sessionId) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: article.id, currentWorkspaceId: article.workspaceId });
-    const updatedArticle = await container.stores.artifactStore.getArticle(article.id);
-    return updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle;
-  });
   app.post('/api/knowledge/search', async (request) => {
     const body = request.body as { query: string } & KnowledgeSearchOptions;
     return container.stores.knowledgeStore.search(body.query, {
