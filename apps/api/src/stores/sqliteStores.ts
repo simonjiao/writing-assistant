@@ -32,7 +32,6 @@ import {
   Session,
   SessionStore,
   StateStore,
-  TextPatch,
   UserWritingProfile,
   WorkflowOperation,
   WorkflowOperationStatus,
@@ -92,9 +91,7 @@ export class SqliteArtifactStore implements ArtifactStore {
   async listArticles(workspaceId: string, options?: { includeDeleted?: boolean }) { return (await this.db.list()).filter((article) => article.workspaceId === workspaceId && (options?.includeDeleted || !article.deletedAt)).map(normalizeArticle); }
   updateArticle(article: ArticleArtifact) { const normalized = normalizeArticle(article); return this.db.upsert({ ...normalized, revision: normalized.revision + 1, updatedAt: nowIso() }); }
   async updateArticleWithRevision(write: ArticleRevisionWrite) { const current = await this.getArticle(write.article.id); if (!current) throw new Error(`Article not found: ${write.article.id}`); assertArticleBaseRevision(current, write.baseRevision, write.operationId); return this.db.upsert({ ...normalizeArticle(write.article), revision: current.revision + 1, updatedAt: nowIso() }); }
-  async deleteArticle(articleId: string) { const article = await this.db.get(articleId); if (!article) throw new Error(`Article not found: ${articleId}`); const normalized = normalizeArticle(article); const deleted = { ...normalized, revision: normalized.revision + 1, deletedAt: normalized.deletedAt ?? nowIso(), updatedAt: nowIso() }; await this.db.upsert(deleted); return deleted; }
   async commitVersion(articleId: string, reason: string, author: ArticleVersion['author']) { const article = await this.getArticle(articleId); if (!article) throw new Error(`Article not found: ${articleId}`); const version: ArticleVersion = { id: newId('ver'), reason, author, snapshot: { taskCard: article.taskCard, outline: article.outline, blocks: article.blocks, citations: article.citations, themeTags: article.themeTags, comments: article.comments ?? [] }, createdAt: nowIso() }; article.versions = [...article.versions, version]; article.updatedAt = nowIso(); await this.db.upsert(article); return version; }
-  async applyPatch(patch: TextPatch) { const article = await this.getArticle(patch.articleId); if (!article) throw new Error(`Article not found: ${patch.articleId}`); article.blocks = article.blocks.map((block) => block.id === patch.blockId ? { ...block, text: patch.after, updatedAt: nowIso(), status: 'draft' } : block); await this.updateArticle(article); await this.commitVersion(article.id, `应用局部修改：${patch.instruction}`, 'agent'); return (await this.getArticle(article.id)) as ArticleArtifact; }
   close() { this.db.close(); }
 }
 

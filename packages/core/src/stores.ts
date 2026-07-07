@@ -15,7 +15,6 @@ import {
   ReviewArtifact,
   RevisionProposal,
   Session,
-  TextPatch,
   UserWritingProfile,
   WritingWorkspace,
   WorkflowOperation,
@@ -48,9 +47,7 @@ export interface ArtifactStore {
   listArticles(workspaceId: string, options?: { includeDeleted?: boolean }): Promise<ArticleArtifact[]>;
   updateArticle(article: ArticleArtifact): Promise<ArticleArtifact>;
   updateArticleWithRevision(write: ArticleRevisionWrite): Promise<ArticleArtifact>;
-  deleteArticle(articleId: string): Promise<ArticleArtifact>;
   commitVersion(articleId: string, reason: string, author: ArticleVersion['author']): Promise<ArticleVersion>;
-  applyPatch(patch: TextPatch): Promise<ArticleArtifact>;
 }
 
 export interface PiAgentSessionStore {
