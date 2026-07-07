@@ -574,7 +574,7 @@ export function App() {
     setBusy(true);
     setError(undefined);
     try {
-      const updated = await api.updateOutlineItem(visibleArticle.id, editingOutline.id, { title: editingOutline.title, goal: editingOutline.goal, userId });
+      const updated = await api.updateOutlineItem(visibleArticle.id, editingOutline.id, { title: editingOutline.title, goal: editingOutline.goal, baseRevision: visibleArticle.revision, userId });
       setArticle(updated);
       setEditingOutline(undefined);
       await refreshArticleSummaries();

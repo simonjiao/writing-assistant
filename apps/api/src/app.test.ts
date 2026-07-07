@@ -900,13 +900,20 @@ describe('api app', () => {
     const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'outline-user', name: '大纲工作台' });
     const article = await container.stores.artifactStore.createArticle({ userId: 'outline-user', workspaceId: workspace.id, title: '测试文章' });
     article.outline = [{ id: 'sec-1', title: '旧标题', goal: '旧目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }];
-    await container.stores.artifactStore.updateArticle(article);
-    const response = await app.inject({ method: 'PATCH', url: `/api/articles/${article.id}/outline/sec-1`, payload: { title: '新标题', goal: '新目标', userId: 'outline-user' } });
+    const prepared = await container.stores.artifactStore.updateArticle(article);
+    const response = await app.inject({ method: 'PATCH', url: `/api/articles/${article.id}/outline/sec-1`, payload: { title: '新标题', goal: '新目标', userId: 'outline-user', baseRevision: prepared.revision } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.outline[0].title).toBe('新标题');
     expect(body.outline[0].goal).toBe('新目标');
     expect(body.versions[body.versions.length - 1].reason).toBe('编辑大纲章节：新标题');
+    const operations = await container.stores.workflowOperationStore.listOperations({ articleId: article.id, userId: 'outline-user' });
+    expect(operations).toEqual(expect.arrayContaining([expect.objectContaining({
+      toolName: 'manual_edit_outline_item',
+      status: 'completed',
+      articleRevisionBefore: prepared.revision,
+      articleRevisionAfter: body.revision,
+    })]));
     await app.close();
   });
 
@@ -925,8 +932,8 @@ describe('api app', () => {
       { id: 'block-1', type: 'paragraph', sectionId: 'sec-1', title: '旧正文', text: '旧大纲项下的正文。', sourceRefs: [], themeTags: [], status: 'draft', createdAt: now, updatedAt: now },
       { id: 'block-2', type: 'paragraph', sectionId: 'sec-2', title: '保留正文', text: '另一节正文。', sourceRefs: [], themeTags: [], status: 'draft', createdAt: now, updatedAt: now },
     ];
-    await container.stores.artifactStore.updateArticle(article);
-    const response = await app.inject({ method: 'PATCH', url: `/api/articles/${article.id}/outline/sec-1`, payload: { title: '新标题', goal: '新目标', userId: 'outline-consistency-user' } });
+    const prepared = await container.stores.artifactStore.updateArticle(article);
+    const response = await app.inject({ method: 'PATCH', url: `/api/articles/${article.id}/outline/sec-1`, payload: { title: '新标题', goal: '新目标', userId: 'outline-consistency-user', baseRevision: prepared.revision } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.outline.find((item: { id: string }) => item.id === 'sec-1')?.status).toBe('confirmed');

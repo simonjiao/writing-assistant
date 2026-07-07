@@ -1,7 +1,7 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply, FastifyRequest } from 'fastify';
-import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, hashOperationArgs, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, ArticleRevisionConflictError, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, hashOperationArgs, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
 import { normalizeTaskCardPolicies } from '@wa/skills';
 import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, PatchEditorInput, PatchEditorOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
@@ -187,10 +187,12 @@ export function createApp(config: AppConfig, container: AppContainer) {
   });
   app.patch('/api/articles/:articleId/outline/:sectionId', async (request, reply) => {
     const { articleId, sectionId } = request.params as { articleId: string; sectionId: string };
-    const body = request.body as { title?: string; goal?: string; userId?: string };
+    const body = request.body as { title?: string; goal?: string; userId?: string; baseRevision?: number };
     const title = body.title?.trim();
     const goal = body.goal?.trim();
+    const baseRevision = typeof body.baseRevision === 'number' && Number.isInteger(body.baseRevision) ? body.baseRevision : undefined;
     if (!title || !goal) return reply.code(400).send({ error: 'Outline title and goal are required.' });
+    if (baseRevision === undefined) return reply.code(400).send({ error: 'baseRevision is required.' });
     const article = await container.stores.artifactStore.getArticle(articleId);
     if (!article) return reply.code(404).send({ error: 'Article not found' });
     const userId = readRequestUserId(request, body.userId);
@@ -198,11 +200,39 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (!(await canAccessArticle(container, userId, article))) return reply.code(403).send({ error: 'Workspace access required.' });
     const existing = article.outline.find((item) => item.id === sectionId);
     if (!existing) return reply.code(404).send({ error: 'Outline section not found' });
-    const invalidation = clearBlocksForOutlineSections(article, [sectionId]);
-    article.outline = article.outline.map((item) => item.id === sectionId ? { ...item, title, goal, status: item.status === 'written' ? 'confirmed' : item.status } : item);
-    const updated = await container.stores.artifactStore.updateArticle(article);
-    await container.stores.artifactStore.commitVersion(article.id, invalidation.blockCount ? `编辑大纲章节并清空本节正文：${title}` : `编辑大纲章节：${title}`, 'user');
-    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, sectionId, reason: 'outline-section-edited', invalidated: invalidation, userId }, createdAt: nowIso() });
+    const operationId = manualOutlineEditOperationId(article.id, sectionId, baseRevision, title, goal);
+    const existingOperation = await container.stores.workflowOperationStore.getOperation(operationId);
+    if (existingOperation?.status === 'completed') {
+      const currentArticle = await container.stores.artifactStore.getArticle(article.id);
+      return currentArticle ? withWritingStandardSummary(currentArticle) : currentArticle;
+    }
+    if (existingOperation?.status === 'running') return reply.code(409).send({ error: `Workflow operation is already running: ${operationId}` });
+    const operationInput = {
+      operationId,
+      userId,
+      articleId: article.id,
+      toolName: 'manual_edit_outline_item',
+      allowedActionId: `manual-outline-edit:${article.id}:${sectionId}`,
+      argsHash: hashOperationArgs({ articleId: article.id, sectionId, title, goal, baseRevision }),
+      articleRevisionBefore: baseRevision,
+    };
+    const runningOperation = existingOperation?.status === 'failed'
+      ? await container.stores.workflowOperationStore.updateOperation({ ...existingOperation, ...operationInput, status: 'running', error: undefined })
+      : await container.stores.workflowOperationStore.startOperation(operationInput);
+    let updated: ArticleArtifact;
+    let invalidation: ReturnType<typeof clearBlocksForOutlineSections>;
+    try {
+      invalidation = clearBlocksForOutlineSections(article, [sectionId]);
+      article.outline = article.outline.map((item) => item.id === sectionId ? { ...item, title, goal, status: item.status === 'written' ? 'confirmed' : item.status } : item);
+      updated = await container.stores.artifactStore.updateArticleWithRevision({ article, baseRevision, operationId });
+      await container.stores.artifactStore.commitVersion(article.id, invalidation.blockCount ? `编辑大纲章节并清空本节正文：${title}` : `编辑大纲章节：${title}`, 'user');
+      await container.stores.workflowOperationStore.updateOperation({ ...runningOperation, status: 'completed', error: undefined, articleRevisionAfter: updated.revision, resultRef: updated.id });
+      await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, sectionId, reason: 'outline-section-edited', invalidated: invalidation, userId, operationId }, createdAt: nowIso() });
+    } catch (error) {
+      await container.stores.workflowOperationStore.updateOperation({ ...runningOperation, status: 'failed', error: error instanceof Error ? error.message : String(error) });
+      if (error instanceof ArticleRevisionConflictError) return reply.code(409).send({ error: error.message });
+      throw error;
+    }
     const updatedArticle = await container.stores.artifactStore.getArticle(updated.id);
     return updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle;
   });
@@ -1016,6 +1046,10 @@ async function applyRevisionProposal(container: AppContainer, proposalId: string
 
 function revisionProposalOperationId(proposalId: string, operationIndex: number): string {
   return `op_revision_proposal_${proposalId}_${operationIndex + 1}`;
+}
+
+function manualOutlineEditOperationId(articleId: string, sectionId: string, baseRevision: number, title: string, goal: string): string {
+  return `op_manual_outline_${hashOperationArgs({ articleId, sectionId, baseRevision, title, goal }).slice(0, 24)}`;
 }
 
 function revisionOperationToolName(operation: RevisionOperation): string {
