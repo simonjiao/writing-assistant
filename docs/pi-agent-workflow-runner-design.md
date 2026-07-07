@@ -2,9 +2,9 @@
 
 ## 状态
 
-实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、`create_revision_proposal`、proposal apply/dismiss 回流、统稿建议可应用提案化、开发期多用户工作台隔离、统一 `/api/workflows/writing/start` 和旧节点式 runner/queue 删除。
+实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、`create_revision_proposal`、proposal apply/dismiss 回流、workflow message 刷新 pending proposal、统稿建议可应用提案化、开发期多用户工作台隔离、统一 `/api/workflows/writing/start` 和旧节点式 runner/queue 删除。
 
-仍需补齐的重点：workflow message 到复杂修改提案的更多验收场景，以及更完整的端到端自动化覆盖。
+仍需补齐的重点：workflow message 到复杂修改提案的端到端 UI 验收，以及更完整的自动化覆盖。
 
 本文记录一次破坏式重构方案：以 `@earendil-works/pi-agent-core` 作为 workflow runner 基座，让 agent 在受控边界内自主选择下一步，并统一工具调用。重构后不保留旧节点式 workflow 双轨兼容。
 

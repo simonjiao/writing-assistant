@@ -535,11 +535,14 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (run.status === 'completed' || run.status === 'cancelled') return reply.code(400).send({ error: `Run is already ${run.status}.` });
     const pendingGates = await container.stores.humanGateStore.listGates({ runId, userId, statuses: ['pending'] });
     if (pendingGates.length) return reply.code(409).send({ error: 'Resolve pending HumanGate before sending a workflow message.', gateId: pendingGates[0].id });
+    await appendWorkflowUserMessage(container, run, message);
+    await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'pi.session.updated', payload: { userId, reason: 'workflow-user-message' }, createdAt: nowIso() });
+    const pendingProposalRun = await handleWorkflowPendingProposalMessage(container, run, message, userId);
+    if (pendingProposalRun) return pendingProposalRun;
     const existingInput = readObject(run.input) ?? {};
     const targetStage = normalizeWorkflowTargetStage(body.targetStage);
     const sectionId = body.sectionId?.trim() || (typeof run.metadata.sectionId === 'string' ? run.metadata.sectionId : undefined);
     const updatedInput = { ...existingInput, message, targetStage, sectionId, replaceExisting: body.replaceExisting === true };
-    await appendWorkflowUserMessage(container, run, message);
     await container.stores.stateStore.updateRun(runId, {
       status: 'running',
       input: updatedInput,
@@ -548,7 +551,6 @@ export function createApp(config: AppConfig, container: AppContainer) {
       state: { ...run.state, lastUserMessage: message, pendingHumanGateId: undefined },
       updatedAt: nowIso(),
     });
-    await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'pi.session.updated', payload: { userId, reason: 'workflow-user-message' }, createdAt: nowIso() });
     await container.piRunner.runUntilBlocked(runId);
     return enrichRun(container, runId);
   });
@@ -791,6 +793,83 @@ function proposalForDialogue(proposal: RevisionProposal): DialogueCoordinatorInp
     operations: proposal.operations,
     warnings: proposal.warnings,
   };
+}
+
+async function handleWorkflowPendingProposalMessage(container: AppContainer, run: WorkflowRun, message: string, userId: string): Promise<Awaited<ReturnType<typeof enrichRun>> | undefined> {
+  const pendingProposalId = typeof run.state.pendingRevisionProposalId === 'string' ? run.state.pendingRevisionProposalId : undefined;
+  if (!pendingProposalId) return undefined;
+  const proposal = await container.stores.revisionProposalStore.getProposal(pendingProposalId);
+  if (!proposal || proposal.runId !== run.id) throw new Error('Pending workflow revision proposal not found.');
+  if (proposal.userId !== userId || run.metadata.userId !== userId) throw new Error('Revision proposal belongs to another user.');
+  if (proposal.status !== 'pending') throw new Error(`Revision proposal is already ${proposal.status}.`);
+
+  const route = routeDialogueMessage(message, proposal);
+  if (route === 'apply') {
+    await applyRevisionProposal(container, proposal.id, userId, typeof run.metadata.sessionId === 'string' ? run.metadata.sessionId : undefined);
+    return enrichRun(container, run.id);
+  }
+  if (route === 'dismiss') {
+    const { runPayload } = await dismissRevisionProposal(container, proposal, userId);
+    return runPayload ?? enrichRun(container, run.id);
+  }
+  if (route !== 'propose' && !(route === 'discuss' && isModificationIntent(message))) {
+    return enrichRun(container, run.id);
+  }
+
+  const access = await requireArticleAccess(container, userId, proposal.articleId);
+  if (!access.ok) throw new Error(access.error);
+  const context = resolveDialogueContext(access.article, dialogueContextRequestForProposal(proposal));
+  if (!context.ok) throw new Error(context.error);
+  const now = nowIso();
+  const existingConversation = await listDialogueMessages(container, access.article.id, userId, 24);
+  const conversation = buildCompactDialogueConversation([
+    ...existingConversation,
+    { id: newId('dlg'), articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'user', content: message, proposalId: proposal.id, createdAt: now },
+  ]);
+  const conversationBrief = await getOrCreateDialogueBrief(container, access.article.id, userId);
+  const result = await container.runtime.invokeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
+    'dialogue-coordinator',
+    {
+      articleId: access.article.id,
+      message,
+      skipKnowledge: true,
+      conversation,
+      conversationBrief: compactDialogueBriefForPrompt(conversationBrief),
+      pendingProposal: proposalForDialogue(proposal),
+      context: context.value.context,
+      taskCard: access.article.taskCard,
+      outline: access.article.outline,
+      selectedOutlineItem: context.value.selectedOutlineItem,
+      selectedBlock: context.value.selectedBlock,
+    },
+    { userId, sessionId: typeof run.metadata.sessionId === 'string' ? run.metadata.sessionId : undefined, runId: run.id, articleId: access.article.id },
+  );
+  if (result.mode !== 'proposal') {
+    throw new Error(`Workflow proposal refresh did not return a proposal: ${result.mode}`);
+  }
+  await container.stores.revisionProposalStore.updateProposal({ ...proposal, status: 'dismissed' });
+  const nextProposal = await container.stores.revisionProposalStore.createProposal({
+    articleId: access.article.id,
+    userId,
+    runId: run.id,
+    authorUserId: userId,
+    baseRevision: access.article.revision,
+    contextKind: context.value.context.kind,
+    summary: result.summary ?? result.message,
+    message: result.message,
+    operations: result.operations,
+    warnings: result.warnings,
+  });
+  await syncWorkflowRunToRefreshedProposal(container, proposal, nextProposal);
+  return enrichRun(container, run.id);
+}
+
+function dialogueContextRequestForProposal(proposal: RevisionProposal): DialogueContextRequest {
+  const blockOperation = proposal.operations.find((operation): operation is Extract<RevisionOperation, { type: 'patch-block' }> => operation.type === 'patch-block');
+  const outlineItemOperation = proposal.operations.find((operation): operation is Extract<RevisionOperation, { type: 'revise-outline-item' }> => operation.type === 'revise-outline-item');
+  if (proposal.contextKind === 'block') return { kind: 'block', blockId: blockOperation?.blockId };
+  if (proposal.contextKind === 'outline-item') return { kind: 'outline-item', outlineItemId: outlineItemOperation?.outlineItemId };
+  return { kind: proposal.contextKind };
 }
 
 function isApplyConfirmation(message: string): boolean {

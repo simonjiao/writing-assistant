@@ -268,9 +268,25 @@ describe('api app', () => {
     expect(operations.map((operation) => operation.toolName).sort()).toEqual(['create_revision_proposal', 'review_task_card_outline_consistency']);
     expect(operations.some((operation) => operation.toolName === 'write_next_section' || operation.toolName === 'write_section')).toBe(false);
 
+    const refreshed = await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${body.run.id}/message`,
+      payload: { userId: 'consistency-block-user', message: '必须只依据前80回，不要沿用后40回。', targetStage: 'article' },
+    });
+
+    expect(refreshed.statusCode).toBe(200);
+    const refreshedBody = refreshed.json();
+    expect(refreshedBody.run.status).toBe('waiting');
+    expect(refreshedBody.run.waitingFor.nodeId).toBe('revision-proposal');
+    expect(refreshedBody.revisionProposals).toHaveLength(1);
+    expect(refreshedBody.revisionProposals[0].id).not.toBe(proposals[0].id);
+    expect(refreshedBody.revisionProposals[0].operations[0].instruction).toContain('必须只依据前80回');
+    expect((await container.stores.revisionProposalStore.getProposal(proposals[0].id))?.status).toBe('dismissed');
+    expect((await container.stores.stateStore.getRun(body.run.id))?.state.pendingRevisionProposalId).toBe(refreshedBody.revisionProposals[0].id);
+
     const dismissed = await app.inject({
       method: 'POST',
-      url: `/api/articles/${article.id}/dialogue/${proposals[0].id}/dismiss`,
+      url: `/api/articles/${article.id}/dialogue/${refreshedBody.revisionProposals[0].id}/dismiss`,
       payload: { userId: 'consistency-block-user' },
     });
 
