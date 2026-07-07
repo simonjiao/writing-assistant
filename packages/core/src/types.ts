@@ -130,6 +130,7 @@ export interface ArticleArtifact {
   id: string;
   userId: string;
   workspaceId: string;
+  revision: number;
   title: string;
   taskCard?: WritingTaskCard;
   outline: OutlineItem[];
@@ -168,6 +169,7 @@ export interface TextPatch {
 }
 
 export type DialogueContextKind = 'task-card' | 'outline' | 'outline-item' | 'block';
+export type PiAgentSessionContextKind = DialogueContextKind | 'workflow' | 'article-review';
 
 export type RevisionOperation =
   | { type: 'revise-task-card'; instruction: string }
@@ -179,6 +181,8 @@ export interface RevisionProposal {
   id: string;
   articleId: string;
   userId: string;
+  authorUserId?: string;
+  baseRevision?: number;
   contextKind: DialogueContextKind;
   summary: string;
   message: string;
@@ -287,6 +291,131 @@ export interface KnowledgeItem {
   createdAt: string;
 }
 
+export interface PiAgentSession {
+  id: string;
+  runId?: string;
+  userId: string;
+  workspaceId?: string;
+  articleId?: string;
+  contextKind: PiAgentSessionContextKind;
+  targetId?: string;
+  messages: JsonValue[];
+  compactSummary?: string;
+  toolTraceSummary?: string;
+  pendingHumanGateId?: string;
+  baseArticleRevision?: number;
+  lockVersion: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type HumanGateTargetKind = 'task-card' | 'outline' | 'outline-item' | 'block' | 'article';
+export type HumanGateStatus = 'pending' | 'accepted' | 'rejected' | 'superseded';
+
+export interface HumanGateOption {
+  id: string;
+  label: string;
+  payload?: JsonValue;
+}
+
+export interface HumanGate {
+  id: string;
+  runId: string;
+  userId: string;
+  articleId?: string;
+  actionType: string;
+  targetKind: HumanGateTargetKind;
+  targetId?: string;
+  proposalId?: string;
+  question: string;
+  options: HumanGateOption[];
+  baseRevision?: number;
+  status: HumanGateStatus;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string;
+  resolvedByUserId?: string;
+}
+
+export type WorkflowOperationStatus = 'running' | 'completed' | 'failed';
+
+export interface WorkflowOperation {
+  operationId: string;
+  runId: string;
+  userId: string;
+  articleId?: string;
+  toolName: string;
+  allowedActionId: string;
+  argsHash: string;
+  status: WorkflowOperationStatus;
+  resultRef?: string;
+  error?: string;
+  articleRevisionBefore?: number;
+  articleRevisionAfter?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ReviewArtifactType = 'consistency-review' | 'polish-report';
+export type ReviewFindingSeverity = 'info' | 'warning' | 'blocking';
+
+export interface ReviewFinding {
+  severity: ReviewFindingSeverity;
+  targetKind: string;
+  targetId?: string;
+  message: string;
+}
+
+export interface ReviewSuggestion {
+  id: string;
+  actionType: string;
+  targetKind: string;
+  targetId?: string;
+  summary: string;
+}
+
+export interface ReviewArtifact {
+  id: string;
+  articleId: string;
+  runId: string;
+  type: ReviewArtifactType;
+  baseRevision: number;
+  findings: ReviewFinding[];
+  suggestions: ReviewSuggestion[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AllowedActionType =
+  | 'create_task_card_draft'
+  | 'ask_followup'
+  | 'plan_outline'
+  | 'review_task_card_outline_consistency'
+  | 'write_next_section'
+  | 'write_section'
+  | 'generate_polish_report'
+  | 'create_revision_proposal'
+  | 'request_human_gate';
+
+export interface AllowedAction {
+  id: string;
+  operationId: string;
+  type: AllowedActionType;
+  articleId?: string;
+  sectionId?: string;
+  baseRevision?: number;
+  requiresHumanGate: boolean;
+  reason: string;
+}
+
+export interface AgentDecision {
+  intent: string;
+  selectedActionId?: string;
+  rationale: string;
+  requiresHumanGate: boolean;
+  stopReason?: 'completed' | 'waiting' | 'blocked' | 'failed';
+}
+
 export type WorkflowStatus = 'idle' | 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled';
 export type WorkflowRunHistoryStatus = 'completed' | 'waiting' | 'failed';
 
@@ -321,12 +450,24 @@ export type AgentEventType =
   | 'workflow.completed'
   | 'workflow.failed'
   | 'workflow.waiting'
+  | 'workflow.operation.started'
+  | 'workflow.operation.completed'
+  | 'workflow.operation.failed'
   | 'node.started'
   | 'node.completed'
   | 'node.failed'
   | 'skill.started'
   | 'skill.completed'
   | 'artifact.updated'
+  | 'pi.session.created'
+  | 'pi.session.updated'
+  | 'agent.decision'
+  | 'tool.started'
+  | 'tool.completed'
+  | 'tool.failed'
+  | 'human_gate.created'
+  | 'human_gate.resolved'
+  | 'review_artifact.created'
   | 'dialogue.brief.updated'
   | 'dialogue.brief.failed'
   | 'review.required'

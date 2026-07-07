@@ -9,6 +9,7 @@ import {
   EventBus,
   EventTraceStore,
   ExternalStores,
+  HumanGateStore,
   InMemoryEventBus,
   KnowledgeStore,
   LocalWorkflowQueue,
@@ -18,6 +19,8 @@ import {
   nowIso,
   OpenAICompatibleProvider,
   PublishingEventTraceStore,
+  PiAgentSessionStore,
+  ReviewArtifactStore,
   RevisionProposalStore,
   SessionStore,
   SkillRegistry,
@@ -25,6 +28,7 @@ import {
   WorkspaceStore,
   WorkflowDefinition,
   WorkflowEngine,
+  WorkflowOperationStore,
   WorkflowQueue,
   WorkflowWorkerPool,
   WritingTaskCard,
@@ -32,7 +36,7 @@ import {
 } from '@wa/core';
 import { normalizeTaskCardPolicies, registerDefaultSkills } from '@wa/skills';
 import { AppConfig } from './config';
-import { SqliteArtifactStore, SqliteDialogueBriefStore, SqliteDialogueBriefUpdateJobStore, SqliteDialogueMessageStore, SqliteEventTraceStore, SqliteKnowledgeStore, SqliteMemoryStore, SqliteRevisionProposalStore, SqliteSessionStore, SqliteStateStore, SqliteWorkspaceStore } from './stores/sqliteStores';
+import { SqliteArtifactStore, SqliteDialogueBriefStore, SqliteDialogueBriefUpdateJobStore, SqliteDialogueMessageStore, SqliteEventTraceStore, SqliteHumanGateStore, SqliteKnowledgeStore, SqliteMemoryStore, SqlitePiAgentSessionStore, SqliteReviewArtifactStore, SqliteRevisionProposalStore, SqliteSessionStore, SqliteStateStore, SqliteWorkflowOperationStore, SqliteWorkspaceStore } from './stores/sqliteStores';
 import { HttpRagKnowledgeStore } from './stores/httpRagKnowledgeStore';
 import { TonglingyuRetrieverKnowledgeStore } from './stores/tonglingyuRetrieverKnowledgeStore';
 import { RedisWorkflowQueue } from './queue/redisWorkflowQueue';
@@ -54,6 +58,10 @@ interface StoreBundle {
   memoryStore: MemoryStore;
   workspaceStore: WorkspaceStore;
   artifactStore: ArtifactStore;
+  piAgentSessionStore: PiAgentSessionStore;
+  humanGateStore: HumanGateStore;
+  workflowOperationStore: WorkflowOperationStore;
+  reviewArtifactStore: ReviewArtifactStore;
   revisionProposalStore: RevisionProposalStore;
   dialogueMessageStore: DialogueMessageStore;
   dialogueBriefStore: DialogueBriefStore;
@@ -68,7 +76,7 @@ export function createContainer(config: AppConfig): AppContainer {
   const eventBus: EventBus = new InMemoryEventBus();
   const eventTraceStore = new PublishingEventTraceStore(base.eventTraceStore, eventBus) as EventTraceStore;
   const knowledgeStore = createKnowledgeStore(config, base.localKnowledgeStore, eventTraceStore);
-  const stores: ExternalStores = { stateStore: base.stateStore, sessionStore: base.sessionStore, memoryStore: base.memoryStore, workspaceStore: base.workspaceStore, artifactStore: base.artifactStore, revisionProposalStore: base.revisionProposalStore, dialogueMessageStore: base.dialogueMessageStore, dialogueBriefStore: base.dialogueBriefStore, dialogueBriefUpdateJobStore: base.dialogueBriefUpdateJobStore, knowledgeStore, eventTraceStore };
+  const stores: ExternalStores = { stateStore: base.stateStore, sessionStore: base.sessionStore, memoryStore: base.memoryStore, workspaceStore: base.workspaceStore, artifactStore: base.artifactStore, piAgentSessionStore: base.piAgentSessionStore, humanGateStore: base.humanGateStore, workflowOperationStore: base.workflowOperationStore, reviewArtifactStore: base.reviewArtifactStore, revisionProposalStore: base.revisionProposalStore, dialogueMessageStore: base.dialogueMessageStore, dialogueBriefStore: base.dialogueBriefStore, dialogueBriefUpdateJobStore: base.dialogueBriefUpdateJobStore, knowledgeStore, eventTraceStore };
 
   const llm = config.llmProvider === 'openai-compatible' ? new OpenAICompatibleProvider({ baseURL: config.openaiBaseURL, apiKey: config.openaiApiKey, model: config.openaiModel }) : new MockLLMProvider();
   const skills = registerDefaultSkills(new SkillRegistry());
@@ -88,6 +96,10 @@ function createStores(config: AppConfig): StoreBundle {
   const memoryStore = new SqliteMemoryStore(config.dataDir);
   const workspaceStore = new SqliteWorkspaceStore(config.dataDir);
   const artifactStore = new SqliteArtifactStore(config.dataDir);
+  const piAgentSessionStore = new SqlitePiAgentSessionStore(config.dataDir);
+  const humanGateStore = new SqliteHumanGateStore(config.dataDir);
+  const workflowOperationStore = new SqliteWorkflowOperationStore(config.dataDir);
+  const reviewArtifactStore = new SqliteReviewArtifactStore(config.dataDir);
   const revisionProposalStore = new SqliteRevisionProposalStore(config.dataDir);
   const dialogueMessageStore = new SqliteDialogueMessageStore(config.dataDir);
   const dialogueBriefStore = new SqliteDialogueBriefStore(config.dataDir);
@@ -100,6 +112,10 @@ function createStores(config: AppConfig): StoreBundle {
     memoryStore,
     workspaceStore,
     artifactStore,
+    piAgentSessionStore,
+    humanGateStore,
+    workflowOperationStore,
+    reviewArtifactStore,
     revisionProposalStore,
     dialogueMessageStore,
     dialogueBriefStore,
@@ -112,6 +128,10 @@ function createStores(config: AppConfig): StoreBundle {
       memoryStore.close();
       workspaceStore.close();
       artifactStore.close();
+      piAgentSessionStore.close();
+      humanGateStore.close();
+      workflowOperationStore.close();
+      reviewArtifactStore.close();
       revisionProposalStore.close();
       dialogueMessageStore.close();
       dialogueBriefStore.close();
