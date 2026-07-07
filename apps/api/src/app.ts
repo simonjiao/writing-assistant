@@ -1,7 +1,7 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply, FastifyRequest } from 'fastify';
-import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, KnowledgeItem, KnowledgeSearchOptions, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WritingTaskCard, WritingWorkspace } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, KnowledgeItem, KnowledgeSearchOptions, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
 import { normalizeTaskCardPolicies } from '@wa/skills';
 import type { ArticleCommentResolverInput, ArticleCommentResolverOutput, DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
@@ -18,7 +18,10 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.addHook('onClose', async () => { await container.close(); });
 
   app.get('/health', async () => ({ ok: true, service: 'writing-assistant-api', store: 'sqlite', workflowExecutionMode: config.workflowExecutionMode, workflowQueueDriver: config.workflowExecutionMode === 'async' ? config.workflowQueueDriver : 'disabled', runnerConcurrency: config.workflowExecutionMode === 'async' ? config.runnerConcurrency : 0, ragProvider: config.ragProvider }));
-  app.get('/api/workflows', async () => container.engine.listWorkflows());
+  app.get('/api/workflows', async () => [
+    ...container.engine.listWorkflows(),
+    { id: WRITING_AUTOPILOT_POLICY.id, name: '写作自动流程', description: WRITING_AUTOPILOT_POLICY.goal },
+  ]);
   app.get('/api/skills', async () => container.skills.list());
   app.get('/api/queue/status', async () => ({ executionMode: config.workflowExecutionMode, queueDriver: config.workflowExecutionMode === 'async' ? config.workflowQueueDriver : 'disabled', runnerConcurrency: config.workflowExecutionMode === 'async' ? config.runnerConcurrency : 0, depth: container.queue?.getDepth ? await container.queue.getDepth() : 0 }));
 
@@ -470,6 +473,35 @@ export function createApp(config: AppConfig, container: AppContainer) {
       semanticQueries: body.semanticQueries,
       rerank: body.rerank,
     });
+  });
+
+  app.post('/api/workflows/writing/start', async (request, reply) => {
+    const body = (request.body ?? {}) as { userId?: string; sessionId?: string; workspaceId?: string; articleId?: string; message?: string; sectionId?: string };
+    const userId = readRequestUserId(request, body.userId);
+    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const articleId = body.articleId?.trim();
+    const articleAccess = articleId ? await requireArticleAccess(container, userId, articleId) : undefined;
+    if (articleAccess && !articleAccess.ok) return reply.code(articleAccess.statusCode).send({ error: articleAccess.error });
+    const workspaceId = articleAccess?.article.workspaceId ?? body.workspaceId?.trim() ?? (await ensureDefaultWorkspace(container, userId)).id;
+    const workspace = await requireWorkspaceAccess(container, userId, workspaceId);
+    if (!workspace) return reply.code(403).send({ error: 'Workspace access required.' });
+    const now = nowIso();
+    const run: WorkflowRun = {
+      id: newId('run'),
+      workflowId: WRITING_AUTOPILOT_POLICY.id,
+      status: 'running',
+      input: { message: body.message?.trim() || undefined, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined },
+      state: {},
+      metadata: { userId, sessionId: body.sessionId, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined },
+      history: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    await container.stores.stateStore.saveRun(run);
+    await container.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'workflow.started', payload: { workflowId: run.workflowId, metadata: run.metadata, userId, executionMode: 'pi-agent' }, createdAt: nowIso() });
+    if (body.sessionId) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: articleId, currentWorkspaceId: workspaceId, currentRunId: run.id });
+    await container.piRunner.runUntilBlocked(run.id);
+    return enrichRun(container, run.id);
   });
 
   app.post('/api/workflows/task-card/start', async (request, reply) => {

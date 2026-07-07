@@ -422,6 +422,14 @@ export interface AgentDecision {
   stopReason?: 'completed' | 'waiting' | 'blocked' | 'failed';
 }
 
+export interface WorkflowPolicy {
+  id: string;
+  goal: string;
+  allowedActionPolicy: string;
+  humanGatePolicy: string;
+  completionPolicy: string;
+}
+
 export type WorkflowStatus = 'idle' | 'queued' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled';
 export type WorkflowRunHistoryStatus = 'completed' | 'waiting' | 'failed';
 

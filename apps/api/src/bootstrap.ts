@@ -18,6 +18,7 @@ import {
   newId,
   nowIso,
   OpenAICompatibleProvider,
+  PiWorkflowRunner,
   PublishingEventTraceStore,
   PiAgentSessionStore,
   ReviewArtifactStore,
@@ -43,6 +44,7 @@ import { RedisWorkflowQueue } from './queue/redisWorkflowQueue';
 
 export interface AppContainer {
   engine: WorkflowEngine;
+  piRunner: PiWorkflowRunner;
   runtime: AgentRuntime;
   stores: ExternalStores;
   skills: SkillRegistry;
@@ -84,10 +86,11 @@ export function createContainer(config: AppConfig): AppContainer {
   const runtime = new AgentRuntime({ llm, skillRegistry: skills, contextBuilder, eventTraceStore });
   const queue = config.workflowExecutionMode === 'async' ? createQueue(config) : undefined;
   const engine = new WorkflowEngine({ stateStore: stores.stateStore, eventTraceStore, runtime, queue, executionMode: config.workflowExecutionMode });
+  const piRunner = new PiWorkflowRunner({ stores });
   registerWorkflows(engine, { artifactStore: stores.artifactStore, sessionStore: stores.sessionStore, eventTraceStore });
   const workerPool = queue && config.enableWorkers ? new WorkflowWorkerPool({ queue, stateStore: stores.stateStore, eventTraceStore, runnerFactory: () => engine.createRunner() }, { concurrency: config.runnerConcurrency, reserveTimeoutMs: 1000 }) : undefined;
   workerPool?.start();
-  return { engine, runtime, stores, skills, eventBus, queue, workerPool, async close() { await workerPool?.stop(); await queue?.close?.(); await base.close?.(); await eventBus.close?.(); } };
+  return { engine, piRunner, runtime, stores, skills, eventBus, queue, workerPool, async close() { await workerPool?.stop(); await queue?.close?.(); await base.close?.(); await eventBus.close?.(); } };
 }
 
 function createStores(config: AppConfig): StoreBundle {
