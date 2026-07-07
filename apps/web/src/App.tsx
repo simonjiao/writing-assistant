@@ -288,11 +288,15 @@ export function App() {
   }
   async function deleteArticle(articleId: string) {
     const target = articleSummaries.find((item) => item.id === articleId);
-    if (!window.confirm(`删除任务「${target?.title ?? articleId}」？`)) return;
+    if (!target) {
+      setError('找不到要删除的任务摘要，请刷新后重试。');
+      return;
+    }
+    if (!window.confirm(`删除任务「${target.title}」？`)) return;
     setBusy(true);
     setError(undefined);
     try {
-      await api.deleteArticle(articleId, userId);
+      await api.deleteArticle(articleId, { userId, baseRevision: target.revision });
       await refreshArticleSummaries();
       if (article?.id === articleId) {
         setArticle(undefined);

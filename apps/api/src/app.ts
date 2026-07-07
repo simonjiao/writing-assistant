@@ -230,16 +230,48 @@ export function createApp(config: AppConfig, container: AppContainer) {
   });
   app.delete('/api/articles/:articleId', async (request, reply) => {
     const { articleId } = request.params as { articleId: string };
-    const body = (request.body ?? {}) as { userId?: string };
+    const body = (request.body ?? {}) as { userId?: string; baseRevision?: number };
     const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
+    const baseRevision = parseBaseRevision(body.baseRevision);
+    if (baseRevision === undefined) return reply.code(400).send({ error: 'baseRevision is required.' });
+    const operationId = articleMutationOperationId('delete', { articleId, baseRevision });
+    const existingOperation = await container.stores.workflowOperationStore.getOperation(operationId);
+    if (existingOperation?.status === 'completed') {
+      const deletedArticle = await container.stores.artifactStore.getArticleIncludingDeleted(articleId);
+      if (!deletedArticle) return reply.code(404).send({ error: 'Article not found' });
+      if (!(await canAccessArticle(container, userId, deletedArticle))) return reply.code(403).send({ error: 'Workspace access required.' });
+      return articleSummary(deletedArticle);
+    }
+    if (existingOperation?.status === 'running') return reply.code(409).send({ error: `Workflow operation is already running: ${operationId}` });
     const access = await requireArticleAccess(container, userId, articleId);
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
     const article = access.article;
-    await container.stores.artifactStore.commitVersion(article.id, '删除任务', 'user');
-    const deleted = await container.stores.artifactStore.deleteArticle(article.id);
-    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'article-deleted', userId }, createdAt: nowIso() });
-    return articleSummary(deleted);
+    const deletedAt = nowIso();
+    const deleteVersion = {
+      id: newId('ver'),
+      reason: '删除任务',
+      author: 'user' as const,
+      snapshot: { taskCard: article.taskCard, outline: article.outline, blocks: article.blocks, citations: article.citations, themeTags: article.themeTags, comments: article.comments ?? [] },
+      createdAt: deletedAt,
+    };
+    const result = await applyAuditedArticleMutation(container, {
+      article,
+      userId,
+      baseRevision,
+      operationId,
+      toolName: 'delete_article',
+      allowedActionId: `article-delete:${article.id}`,
+      argsHash: hashOperationArgs({ articleId: article.id, baseRevision }),
+      resultRef: article.id,
+      eventPayload: { articleId: article.id, reason: 'article-deleted', userId },
+      mutate: (target) => {
+        target.versions = [...target.versions, deleteVersion];
+        target.deletedAt = target.deletedAt ?? deletedAt;
+      },
+    });
+    if (!result.ok) return reply.code(result.statusCode).send({ error: result.error });
+    return articleSummary(result.article);
   });
   app.patch('/api/articles/:articleId/outline/:sectionId', async (request, reply) => {
     const { articleId, sectionId } = request.params as { articleId: string; sectionId: string };
@@ -1465,6 +1497,7 @@ function articleSummary(article: ArticleArtifact) {
   return {
     id: article.id,
     workspaceId: article.workspaceId,
+    revision: article.revision,
     title: article.title,
     taskStatus: article.taskCard?.status,
     outlineCount: article.outline.length,

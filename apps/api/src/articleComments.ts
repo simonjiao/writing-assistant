@@ -49,9 +49,10 @@ export async function processArticleComments(
       results.push({ commentId: comment.id, blockId: comment.blockId, action: 'ask', status: comment.status, message: comment.response ?? '', changed: false });
     }
   }
-  const updated = typeof options.baseRevision === 'number' && options.operationId
-    ? await deps.stores.artifactStore.updateArticleWithRevision({ article, baseRevision: options.baseRevision, operationId: options.operationId })
-    : await deps.stores.artifactStore.updateArticle(article);
+  if (typeof options.baseRevision !== 'number' || !options.operationId) {
+    throw new Error('Article comment processing requires baseRevision and operationId.');
+  }
+  const updated = await deps.stores.artifactStore.updateArticleWithRevision({ article, baseRevision: options.baseRevision, operationId: options.operationId });
   if (revisedCount) {
     await deps.stores.artifactStore.commitVersion(article.id, `处理正文批注：${revisedCount} 处修订`, 'agent');
   }

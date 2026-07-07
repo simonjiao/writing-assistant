@@ -44,6 +44,7 @@ export interface MemoryStore {
 export interface ArtifactStore {
   createArticle(input: { userId: string; workspaceId: string; title: string; taskCard?: ArticleArtifact['taskCard'] }): Promise<ArticleArtifact>;
   getArticle(articleId: string): Promise<ArticleArtifact | undefined>;
+  getArticleIncludingDeleted(articleId: string): Promise<ArticleArtifact | undefined>;
   listArticles(workspaceId: string, options?: { includeDeleted?: boolean }): Promise<ArticleArtifact[]>;
   updateArticle(article: ArticleArtifact): Promise<ArticleArtifact>;
   updateArticleWithRevision(write: ArticleRevisionWrite): Promise<ArticleArtifact>;

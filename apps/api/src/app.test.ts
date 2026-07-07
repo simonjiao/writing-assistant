@@ -792,9 +792,19 @@ describe('api app', () => {
     const app = createApp(config, container);
     const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'delete-user', name: '删除工作台' });
     const article = await container.stores.artifactStore.createArticle({ userId: 'delete-user', workspaceId: workspace.id, title: '待删除任务' });
-    const deleteResponse = await app.inject({ method: 'DELETE', url: `/api/articles/${article.id}`, payload: { userId: 'delete-user' } });
+    const deleteResponse = await app.inject({ method: 'DELETE', url: `/api/articles/${article.id}`, payload: { userId: 'delete-user', baseRevision: article.revision } });
     expect(deleteResponse.statusCode).toBe(200);
     expect(deleteResponse.json().deletedAt).toBeTruthy();
+    const operations = await container.stores.workflowOperationStore.listOperations({ articleId: article.id, userId: 'delete-user' });
+    expect(operations).toEqual(expect.arrayContaining([expect.objectContaining({
+      toolName: 'delete_article',
+      status: 'completed',
+      articleRevisionBefore: article.revision,
+      articleRevisionAfter: deleteResponse.json().revision,
+    })]));
+    const repeatedDeleteResponse = await app.inject({ method: 'DELETE', url: `/api/articles/${article.id}`, payload: { userId: 'delete-user', baseRevision: article.revision } });
+    expect(repeatedDeleteResponse.statusCode).toBe(200);
+    expect(repeatedDeleteResponse.json().deletedAt).toBeTruthy();
     const hiddenResponse = await app.inject({ method: 'GET', url: `/api/articles/${article.id}?userId=delete-user` });
     expect(hiddenResponse.statusCode).toBe(404);
     const summaryResponse = await app.inject({ method: 'GET', url: `/api/articles?userId=delete-user&workspaceId=${workspace.id}&view=summary` });

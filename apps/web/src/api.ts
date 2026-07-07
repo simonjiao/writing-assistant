@@ -9,7 +9,7 @@ export const api = {
   createWorkspace(input: { userId?: string; name: string; memberUserIds?: string[] }) { return request<WritingWorkspace>('/api/workspaces', { method: 'POST', body: JSON.stringify(input) }); },
   deleteWorkspace(workspaceId: string, userId: string) { return request<WritingWorkspace>(`/api/workspaces/${workspaceId}`, { method: 'DELETE', body: JSON.stringify({ userId }) }); },
   listArticles(userId: string, workspaceId?: string) { const query = new URLSearchParams({ userId, view: 'summary' }); if (workspaceId) query.set('workspaceId', workspaceId); return request<ArticleSummary[]>(`/api/articles?${query.toString()}`); },
-  deleteArticle(articleId: string, userId: string) { return request<ArticleSummary>(`/api/articles/${articleId}`, { method: 'DELETE', body: JSON.stringify({ userId }) }); },
+  deleteArticle(articleId: string, input: { userId: string; baseRevision: number }) { return request<ArticleSummary>(`/api/articles/${articleId}`, { method: 'DELETE', body: JSON.stringify(input) }); },
   listWritingStandards() { return request<WritingStandardSummary>('/api/writing-standards'); },
   listDomainProfiles() { return request<DomainProfileSummary[]>('/api/domain-profiles'); },
   recommendDomainProfiles(rawRequirement: string) { return request<DomainProfileRecommendation[]>('/api/domain-profiles/recommend', { method: 'POST', body: JSON.stringify({ rawRequirement }) }); },

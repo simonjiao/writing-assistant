@@ -8,7 +8,7 @@ export type ArticleCommentResolutionKind = 'revision' | 'explanation' | 'questio
 export interface ArticleCommentReply { id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string }
 export interface ArticleComment { id: string; articleId: string; blockId: string; selectedText: string; comment: string; selectionStart?: number; selectionEnd?: number; status: ArticleCommentStatus; resolutionKind?: ArticleCommentResolutionKind; response?: string; replacementText?: string; replies?: ArticleCommentReply[]; createdAt: string; updatedAt: string; resolvedAt?: string }
 export interface ArticleArtifact { id: string; userId: string; workspaceId: string; revision: number; title: string; taskCard?: WritingTaskCard; outline: OutlineItem[]; blocks: ArticleBlock[]; comments?: ArticleComment[]; versions: Array<{ id: string; reason: string; author: string; createdAt: string }> }
-export interface ArticleSummary { id: string; workspaceId: string; title: string; taskStatus?: 'draft' | 'confirmed'; outlineCount: number; blockCount: number; updatedAt: string; deletedAt?: string }
+export interface ArticleSummary { id: string; workspaceId: string; revision: number; title: string; taskStatus?: 'draft' | 'confirmed'; outlineCount: number; blockCount: number; updatedAt: string; deletedAt?: string }
 export type DialogueContextKind = 'task-card' | 'outline' | 'outline-item' | 'block';
 export type RevisionOperation =
   | { type: 'revise-task-card'; instruction: string }
