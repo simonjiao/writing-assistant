@@ -1186,12 +1186,19 @@ function OutlineActionBar(props: { isEditing: boolean; requestBusy: boolean; wri
 
 function SectionProgressDot(props: { progress: SectionGenerationState; events: AgentEvent[] }) {
   const stage = sectionGenerationStage(props.progress, props.events);
-  const progressScale = Math.sqrt(Math.max(0, Math.min(stage.percent, 100)) / 100);
+  const percent = Math.max(0, Math.min(stage.percent, 100));
   const label = `${stage.title}：${stage.detail}`;
   return (
-    <span className={`section-progress-dot ${stage.tone}`} role="status" aria-label={label} title={label} style={{ '--progress-scale': progressScale.toFixed(3) } as CSSProperties}>
-      <span aria-hidden="true" />
-    </span>
+    <span
+      className={`section-progress-dot ${stage.tone}`}
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(percent)}
+      title={`${label}（${Math.round(percent)}%）`}
+      style={{ '--progress-angle': `${(percent * 3.6).toFixed(1)}deg` } as CSSProperties}
+    />
   );
 }
 
@@ -1430,13 +1437,14 @@ function runStatusLabel(run: WorkflowRun, events: AgentEvent[]): string {
 function sectionGenerationStage(progress: SectionGenerationState, events: AgentEvent[]): { title: string; detail: string; percent: number; tone: 'active' | 'done' | 'failed' } {
   if (progress.status === 'failed') return { title: '生成未保存', detail: userFacingRunError(progress.error), percent: 100, tone: 'failed' };
   if (progress.status === 'completed') return { title: '已保存本节', detail: '正文已经写入当前章节。', percent: 100, tone: 'done' };
-  if (progress.status === 'queued') return { title: '等待开始', detail: '请求已提交，正在等待处理。', percent: 18, tone: 'active' };
-  if (progress.status === 'starting') return { title: '准备生成', detail: '正在提交生成请求。', percent: 12, tone: 'active' };
   if (hasFriendlyEvent(events, 'artifact.updated', 'section-written')) return { title: '正在保存', detail: '正文已生成，正在写入文章。', percent: 92, tone: 'active' };
   if (hasFriendlyEvent(events, 'skill.completed', 'section-writer')) return { title: '正在整理', detail: '正文草稿已生成，正在整理结果。', percent: 76, tone: 'active' };
   if (hasFriendlyEvent(events, 'skill.started', 'section-writer')) return { title: '正在生成', detail: '正在根据任务卡、大纲和资料写作。', percent: 48, tone: 'active' };
   if (hasFriendlyEvent(events, 'rag.http.completed')) return { title: '正在生成', detail: '资料已准备，正在组织正文。', percent: 42, tone: 'active' };
   if (hasFriendlyEvent(events, 'rag.http.started')) return { title: '正在准备资料', detail: '正在查找可用资料。', percent: 30, tone: 'active' };
+  if (hasFriendlyEvent(events, 'queue.dequeued')) return { title: '开始处理', detail: '请求已进入写作流程。', percent: 22, tone: 'active' };
+  if (progress.status === 'queued') return { title: '等待开始', detail: '请求已提交，正在等待处理。', percent: 18, tone: 'active' };
+  if (progress.status === 'starting') return { title: '准备生成', detail: '正在提交生成请求。', percent: 12, tone: 'active' };
   return { title: '正在处理', detail: '正在推进生成流程。', percent: 24, tone: 'active' };
 }
 

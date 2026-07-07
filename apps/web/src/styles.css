@@ -742,42 +742,46 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 }
 .outline-item p { margin: 6px 0; color: #4d5966; }
 .outline-item span { color: #7c7266; font-size: 12px; }
+@property --progress-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
 .section-progress-dot {
+  --progress-angle: 0deg;
+  --progress-color: #4f6f52;
+  --progress-track: #eee6da;
   position: relative;
   flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
+  display: block;
+  width: 24px;
+  height: 24px;
   margin-left: auto;
   overflow: hidden;
   border: 1px solid #d9d1c4;
   border-radius: 50%;
-  background: #fffdf8;
-}
-.section-progress-dot span {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  background: #4f6f52;
-  transform: scale(var(--progress-scale, 0.2));
-  transform-origin: center;
-  transition: transform 220ms ease, background-color 160ms ease;
+  background: conic-gradient(var(--progress-color) var(--progress-angle), var(--progress-track) 0deg);
+  box-shadow: inset 0 0 0 2px rgba(255, 253, 248, 0.78);
+  transition: --progress-angle 260ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }
 .section-progress-dot.done {
+  --progress-color: #315437;
+  --progress-track: #dbe9dd;
   border-color: #9fbea6;
-  background: #f1f8f2;
-}
-.section-progress-dot.done span {
-  background: #4f6f52;
 }
 .section-progress-dot.failed {
+  --progress-color: #b91c1c;
+  --progress-track: #f4d6d6;
   border-color: #e8b4b4;
-  background: #fff1f1;
 }
-.section-progress-dot.failed span {
-  background: #b91c1c;
+@media (prefers-reduced-motion: no-preference) {
+  .section-progress-dot.active {
+    animation: section-progress-breathe 1200ms ease-in-out infinite;
+  }
+}
+@keyframes section-progress-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
 }
 .outline-special {
   display: grid;
