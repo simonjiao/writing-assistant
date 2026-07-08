@@ -419,6 +419,7 @@ export interface AllowedAction {
   operationId: string;
   type: AllowedActionType;
   skillId: string;
+  skillVersion: number;
   toolName?: string;
   articleId?: string;
   sectionId?: string;

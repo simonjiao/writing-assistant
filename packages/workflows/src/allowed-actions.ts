@@ -96,6 +96,7 @@ export class AllowedActionPlanner {
       operationId,
       type,
       skillId: skillBinding.skillId,
+      skillVersion: skillBinding.skillVersion,
       toolName: skillBinding.toolName,
       articleId: input.article?.id,
       sectionId,

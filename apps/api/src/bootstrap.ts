@@ -23,7 +23,7 @@ import {
   WorkspaceStore,
   AgentOperationStore,
 } from '@wa/core';
-import { AgentToolExecutor, PiWorkflowActionExecutor, registerDefaultPromptPrograms, registerDefaultTools, PromptProgramRegistry, ToolRegistry, PiWorkflowRunner } from '@wa/workflows';
+import { AgentToolExecutor, PiWorkflowActionExecutor, registerDefaultProductSkills, registerDefaultPromptPrograms, registerDefaultTools, ProductSkillRegistry, PromptProgramRegistry, ToolRegistry, PiWorkflowRunner } from '@wa/workflows';
 import { AppConfig } from './config';
 import { SqliteArtifactStore, SqliteDialogueBriefStore, SqliteDialogueBriefUpdateJobStore, SqliteDialogueMessageStore, SqliteEventTraceStore, SqliteHumanGateStore, SqliteKnowledgeStore, SqliteMemoryStore, SqlitePiAgentSessionStore, SqliteReviewArtifactStore, SqliteRevisionProposalStore, SqliteSessionStore, SqliteStateStore, SqliteAgentOperationStore, SqliteWorkspaceStore } from './stores/sqliteStores';
 import { HttpRagKnowledgeStore } from './stores/httpRagKnowledgeStore';
@@ -33,6 +33,7 @@ export interface AppContainer {
   piRunner: PiWorkflowRunner;
   agentToolExecutor: AgentToolExecutor;
   stores: ExternalStores;
+  productSkills: ProductSkillRegistry;
   promptPrograms: PromptProgramRegistry;
   tools: ToolRegistry;
   eventBus: EventBus;
@@ -66,12 +67,13 @@ export function createContainer(config: AppConfig, overrides: { llm?: LLMProvide
   const stores: ExternalStores = { stateStore: base.stateStore, sessionStore: base.sessionStore, memoryStore: base.memoryStore, workspaceStore: base.workspaceStore, artifactStore: base.artifactStore, piAgentSessionStore: base.piAgentSessionStore, humanGateStore: base.humanGateStore, agentOperationStore: base.agentOperationStore, reviewArtifactStore: base.reviewArtifactStore, revisionProposalStore: base.revisionProposalStore, dialogueMessageStore: base.dialogueMessageStore, dialogueBriefStore: base.dialogueBriefStore, dialogueBriefUpdateJobStore: base.dialogueBriefUpdateJobStore, knowledgeStore, eventTraceStore };
 
   const llm = overrides.llm ?? createLlmProvider(config);
+  const productSkills = registerDefaultProductSkills();
   const promptPrograms = registerDefaultPromptPrograms();
-  const tools = registerDefaultTools();
+  const tools = registerDefaultTools(new ToolRegistry(), productSkills);
   const contextBuilder = new DefaultContextBuilder({ sessionStore: stores.sessionStore, stateStore: stores.stateStore, memoryStore: stores.memoryStore, artifactStore: stores.artifactStore, knowledgeStore: stores.knowledgeStore });
   const agentToolExecutor = new AgentToolExecutor({ stores, toolRegistry: tools, promptPrograms, contextBuilder, llm });
   const piRunner = new PiWorkflowRunner({ stores, actionExecutor: new PiWorkflowActionExecutor({ stores, agentToolExecutor }), decisionProvider: new PiAgentDecisionProvider(llm), maxTurns: 20 });
-  return { piRunner, agentToolExecutor, stores, promptPrograms, tools, eventBus, async close() { await base.close?.(); await eventBus.close?.(); } };
+  return { piRunner, agentToolExecutor, stores, productSkills, promptPrograms, tools, eventBus, async close() { await base.close?.(); await eventBus.close?.(); } };
 }
 
 function createLlmProvider(config: AppConfig): LLMProvider {

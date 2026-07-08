@@ -79,7 +79,7 @@ export async function executePromptProgram<I, O>(
     id: newId('evt'),
     runId: execution.runId,
     type: 'prompt_program.started',
-    payload: { programId, skillId: productSkill.id, workflowId: execution.workflowId, agentSessionId: execution.agentSessionId },
+    payload: { programId, skillId: productSkill.id, skillVersion: productSkill.version, workflowId: execution.workflowId, agentSessionId: execution.agentSessionId },
     createdAt: nowIso(),
   });
   const context = await env.contextBuilder.build({
@@ -97,7 +97,7 @@ export async function executePromptProgram<I, O>(
       id: newId('evt'),
       runId: execution.runId,
       type: 'prompt_program.completed',
-      payload: { programId, skillId: productSkill.id, workflowId: execution.workflowId, agentSessionId: execution.agentSessionId },
+      payload: { programId, skillId: productSkill.id, skillVersion: productSkill.version, workflowId: execution.workflowId, agentSessionId: execution.agentSessionId },
       createdAt: nowIso(),
     });
     return output;
@@ -106,7 +106,7 @@ export async function executePromptProgram<I, O>(
       id: newId('evt'),
       runId: execution.runId,
       type: 'prompt_program.failed',
-      payload: { programId, skillId: productSkill.id, workflowId: execution.workflowId, agentSessionId: execution.agentSessionId, error: error instanceof Error ? error.message : String(error) },
+      payload: { programId, skillId: productSkill.id, skillVersion: productSkill.version, workflowId: execution.workflowId, agentSessionId: execution.agentSessionId, error: error instanceof Error ? error.message : String(error) },
       createdAt: nowIso(),
     });
     throw error;

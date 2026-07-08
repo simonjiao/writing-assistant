@@ -1,7 +1,7 @@
 import { newId, nowIso } from '@wa/core';
 import { ToolRegistry, executePromptProgram, ProductToolDefinition } from './product-tool';
 import { productToolSchemas } from './tool-schemas';
-import { registerDefaultProductSkills } from './product-skill';
+import { ProductSkillRegistry, registerDefaultProductSkills } from './product-skill';
 
 type PromptToolSpec = {
   id: string;
@@ -29,14 +29,14 @@ const promptTools: PromptToolSpec[] = [
   { id: 'evaluate_quality', skillId: 'evaluate-quality', programId: 'quality-evaluator', inputSchema: productToolSchemas.evaluateQualityInput, outputSchema: productToolSchemas.evaluateQualityOutput, workflowIds: ['article-review'] },
 ];
 
-export function registerDefaultTools(registry = new ToolRegistry()): ToolRegistry {
-  registry.register(createTaskIntakeTool());
-  for (const spec of promptTools) registry.register(promptTool(spec));
+export function registerDefaultTools(registry = new ToolRegistry(), productSkills = registerDefaultProductSkills()): ToolRegistry {
+  registry.register(createTaskIntakeTool(productSkills));
+  for (const spec of promptTools) registry.register(promptTool(spec, productSkills));
   return registry;
 }
 
-function promptTool(spec: PromptToolSpec): ProductToolDefinition<unknown, unknown> {
-  const skill = registerDefaultProductSkills().get(spec.skillId);
+function promptTool(spec: PromptToolSpec, productSkills: ProductSkillRegistry): ProductToolDefinition<unknown, unknown> {
+  const skill = productSkills.get(spec.skillId);
   return {
     id: spec.id,
     skill,
@@ -52,8 +52,8 @@ function promptTool(spec: PromptToolSpec): ProductToolDefinition<unknown, unknow
   };
 }
 
-function createTaskIntakeTool(): ProductToolDefinition<unknown, unknown> {
-  const skill = registerDefaultProductSkills().get('create-task-card');
+function createTaskIntakeTool(productSkills: ProductSkillRegistry): ProductToolDefinition<unknown, unknown> {
+  const skill = productSkills.get('create-task-card');
   return {
     id: 'create_task_intake',
     skill,

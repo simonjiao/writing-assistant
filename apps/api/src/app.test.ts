@@ -153,6 +153,21 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('exposes product skills as read-only runtime metadata', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const list = await app.inject({ method: 'GET', url: '/api/product-skills' });
+    expect(list.statusCode).toBe(200);
+    expect(list.json()).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'create-task-card', version: 1, tools: expect.arrayContaining(['create_task_intake', 'refine_task_card']) })]));
+    const detail = await app.inject({ method: 'GET', url: '/api/product-skills/create-task-card' });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().actions.create_task_intake).toContain('保存任务容器');
+    const missing = await app.inject({ method: 'GET', url: '/api/product-skills/missing-skill' });
+    expect(missing.statusCode).toBe(404);
+    await app.close();
+  });
+
   it('starts writing-autopilot through pi session, operation log, and human gate', async () => {
     const config = testConfig();
     const container = createContainer(config);
@@ -252,6 +267,7 @@ describe('api app', () => {
       operationId: 'op_allowed',
       type: 'create_task_intake',
       skillId: 'create-task-card',
+      skillVersion: 1,
       toolName: 'create_task_intake',
       requiresHumanGate: false,
       reason: 'allowed',

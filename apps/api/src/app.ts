@@ -3,7 +3,7 @@ import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply, FastifyRequest } from 'fastify';
 import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, ArticleRevisionConflictError, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, hashOperationArgs, HumanGate, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, PiAgentSession, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WritingTaskCard, WritingWorkspace } from '@wa/core';
 import { AgentSessionTarget, agentOperationId, appendAgentSessionMessages, appendCommentReply, canDeleteUnprocessedComment, canDeleteUnprocessedReply, getOrCreateAgentSession, normalizeTaskCardPolicies, reconcileCommentAfterReplyDeletion, updateComment, WRITING_AUTOPILOT_POLICY } from '@wa/workflows';
-import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput } from '@wa/workflows';
+import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, ProductSkillSpec } from '@wa/workflows';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
 import { addKnowledgeEvidenceToBrief, buildCompactDialogueConversation, compactDialogueBriefForPrompt, enqueueDialogueBriefUpdate, ensureDialogueBriefSettled, getDialogueBriefStatus, getOrCreateDialogueBrief } from './dialogueBrief';
@@ -38,6 +38,15 @@ export function createApp(config: AppConfig, container: AppContainer) {
   app.get('/health', async () => ({ ok: true, service: 'writing-assistant-api', store: 'sqlite', workflowRuntime: 'pi-agent', ragProvider: config.ragProvider }));
   app.get('/api/workflows', async () => [{ id: WRITING_AUTOPILOT_POLICY.id, name: '写作自动流程', description: WRITING_AUTOPILOT_POLICY.goal }]);
   app.get('/api/tools', async () => container.tools.list().map((tool) => ({ id: tool.id, workflowIds: tool.workflowIds, mutatesArtifact: tool.mutatesArtifact, requiresRevision: tool.requiresRevision, requiresHumanGate: tool.requiresHumanGate })));
+  app.get('/api/product-skills', async () => container.productSkills.list().map(productSkillView));
+  app.get('/api/product-skills/:skillId', async (request, reply) => {
+    const { skillId } = request.params as { skillId: string };
+    try {
+      return productSkillView(container.productSkills.get(skillId));
+    } catch {
+      return reply.code(404).send({ error: 'Product skill not found.' });
+    }
+  });
 
   app.post('/api/sessions', async (request, reply) => {
     const body = request.body as { userId?: string };
@@ -1323,6 +1332,25 @@ function articleSummary(article: ArticleArtifact) {
     blockCount: article.blocks.length,
     updatedAt: article.updatedAt,
     deletedAt: article.deletedAt,
+  };
+}
+
+function productSkillView(skill: ProductSkillSpec) {
+  return {
+    id: skill.id,
+    title: skill.title,
+    version: skill.version,
+    goal: skill.goal,
+    tools: skill.toolBindings,
+    actions: skill.actionHints,
+    whenToUse: skill.whenToUse,
+    inputs: skill.inputContract,
+    process: skill.steps,
+    ragPolicy: skill.ragPolicy,
+    humanGatePolicy: skill.humanGatePolicy,
+    completionCriteria: skill.completionCriteria,
+    failurePolicy: skill.failurePolicy,
+    promptRules: skill.promptRules,
   };
 }
 

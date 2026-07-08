@@ -404,7 +404,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
   }
 
   private async emitOperationEvent(run: WorkflowRun, action: AllowedAction, type: 'workflow.operation.started' | 'workflow.operation.completed' | 'workflow.operation.failed' | 'tool.started' | 'tool.completed' | 'tool.failed', payload: Record<string, unknown> = {}): Promise<void> {
-    await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type, payload: { ...payload, userId: run.metadata.userId, operationId: action.operationId, allowedActionId: action.id, actionType: action.type, articleId: action.articleId, sectionId: action.sectionId }, createdAt: nowIso() });
+    await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type, payload: { ...payload, userId: run.metadata.userId, operationId: action.operationId, allowedActionId: action.id, actionType: action.type, skillId: action.skillId, skillVersion: action.skillVersion, articleId: action.articleId, sectionId: action.sectionId }, createdAt: nowIso() });
   }
 
   private async executeWorkflowTool<I = unknown, O = unknown>(run: WorkflowRun, action: AllowedAction, input: {
@@ -475,6 +475,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     if (authorized.operationId !== action.operationId) throw new Error(`Unauthorized operationId for action ${action.id}.`);
     if (authorized.type !== action.type) throw new Error(`Unauthorized action type for action ${action.id}.`);
     if (authorized.skillId !== action.skillId) throw new Error(`Unauthorized skillId for action ${action.id}.`);
+    if (authorized.skillVersion !== action.skillVersion) throw new Error(`Unauthorized skillVersion for action ${action.id}.`);
     if (authorized.toolName !== action.toolName) throw new Error(`Unauthorized toolName for action ${action.id}.`);
     if (authorized.articleId !== action.articleId) throw new Error(`Unauthorized articleId for action ${action.id}.`);
     if (authorized.sectionId !== action.sectionId) throw new Error(`Unauthorized sectionId for action ${action.id}.`);
@@ -526,6 +527,7 @@ function isAllowedAction(value: unknown): value is AllowedAction {
     && typeof action.operationId === 'string'
     && typeof action.type === 'string'
     && typeof action.skillId === 'string'
+    && typeof action.skillVersion === 'number'
     && typeof action.requiresHumanGate === 'boolean'
     && typeof action.reason === 'string';
 }
