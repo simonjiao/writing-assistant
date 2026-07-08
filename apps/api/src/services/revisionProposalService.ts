@@ -58,7 +58,6 @@ export function createRevisionProposalService(deps: {
   async function applyRevisionProposal(proposalId: string, userId: string, sessionId?: string) {
     const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
     if (!proposal) throw new Error('Revision proposal not found.');
-    if (proposal.userId !== userId) throw new Error('Revision proposal belongs to another user.');
     if (proposal.status !== 'pending') throw new Error(`Revision proposal is already ${proposal.status}.`);
     const access = await deps.requireArticleAccess(userId, proposal.articleId);
     if (!access.ok) throw new Error(access.error);
@@ -96,7 +95,7 @@ export function createRevisionProposalService(deps: {
       if (result.runPayload) runPayload = result.runPayload;
       article = result.article;
     }
-    const applied = await container.stores.revisionProposalStore.updateProposal({ ...proposal, status: 'applied' });
+    const applied = await container.stores.revisionProposalStore.updateProposal({ ...proposal, status: 'applied', appliedByUserId: userId });
     const articlePayload = await container.stores.artifactStore.getArticle(article.id);
     const workflowRunPayload = await syncWorkflowRunAfterProposal(applied, 'applied');
     const finalRunPayload = workflowRunPayload ?? runPayload;

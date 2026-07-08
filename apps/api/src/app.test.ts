@@ -1164,6 +1164,31 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('allows a workspace member to apply a proposal and records the applier', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'proposal-owner', name: '协作方案工作台', memberUserIds: ['proposal-member'] });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'proposal-owner', workspaceId: workspace.id, title: '协作文章' });
+    const proposal = await container.stores.revisionProposalStore.createProposal({
+      articleId: article.id,
+      userId: 'proposal-owner',
+      authorUserId: 'proposal-owner',
+      baseRevision: article.revision,
+      contextKind: 'task-card',
+      summary: '协作成员应用',
+      message: '允许有工作台权限的成员应用该方案。',
+      operations: [],
+      warnings: [],
+    });
+
+    const response = await app.inject({ method: 'POST', url: `/api/articles/${article.id}/dialogue/${proposal.id}/apply`, payload: { userId: 'proposal-member' } });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().proposal).toMatchObject({ status: 'applied', authorUserId: 'proposal-owner', appliedByUserId: 'proposal-member' });
+    await app.close();
+  });
+
   it('returns conflict instead of server error when applying a stale revision proposal', async () => {
     const config = testConfig();
     const container = createContainer(config);

@@ -189,6 +189,7 @@ export interface RevisionProposal {
   userId: string;
   runId?: string;
   authorUserId?: string;
+  appliedByUserId?: string;
   baseRevision?: number;
   contextKind: DialogueContextKind;
   summary: string;
