@@ -2,7 +2,7 @@
 
 ## 状态
 
-实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、`create_revision_proposal`、proposal apply/dismiss 回流、workflow message 刷新 pending proposal、workflow proposal 续聊持久化、批注处理 workflow action、统稿建议可应用提案化、开发期多用户工作台隔离、统一 `/api/workflows/writing/start`、旧节点式 runner/queue 删除，并移除批注处理、任务卡确认、任务卡智能修订和大纲项智能修订的直连 REST 入口。手工大纲编辑、正文批注写入、任务删除也已纳入 revision 校验和 operation 审计。workflow proposal 浏览器端展示、续聊 dirty 提示、更新方案交互已完成真实本地验收，并补充了前端状态自动化覆盖。
+实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、`create_revision_proposal`、proposal apply/dismiss 回流、workflow message 刷新 pending proposal、workflow proposal 续聊持久化、批注处理 workflow action、统稿建议可应用提案化、开发期多用户工作台隔离、统一 `/api/workflows/writing/start`、旧节点式 runner/queue 删除，并移除批注处理、任务卡确认、任务卡智能修订和大纲项智能修订的直连 REST 入口。手工大纲编辑、正文批注写入、任务删除也已纳入 revision 校验和 operation 审计。workflow action 执行已改为强类型工具注册表，新增 action type 时必须注册对应 handler。workflow proposal 浏览器端展示、续聊 dirty 提示、更新方案交互已完成真实本地验收，并补充了前端状态自动化覆盖。
 
 仍需补齐的重点：更完整的端到端自动化覆盖，尤其是真实浏览器下的创建任务、开始写作、批注处理和统稿 proposal 回归。
 
@@ -333,6 +333,7 @@ interface AllowedAction {
 工具必须满足：
 
 - 参数 schema 明确。
+- 所有 `AllowedActionType` 必须在工具注册表中有唯一 handler。
 - 幂等。
 - 检查权限。
 - 检查 `baseRevision`。

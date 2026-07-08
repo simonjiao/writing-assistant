@@ -1,6 +1,7 @@
 import {
   AgentRuntime,
   AllowedAction,
+  AllowedActionType,
   ArticleArtifact,
   ArticleBlock,
   consistencyReviewSignature,
@@ -30,8 +31,27 @@ import {
 } from '@wa/skills';
 import { processArticleComments } from './articleComments';
 
+type WorkflowActionHandler = (run: WorkflowRun, action: AllowedAction) => Promise<WorkflowActionExecutionResult>;
+type WorkflowToolRegistry = Readonly<Record<AllowedActionType, WorkflowActionHandler>>;
+
 export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
-  constructor(private readonly deps: { stores: ExternalStores; runtime: AgentRuntime }) {}
+  private readonly tools: WorkflowToolRegistry;
+
+  constructor(private readonly deps: { stores: ExternalStores; runtime: AgentRuntime }) {
+    this.tools = {
+      create_task_card_draft: this.createTaskCardDraft.bind(this),
+      ask_followup: this.requestTaskCardGate.bind(this),
+      plan_outline: this.planOutline.bind(this),
+      confirm_outline_for_writing: this.confirmOutlineForWriting.bind(this),
+      request_human_gate: this.requestHumanGate.bind(this),
+      review_task_card_outline_consistency: this.reviewTaskCardOutlineConsistency.bind(this),
+      create_revision_proposal: this.createRevisionProposal.bind(this),
+      write_next_section: this.writeSection.bind(this),
+      write_section: this.writeSection.bind(this),
+      process_article_comments: this.processArticleComments.bind(this),
+      generate_polish_report: this.generatePolishReport.bind(this),
+    };
+  }
 
   async execute(input: WorkflowActionExecutionInput): Promise<WorkflowActionExecutionResult> {
     await this.assertAuthorizedAction(input.run, input.action);
@@ -57,17 +77,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
   }
 
   private async executeAction(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
-    if (action.type === 'create_task_card_draft') return this.createTaskCardDraft(run, action);
-    if (action.type === 'ask_followup') return this.requestTaskCardGate(run, action);
-    if (action.type === 'plan_outline') return this.planOutline(run, action);
-    if (action.type === 'confirm_outline_for_writing') return this.confirmOutlineForWriting(run, action);
-    if (action.type === 'request_human_gate') return this.requestHumanGate(run, action);
-    if (action.type === 'review_task_card_outline_consistency') return this.reviewTaskCardOutlineConsistency(run, action);
-    if (action.type === 'create_revision_proposal') return this.createRevisionProposal(run, action);
-    if (action.type === 'write_next_section' || action.type === 'write_section') return this.writeSection(run, action);
-    if (action.type === 'process_article_comments') return this.processArticleComments(run, action);
-    if (action.type === 'generate_polish_report') return this.generatePolishReport(run, action);
-    throw new Error(`Unsupported workflow action: ${action.type}`);
+    return this.tools[action.type](run, action);
   }
 
   private async createTaskCardDraft(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
