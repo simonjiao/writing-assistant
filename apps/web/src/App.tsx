@@ -1286,7 +1286,7 @@ function DialogueBriefCard(props: { status?: DialogueBriefStatus }) {
   const conflicts = brief?.unresolvedConflicts.slice(-3) ?? [];
   const hasContent = active.length || evidence.length || superseded.length || conflicts.length;
   return (
-    <section className={`support-card dialogue-brief-card ${status?.status ?? 'idle'}`}>
+    <section data-testid="dialogue-brief-card" className={`support-card dialogue-brief-card ${status?.status ?? 'idle'}`}>
       <div className="brief-card-head"><h3>对话摘要</h3><span>{briefStatusLabel(status)}</span></div>
       {status?.message ? <div className="brief-error">{status.message}</div> : null}
       {hasContent ? <>

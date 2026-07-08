@@ -143,6 +143,21 @@ test('blocks a second writing start while an article workflow is running', async
   expect(runsForArticle(fixture.articleId)).toHaveLength(1);
 });
 
+test('recovers an interrupted dialogue brief job before the next dialogue turn', async ({ page }) => {
+  const userId = uniqueUserId('browser-brief-recovery');
+  const fixture = await createInterruptedBriefFixture(userId);
+  await openAppForUser(page, userId);
+
+  await page.getByTestId('history-item').filter({ hasText: fixture.title }).click();
+  await expect(page.getByTestId('dialogue-brief-card')).toContainText('更新中');
+
+  await page.getByTestId('task-dialog-input').fill('需要调整大纲，补充收束段。');
+  await page.getByTestId('task-dialog-send').click();
+
+  await expect(page.getByTestId('dialogue-brief-card')).toContainText('补充鸳鸯议婚', { timeout: 60_000 });
+  await expect.poll(() => briefJobStatus(fixture.jobId)).toBe('succeeded');
+});
+
 test('shows a polish proposal in the browser and applies it only after confirmation', async ({ page }) => {
   const userId = uniqueUserId('browser-polish');
   const fixture = await createPolishFixture(userId);
@@ -353,6 +368,28 @@ async function createActiveWorkflowFixture(userId: string): Promise<{ articleId:
   return { articleId, title };
 }
 
+async function createInterruptedBriefFixture(userId: string): Promise<{ articleId: string; title: string; jobId: string }> {
+  const { articleId, title } = await createPolishFixture(userId);
+  const jobId = `brief_job_${articleId}`;
+  const now = new Date().toISOString();
+  const staleStartedAt = new Date(Date.now() - 120_000).toISOString();
+  upsertJsonRecord('dialogue_brief_update_jobs', jobId, {
+    id: jobId,
+    articleId,
+    userId,
+    messageId: `msg_${articleId}`,
+    messageContent: '补充鸳鸯议婚的前置要求',
+    contextKind: 'outline',
+    contextTitle: '整体大纲',
+    status: 'running',
+    attempts: 1,
+    createdAt: staleStartedAt,
+    updatedAt: now,
+    startedAt: staleStartedAt,
+  });
+  return { articleId, title, jobId };
+}
+
 async function createBasicArticleFixture(userId: string, titlePrefix: string): Promise<{ articleId: string; title: string }> {
   const session = await requestJson<{ currentWorkspaceId?: string }>('/api/sessions', { method: 'POST', body: JSON.stringify({ userId }) });
   const workspaceId = session.currentWorkspaceId;
@@ -445,6 +482,10 @@ function runsForArticle(articleId: string): Record<string, unknown>[] {
     const metadata = run.metadata as { articleId?: string } | undefined;
     return metadata?.articleId === articleId;
   });
+}
+
+function briefJobStatus(jobId: string): string | undefined {
+  return listJsonRecords('dialogue_brief_update_jobs').find((job) => job.id === jobId)?.status as string | undefined;
 }
 
 function confirmedFixtureTaskCard(id: string, topic: string, now: string) {
