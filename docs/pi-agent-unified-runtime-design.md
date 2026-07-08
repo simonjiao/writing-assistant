@@ -2,11 +2,11 @@
 
 ## 状态
 
-目标设计，尚未实施。本设计承接 `docs/pi-agent-workflow-runner-design.md`：workflow runner 已迁移到 pi-agent，但 API、对话、对话摘要、批注处理和局部修订仍存在直接调用自研 `AgentRuntime.invokeSkill` 的路径。下一阶段目标是把这些非 workflow agent 能力也迁移到 pi-agent，并删除 `AgentRuntime` 作为业务层直接执行面的语义。
+实施中，核心 runtime 边界已落地。本设计承接 `docs/pi-agent-workflow-runner-design.md`：workflow runner 已迁移到 pi-agent；API、对话、对话摘要、批注处理和局部修订不再直接调用自研 `AgentRuntime.invokeSkill` 或公开的 `SkillExecutor`，而是按上下文绑定 pi-agent session，并通过 `AgentToolExecutor` 执行受限工具。剩余工作主要是 API 大文件拆分、operation store 命名泛化和更完整的非 workflow 上下文压缩策略。
 
 ## 背景
 
-当前系统里有两类 LLM 执行路径：
+迁移前系统里有两类 LLM 执行路径：
 
 - Workflow 路径：`PiWorkflowRunner` 恢复 pi-agent session，计算 `allowedActions`，由 pi-agent 选择动作，再通过 workflow action executor 执行。
 - 非 workflow 路径：API 或 service 直接调用 `container.runtime.invokeSkill(...)`，例如对话路由、对话方案、对话摘要、批注处理、任务卡/大纲/正文局部修订。
@@ -23,7 +23,7 @@
 - 非 workflow LLM 调用也通过 pi-agent session 和限定工具集执行。
 - 删除或重命名 `AgentRuntime`，不再允许 API/service 直接调用 `invokeSkill`。
 - 引入 `SkillExecutor` 作为低层 skill 执行器，只能被 agent tool executor 调用。
-- 引入非 workflow `PiAgentRuntime`，负责 session、allowed tools、tool execution、operation、恢复和上下文压缩。
+- 非 workflow 路径必须显式创建/恢复 pi-agent session，并通过 `AgentToolExecutor` 负责 allowed tools、tool execution、operation 和恢复。
 - 将 dialogue、brief、comment、revision proposal 统一纳入 pi-agent tool 调用和 operation 审计。
 - 保持外部产品 API 基本稳定，不新增通用 `/agents/*` 产品入口。
 - 保留 LLM-backed skill，但它们只能作为 pi-agent tool 的实现细节。
@@ -42,12 +42,12 @@
 ```mermaid
 flowchart TB
   API[Fastify API] --> Router[Deterministic Gating]
-  Router --> NonWorkflow[PiAgentRuntime]
+  Router --> SessionTarget[Pi Session Target]
   API --> Workflow[PiWorkflowRunner]
   Workflow --> WTools[Workflow Tool Executor]
-  NonWorkflow --> Session[PiAgentSessionStore]
+  SessionTarget --> Session[PiAgentSessionStore]
   Workflow --> Session
-  NonWorkflow --> Tools[Agent Tool Executor]
+  SessionTarget --> Tools[Agent Tool Executor]
   WTools --> Tools
   Tools --> SkillExec[SkillExecutor]
   SkillExec --> Skills[SkillRegistry]
@@ -66,14 +66,14 @@ flowchart TB
 |---|---|---|
 | `AgentRuntime` | 删除或改名为 `SkillExecutor` | 只执行 skill，不管理 agent session 或业务决策 |
 | `PiWorkflowRunner` | 保留 | workflow-scoped pi-agent runner |
-| 无 | `PiAgentRuntime` / `NonWorkflowPiAgentRunner` | 非 workflow agent session 和 tool orchestration |
+| 无 | `AgentToolExecutor` + session target helpers | 非 workflow 路径不保留空 runner façade，直接按上下文绑定 pi session 并执行受限工具 |
 | `WorkflowOperationStore` | `AgentOperationStore` | 泛化 operation log，workflow 和非 workflow 共用 |
 | `PiWorkflowActionExecutor` | 保留并接入通用 tool executor | workflow action 继续处理 workflow policy 和 HumanGate |
 
 约束：
 
 - `AppContainer` 不再暴露 `runtime: AgentRuntime`。
-- `bootstrap.ts` 可以创建 `skillExecutor`，但只注入到 workflow action executor 和非 workflow agent runtime。
+- `bootstrap.ts` 可以创建 `skillExecutor`，但只注入到 `AgentToolExecutor`。
 - API route/service 层不得直接依赖 `SkillExecutor`。
 - 只有 agent tool executor 可以调用 `SkillExecutor.executeSkill(...)`。
 
@@ -211,9 +211,10 @@ interface AgentOperation {
 2. brief settle。
 3. 解析 dialogue context。
 4. deterministic gating 生成 `allowedTools`。
-5. 调用 `PiAgentRuntime.runTurn(...)`。
-6. 写 dialogue message、proposal、operation、event。
-7. 返回 `DialogueResponse`。
+5. 创建或恢复当前 context 的 pi-agent session。
+6. 通过 `AgentToolExecutor.executeSkillTool(...)` 调用受限工具。
+7. 写 dialogue message、proposal、operation、event。
+8. 返回 `DialogueResponse`。
 
 对话 agent 可选择：
 
@@ -349,11 +350,11 @@ DELETE /api/articles/:articleId/comments/:commentId/replies/:replyId
 - `AgentRuntime` 删除或重命名为 `SkillExecutor`。
 - `SkillExecutor` 只保留 skill registry、context builder、LLM provider、事件和 schema 校验。
 - `AppContainer` 不再暴露 `runtime`。
-- workflow action executor 改注入 `SkillExecutor`。
+- workflow action executor 改注入 `AgentToolExecutor`，不直接持有 `SkillExecutor`。
 
-### 阶段 2：非 workflow PiAgentRuntime
+### 阶段 2：非 workflow agent tool boundary
 
-- 新增 `PiAgentRuntime` / `NonWorkflowPiAgentRunner`。
+- 新增 agent session target helper，不保留未接入的 `NonWorkflowPiAgentRunner` façade。
 - 新增 allowed tool gating、agent session target、agent operation id。
 - 新增 `AgentToolExecutor`。
 - 建立 contextKind + targetId 的 session 恢复和压缩策略。
@@ -380,19 +381,18 @@ DELETE /api/articles/:articleId/comments/:commentId/replies/:replyId
 ### 阶段 6：删除直连面
 
 - `rg "runtime.invokeSkill|container.runtime"` 在 API/service 中应为零。
-- 测试改为 mock pi-agent/tool executor 或 `SkillExecutor` 边界，不 monkey patch route runtime。
+- 测试改为 mock pi-agent/tool executor，不 monkey patch route runtime 或公开 `SkillExecutor`。
 - 更新模块文档和技术架构图。
 
 ## 文件拆分要求
 
-本迁移必须同步拆分 API 大文件，移动代码和行为修改分提交。
+runtime 边界已经收敛，API 大文件拆分仍是后续必须处理的结构债务。拆分时应移动代码和行为修改分提交。
 
 建议结构：
 
 ```text
 apps/api/src/
   agent/
-    nonWorkflowPiAgentRunner.ts
     agentToolExecutor.ts
     agentOperationIds.ts
     agentSessionTarget.ts

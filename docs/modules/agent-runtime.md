@@ -8,7 +8,7 @@
 
 ## 作用
 
-SkillExecutor 是低层 skill 执行环境，不负责 agent session、业务决策或 artifact 写入策略。当前 workflow action executor、对话接口和批注处理仍会通过它调用具体 skill；目标形态见 `docs/pi-agent-unified-runtime-design.md`，后续非 workflow 调用要迁移到 pi-agent runtime 和 tool executor。
+SkillExecutor 是低层 skill 执行环境，不负责 agent session、业务决策或 artifact 写入策略。它不对 API route/service 暴露，只能作为 `AgentToolExecutor` 的内部依赖。workflow、对话、对话摘要、批注处理和局部修订统一先绑定 pi-agent session，再通过 agent tool 执行具体 skill。
 
 它负责：
 
@@ -21,7 +21,9 @@ SkillExecutor 是低层 skill 执行环境，不负责 agent session、业务决
 ## Skill Execution
 
 ```text
-PiWorkflowActionExecutor / temporary API caller
+PiWorkflowActionExecutor / article dialogue service / comment processor
+  → getOrCreateAgentSession(...)
+  → AgentToolExecutor.executeSkillTool(...)
   → SkillExecutor.executeSkill(skillId, input)
   → SkillRegistry.get(skillId)
   → ContextBuilder.build(...)

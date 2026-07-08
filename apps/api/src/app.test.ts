@@ -9,6 +9,7 @@ import { createContainer } from './bootstrap';
 import { AppConfig } from './config';
 import { mergeDialogueBrief } from './dialogueBrief';
 import { PiWorkflowActionExecutor } from './piWorkflowActionExecutor';
+import type { AgentToolExecutionInput } from './agent/agentToolExecutor';
 
 let dataDir: string | undefined;
 afterEach(async () => { if (dataDir) await rm(dataDir, { recursive: true, force: true }); dataDir = undefined; });
@@ -18,6 +19,17 @@ let fixtureWriteCounter = 0;
 async function saveArticleFixture(container: ReturnType<typeof createContainer>, article: ArticleArtifact): Promise<ArticleArtifact> {
   const operationId = `test_fixture_${article.id}_${fixtureWriteCounter += 1}`;
   return container.stores.artifactStore.updateArticleWithRevision({ article, baseRevision: article.revision, operationId });
+}
+
+function mockAgentToolExecutor(
+  container: ReturnType<typeof createContainer>,
+  handler: (
+    input: AgentToolExecutionInput<unknown>,
+    next: (input: AgentToolExecutionInput<unknown>) => Promise<unknown>,
+  ) => Promise<unknown>,
+): void {
+  const original = container.agentToolExecutor.executeSkillTool.bind(container.agentToolExecutor) as (input: AgentToolExecutionInput<unknown>) => Promise<unknown>;
+  container.agentToolExecutor.executeSkillTool = (async (input: AgentToolExecutionInput<unknown>) => handler(input, original)) as typeof container.agentToolExecutor.executeSkillTool;
 }
 
 function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
@@ -360,11 +372,10 @@ describe('api app', () => {
   it('keeps the original workflow proposal when proposal refresh fails', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
-    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
-      if (skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator did not return valid JSON: {"mode":"proposal"');
-      return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.skillExecutor.executeSkill;
+    mockAgentToolExecutor(container, async (input, next) => {
+      if (input.skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator did not return valid JSON: {"mode":"proposal"');
+      return next(input);
+    });
     const app = createApp(config, container);
     const now = nowIso();
     const taskCard: WritingTaskCard = {
@@ -1352,12 +1363,11 @@ describe('api app', () => {
   it('answers dialogue questions without mutating article artifacts', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
     const invokedSkills: string[] = [];
-    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
-      invokedSkills.push(skillId);
-      return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.skillExecutor.executeSkill;
+    mockAgentToolExecutor(container, async (input, next) => {
+      invokedSkills.push(input.skillId);
+      return next(input);
+    });
     const app = createApp(config, container);
     const now = new Date().toISOString();
     const taskCard: WritingTaskCard = {
@@ -1410,12 +1420,11 @@ describe('api app', () => {
   it('explains task card citation rules from current structured fields', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
     const invokedSkills: string[] = [];
-    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
-      invokedSkills.push(skillId);
-      return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.skillExecutor.executeSkill;
+    mockAgentToolExecutor(container, async (input, next) => {
+      invokedSkills.push(input.skillId);
+      return next(input);
+    });
     const app = createApp(config, container);
     const now = new Date().toISOString();
     const taskCard: WritingTaskCard = {
@@ -1555,11 +1564,10 @@ describe('api app', () => {
   it('returns a readable dialogue response when proposal JSON is truncated', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
-    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
-      if (skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator did not return valid JSON: {"mode":"proposal","operations":[{"type":"revise-outline"');
-      return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.skillExecutor.executeSkill;
+    mockAgentToolExecutor(container, async (input, next) => {
+      if (input.skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator did not return valid JSON: {"mode":"proposal","operations":[{"type":"revise-outline"');
+      return next(input);
+    });
     const app = createApp(config, container);
     const now = new Date().toISOString();
     const taskCard: WritingTaskCard = {
@@ -1597,11 +1605,10 @@ describe('api app', () => {
   it('returns a readable dialogue response when coordinator output violates the context contract', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
-    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
-      if (skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator returned empty operation.blockId.');
-      return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.skillExecutor.executeSkill;
+    mockAgentToolExecutor(container, async (input, next) => {
+      if (input.skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator returned empty operation.blockId.');
+      return next(input);
+    });
     const app = createApp(config, container);
     const now = new Date().toISOString();
     const taskCard: WritingTaskCard = {
@@ -1643,15 +1650,14 @@ describe('api app', () => {
   it('sends compact dialogue brief to the coordinator instead of full assistant history', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
     const coordinatorInputs: Array<{ conversation?: Array<{ role: string; content: string }>; conversationBrief?: DialogueBrief }> = [];
-    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
-      if (skillId === 'dialogue-coordinator') {
-        coordinatorInputs.push(input as { conversation?: Array<{ role: string; content: string }>; conversationBrief?: DialogueBrief });
+    mockAgentToolExecutor(container, async (input, next) => {
+      if (input.skillId === 'dialogue-coordinator') {
+        coordinatorInputs.push(input.input as { conversation?: Array<{ role: string; content: string }>; conversationBrief?: DialogueBrief });
         return { mode: 'proposal', message: '准备更新大纲。', summary: '修订大纲', operations: [{ type: 'revise-outline', instruction: '补充大闹厨房等关键情节。' }], warnings: [] };
       }
-      return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.skillExecutor.executeSkill;
+      return next(input);
+    });
     const app = createApp(config, container);
     const now = new Date().toISOString();
     const taskCard: WritingTaskCard = {
@@ -1708,12 +1714,11 @@ describe('api app', () => {
   it('fails closed when dialogue brief updates fail instead of extracting requirements locally', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
-    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
-      if (skillId === 'dialogue-brief-updater') throw new Error('brief updater unavailable');
-      if (skillId === 'dialogue-coordinator') return { mode: 'proposal', message: '准备修改。', summary: '修订任务', operations: [{ type: 'revise-outline', instruction: '补充大闹厨房。' }], warnings: [] };
-      return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.skillExecutor.executeSkill;
+    mockAgentToolExecutor(container, async (input, next) => {
+      if (input.skillId === 'dialogue-brief-updater') throw new Error('brief updater unavailable');
+      if (input.skillId === 'dialogue-coordinator') return { mode: 'proposal', message: '准备修改。', summary: '修订任务', operations: [{ type: 'revise-outline', instruction: '补充大闹厨房。' }], warnings: [] };
+      return next(input);
+    });
     const app = createApp(config, container);
     const now = new Date().toISOString();
     const taskCard: WritingTaskCard = {
@@ -1759,18 +1764,17 @@ describe('api app', () => {
     const config = testConfig();
     const container = createContainer(config);
     const coordinatorInputs: Array<{ conversationBrief?: DialogueBrief }> = [];
-    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
-    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
-      if (skillId === 'dialogue-brief-updater') {
-        const message = (input as { message: string }).message;
+    mockAgentToolExecutor(container, async (input, next) => {
+      if (input.skillId === 'dialogue-brief-updater') {
+        const message = (input.input as { message: string }).message;
         return { activeRequirements: [{ kind: 'requirement', text: message }], evidenceNotes: [], recentUserIntents: [message], supersededRequirements: [], conflicts: [] };
       }
-      if (skillId === 'dialogue-coordinator') {
-        coordinatorInputs.push(input as { conversationBrief?: DialogueBrief });
+      if (input.skillId === 'dialogue-coordinator') {
+        coordinatorInputs.push(input.input as { conversationBrief?: DialogueBrief });
         return { mode: 'proposal', message: '准备修改。', summary: '修订任务', operations: [{ type: 'revise-outline', instruction: '补充收束段。' }], warnings: [] };
       }
-      return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.skillExecutor.executeSkill;
+      return next(input);
+    });
     const app = createApp(config, container);
     const taskCard: WritingTaskCard = {
       id: 'task-dialogue-brief-stale',

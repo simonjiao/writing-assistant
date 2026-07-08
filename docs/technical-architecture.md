@@ -6,10 +6,13 @@
 flowchart TB
   UI[React/Vite Writing Workspace] --> API[Fastify API]
   API --> Runner[PiWorkflowRunner]
+  API --> ArticleAgent[Article-scoped Agent Tools]
   Runner --> Planner[AllowedActionPlanner]
   Runner --> Agent[pi-agent-core Agent]
   Runner --> Executor[WorkflowActionExecutor]
-  Executor --> SkillExec[SkillExecutor]
+  Executor --> ToolExec[AgentToolExecutor]
+  ArticleAgent --> ToolExec
+  ToolExec --> SkillExec[SkillExecutor]
   SkillExec --> Skills[SkillRegistry]
   SkillExec --> Context[ContextBuilder]
   SkillExec --> LLM[OpenAI-compatible or Mock LLM]
@@ -32,7 +35,7 @@ flowchart TB
 | API | Fastify | REST、SSE、WebSocket、配置、容器组装 |
 | Workflow | PiWorkflowRunner | 读取当前状态，生成 allowed actions，推进 `writing-autopilot` |
 | Agent | pi-agent-core Agent | 在 runner 给定的动作集合内选择下一步 |
-| Execution | WorkflowActionExecutor | 执行幂等工具，写入 task card、outline、section、review artifact |
+| Execution | WorkflowActionExecutor + AgentToolExecutor | 执行幂等工具，写入 task card、outline、section、review artifact；所有 skill 调用统一穿过 agent tool 边界 |
 | HumanGate | HumanGateStore | 独立保存用户确认点，例如确认任务卡、覆盖当前大纲 |
 | Operation | WorkflowOperationStore | 保存幂等 operationId、工具状态和 article revision；workflow 工具绑定 run，普通对话 proposal 写入绑定 article/user |
 | Skill | SkillRegistry | 管理任务卡、大纲、章节、对话、批注处理等能力包 |
