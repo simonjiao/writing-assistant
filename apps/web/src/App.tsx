@@ -2,6 +2,7 @@ import { type CSSProperties, type KeyboardEvent, useEffect, useMemo, useRef, use
 import { api } from './api';
 import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, ArticleSummary, DialogueBriefStatus, DialogueContextKind, DialogueMessage, DialogueResponse, DomainProfileRecommendation, DomainProfileSelection, DomainProfileSummary, RevisionOperation, RevisionProposal, RunResponse, TaskCardFollowUpPrompt, WorkflowRun, WritingStandardSelection, WritingStandardSummary, WritingTaskCard, WritingWorkspace } from './types';
 import { WorkflowSupportCard } from './WorkflowSupportCard';
+import { WorkflowDialogueState, activeWorkflowDialogueProposal, applyDialogueResponseToDialogueState, applyRunResponseToDialogueState } from './workflowDialogueState';
 
 const userIdStorageKey = 'writing-assistant.user-id';
 const terminalStatuses = new Set(['waiting', 'completed', 'failed', 'cancelled']);
@@ -224,21 +225,25 @@ export function App() {
   const outlineGenerated = Boolean(visibleArticle?.outline.length);
   const visibleComments = useMemo(() => commentsForExistingBlocks(visibleArticle), [visibleArticle]);
   const dialogContext = useMemo(() => buildDialogContext(taskCardDialogTarget, visibleArticle, outlineWholeSelected, selectedOutline, selectedBlock), [taskCardDialogTarget, visibleArticle, outlineWholeSelected, selectedOutline, selectedBlock]);
-  const activeDialogueProposal = dialogueResponse?.proposal?.status === 'pending' ? dialogueResponse.proposal : pendingProposals[0];
+  const workflowDialogueState: WorkflowDialogueState = { pendingProposals, dialogueMessages, dialogueResponse, proposalDirty };
+  const activeDialogueProposal = activeWorkflowDialogueProposal(workflowDialogueState);
   const workflowActive = Boolean(lastRun && activeStatuses.has(lastRun.run.status));
   const statusBusy = busy || workflowActive;
   const writeBusy = busy || workflowActive;
   const showGlobalProgress = progressVisible && !sectionGeneration;
 
-  function applyRunResponse(response: RunResponse) {
+  function setWorkflowDialogueState(next: WorkflowDialogueState) {
+    setPendingProposals(next.pendingProposals);
+    setDialogueMessages(next.dialogueMessages);
+    setDialogueResponse(next.dialogueResponse);
+    setProposalDirty(next.proposalDirty);
+  }
+
+  function applyRunResponse(response: RunResponse, dialogueState = workflowDialogueState) {
     setLastRun(response);
     setProgressVisible(true);
     window.clearTimeout(progressDismissTimer.current);
-    if (response.revisionProposals) {
-      setPendingProposals(response.revisionProposals);
-      if (!response.revisionProposals.length) setProposalDirty(false);
-    }
-    if (response.messages) setDialogueMessages(response.messages);
+    setWorkflowDialogueState(applyRunResponseToDialogueState(dialogueState, response));
     if (response.article) {
       const updatedArticle = response.article;
       setArticle((current) => (!current || current.id === updatedArticle.id || taskCardDialogTarget === 'new') ? updatedArticle : current);
@@ -693,10 +698,7 @@ export function App() {
     }
   }
   function applyDialogueResponse(response: DialogueResponse) {
-    if (response.messages) setDialogueMessages(response.messages);
-    if (response.mode === 'discuss' && activeDialogueProposal) setProposalDirty(true);
-    if (response.mode === 'proposal' || response.mode === 'applied') setProposalDirty(false);
-    setDialogueResponse(response.mode === 'answer' || response.mode === 'clarify' || response.mode === 'discuss' ? undefined : response);
+    const nextDialogueState = applyDialogueResponseToDialogueState(workflowDialogueState, response);
     if (response.article) {
       setArticle(response.article);
       void refreshArticleSummaries(response.article.workspaceId).catch((err) => setError(err instanceof Error ? err.message : String(err)));
@@ -710,7 +712,10 @@ export function App() {
         operations: response.operations,
         reviewArtifacts: response.reviewArtifacts,
         revisionProposals: response.revisionProposals,
-      });
+        messages: response.messages,
+      }, nextDialogueState);
+    } else {
+      setWorkflowDialogueState(nextDialogueState);
     }
   }
   async function applyDialogueProposal(proposal: RevisionProposal) {
