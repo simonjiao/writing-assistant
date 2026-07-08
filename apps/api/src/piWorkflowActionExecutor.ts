@@ -15,7 +15,7 @@ import {
   WorkflowActionExecutionInput,
   WorkflowActionExecutionResult,
   WorkflowActionExecutor,
-  WorkflowOperation,
+  AgentOperation,
   WorkflowRun,
   WritingTaskCard,
 } from '@wa/core';
@@ -56,7 +56,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
 
   async execute(input: WorkflowActionExecutionInput): Promise<WorkflowActionExecutionResult> {
     await this.assertAuthorizedAction(input.run, input.action);
-    const existing = await this.deps.stores.workflowOperationStore.getOperation(input.action.operationId);
+    const existing = await this.deps.stores.agentOperationStore.getOperation(input.action.operationId);
     if (existing?.status === 'completed') return { summary: `Operation already completed: ${input.action.operationId}` };
     if (existing?.status === 'running') throw new Error(`Workflow operation is already running: ${input.action.operationId}`);
     const operation = await this.startOperation(input.run, input.action);
@@ -354,8 +354,8 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     return { article, summary: '统稿报告已生成。' };
   }
 
-  private async startOperation(run: WorkflowRun, action: AllowedAction): Promise<WorkflowOperation> {
-    return this.deps.stores.workflowOperationStore.startOperation({
+  private async startOperation(run: WorkflowRun, action: AllowedAction): Promise<AgentOperation> {
+    return this.deps.stores.agentOperationStore.startOperation({
       operationId: action.operationId,
       runId: run.id,
       userId: run.metadata.userId,
@@ -370,12 +370,12 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     });
   }
 
-  private async completeOperation(operation: WorkflowOperation, article?: ArticleArtifact): Promise<void> {
-    await this.deps.stores.workflowOperationStore.updateOperation({ ...operation, status: 'completed', articleRevisionAfter: article?.revision, resultRef: article?.id });
+  private async completeOperation(operation: AgentOperation, article?: ArticleArtifact): Promise<void> {
+    await this.deps.stores.agentOperationStore.updateOperation({ ...operation, status: 'completed', articleRevisionAfter: article?.revision, resultRef: article?.id });
   }
 
-  private async failOperation(operation: WorkflowOperation, error: unknown): Promise<void> {
-    await this.deps.stores.workflowOperationStore.updateOperation({ ...operation, status: 'failed', error: error instanceof Error ? error.message : String(error) });
+  private async failOperation(operation: AgentOperation, error: unknown): Promise<void> {
+    await this.deps.stores.agentOperationStore.updateOperation({ ...operation, status: 'failed', error: error instanceof Error ? error.message : String(error) });
   }
 
   private async emitOperationEvent(run: WorkflowRun, action: AllowedAction, type: 'workflow.operation.started' | 'workflow.operation.completed' | 'workflow.operation.failed' | 'tool.started' | 'tool.completed' | 'tool.failed', payload: Record<string, unknown> = {}): Promise<void> {

@@ -148,7 +148,7 @@ describe('api app', () => {
     expect(sessions[0].articleId).toBe(body.article.id);
     expect(sessions[0].messages.length).toBeGreaterThan(0);
 
-    const operations = await container.stores.workflowOperationStore.listOperations({ runId: body.run.id });
+    const operations = await container.stores.agentOperationStore.listOperations({ runId: body.run.id });
     expect(operations.map((operation) => operation.toolName).sort()).toEqual(['ask_followup', 'build_task_card_draft', 'create_task_card_draft']);
     expect(operations.every((operation) => operation.status === 'completed')).toBe(true);
     expect(operations.find((operation) => operation.toolName === 'build_task_card_draft')?.agentSessionId).toBe(sessions[0].id);
@@ -245,7 +245,7 @@ describe('api app', () => {
     };
     const executor = new PiWorkflowActionExecutor({ stores: container.stores, agentToolExecutor: container.agentToolExecutor });
     await expect(executor.execute({ policy: { id: 'writing-autopilot', goal: '', allowedActionPolicy: '', humanGatePolicy: '', completionPolicy: '' }, run, action: forgedAction })).rejects.toThrow('Unauthorized workflow action');
-    expect(await container.stores.workflowOperationStore.listOperations({ runId: run.id })).toEqual([]);
+    expect(await container.stores.agentOperationStore.listOperations({ runId: run.id })).toEqual([]);
     await container.close();
   });
 
@@ -330,7 +330,7 @@ describe('api app', () => {
     expect(resumedBody.article.blocks).toHaveLength(0);
     expect(resumedBody.messages.map((message: { role: string }) => message.role).slice(-2)).toEqual(['user', 'assistant']);
     expect(resumedBody.messages.at(-1).content).toContain('不会继续写入正文');
-    const operations = await container.stores.workflowOperationStore.listOperations({ runId: body.run.id });
+    const operations = await container.stores.agentOperationStore.listOperations({ runId: body.run.id });
     expect(operations.map((operation) => operation.toolName).sort()).toEqual(['create_revision_proposal', 'review_task_card_outline_consistency']);
     expect(operations.some((operation) => operation.toolName === 'write_next_section' || operation.toolName === 'write_section')).toBe(false);
 
@@ -494,7 +494,7 @@ describe('api app', () => {
     expect(body.revisionProposals[0]).toMatchObject({ runId: body.run.id, contextKind: 'block' });
     expect(body.revisionProposals[0].operations[0]).toMatchObject({ type: 'patch-block', blockId: 'blk-polish-1' });
     expect(body.article.blocks[0].text).toBe('这是一段已经生成但需要统稿修订的正文。');
-    const operations = await container.stores.workflowOperationStore.listOperations({ runId: body.run.id });
+    const operations = await container.stores.agentOperationStore.listOperations({ runId: body.run.id });
     expect(operations.map((operation) => operation.toolName).sort()).toEqual(['create_revision_proposal', 'generate_polish_report', 'review_task_card_outline_consistency']);
     await app.close();
   });
@@ -535,7 +535,7 @@ describe('api app', () => {
       status: 'open',
     });
     expect(body.blocks[0].text).toBe(article.blocks[0].text);
-    const operations = await container.stores.workflowOperationStore.listOperations({ articleId: article.id, userId: 'comment-user' });
+    const operations = await container.stores.agentOperationStore.listOperations({ articleId: article.id, userId: 'comment-user' });
     expect(operations).toEqual(expect.arrayContaining([expect.objectContaining({
       toolName: 'create_article_comment',
       status: 'completed',
@@ -602,7 +602,7 @@ describe('api app', () => {
     expect(body.run.state.commentProcessResult).toMatchObject({ processedCount: 1, revised: 1 });
     expect(body.article.comments[0]).toMatchObject({ status: 'resolved', resolutionKind: 'revision' });
     expect(body.article.blocks[0].text).not.toContain('触柱而亡');
-    const operations = await container.stores.workflowOperationStore.listOperations({ runId: body.run.id });
+    const operations = await container.stores.agentOperationStore.listOperations({ runId: body.run.id });
     expect(operations.map((operation) => operation.toolName).sort()).toEqual(['process_article_comments', 'resolve_article_comment']);
     expect(operations.find((operation) => operation.toolName === 'process_article_comments')?.articleRevisionBefore).toBe(created.json().revision);
     const commentSessions = await container.stores.piAgentSessionStore.listSessions({ userId: 'workflow-comment-user', articleId: article.id, contextKind: 'article-comment' });
@@ -938,7 +938,7 @@ describe('api app', () => {
     const deleteResponse = await app.inject({ method: 'DELETE', url: `/api/articles/${article.id}`, payload: { userId: 'delete-user', baseRevision: article.revision } });
     expect(deleteResponse.statusCode).toBe(200);
     expect(deleteResponse.json().deletedAt).toBeTruthy();
-    const operations = await container.stores.workflowOperationStore.listOperations({ articleId: article.id, userId: 'delete-user' });
+    const operations = await container.stores.agentOperationStore.listOperations({ articleId: article.id, userId: 'delete-user' });
     expect(operations).toEqual(expect.arrayContaining([expect.objectContaining({
       toolName: 'delete_article',
       status: 'completed',
@@ -1067,7 +1067,7 @@ describe('api app', () => {
     expect(body.outline[0].title).toBe('新标题');
     expect(body.outline[0].goal).toBe('新目标');
     expect(body.versions[body.versions.length - 1].reason).toBe('编辑大纲章节：新标题');
-    const operations = await container.stores.workflowOperationStore.listOperations({ articleId: article.id, userId: 'outline-user' });
+    const operations = await container.stores.agentOperationStore.listOperations({ articleId: article.id, userId: 'outline-user' });
     expect(operations).toEqual(expect.arrayContaining([expect.objectContaining({
       toolName: 'manual_edit_outline_item',
       status: 'completed',
@@ -1148,7 +1148,7 @@ describe('api app', () => {
     expect(body.article.themeTags).toHaveLength(0);
     expect(body.article.versions[body.article.versions.length - 1].reason).toContain('清空下游内容');
     expect(body.proposal.status).toBe('applied');
-    const operations = await container.stores.workflowOperationStore.listOperations({ articleId: article.id, userId: 'consistency-user' });
+    const operations = await container.stores.agentOperationStore.listOperations({ articleId: article.id, userId: 'consistency-user' });
     expect(operations).toEqual(expect.arrayContaining([expect.objectContaining({
       toolName: 'apply_revise-task-card',
       status: 'completed',
@@ -1256,7 +1256,7 @@ describe('api app', () => {
     expect(body.run.status).toBe('completed');
     expect(body.article.taskCard.status).toBe('confirmed');
     expect(body.article.versions.at(-1).reason).toBe('HumanGate 确认任务卡');
-    const operations = await container.stores.workflowOperationStore.listOperations({ runId: startedBody.run.id });
+    const operations = await container.stores.agentOperationStore.listOperations({ runId: startedBody.run.id });
     expect(operations).toEqual(expect.arrayContaining([expect.objectContaining({
       toolName: 'human_gate_accept',
       status: 'completed',
@@ -1311,7 +1311,7 @@ describe('api app', () => {
     expect(body.humanGates.find((gate: { id: string }) => gate.id === gateId).status).toBe('superseded');
     expect(body.article.taskCard.status).toBe('draft');
     expect(body.article.taskCard.writingGoal).toBe('文章已经被外部修改过。');
-    const operations = await container.stores.workflowOperationStore.listOperations({ runId: startedBody.run.id });
+    const operations = await container.stores.agentOperationStore.listOperations({ runId: startedBody.run.id });
     expect(operations.map((operation) => operation.toolName)).not.toContain('human_gate_accept');
     const events = await container.stores.eventTraceStore.listByRun(startedBody.run.id);
     expect(events).toEqual(expect.arrayContaining([expect.objectContaining({
@@ -1706,8 +1706,59 @@ describe('api app', () => {
     expect(coordinatorInputs[1].conversationBrief?.activeRequirements.at(-1)?.text).toContain('大闹厨房');
     const briefSessions = await container.stores.piAgentSessionStore.listSessions({ userId: 'dialogue-brief-user', articleId: article.id, contextKind: 'dialogue-brief' });
     expect(briefSessions.length).toBeGreaterThan(0);
-    const briefOperations = await container.stores.workflowOperationStore.listOperations({ agentSessionId: briefSessions[0].id });
+    const briefOperations = await container.stores.agentOperationStore.listOperations({ agentSessionId: briefSessions[0].id });
     expect(briefOperations.map((operation) => operation.toolName)).toContain('update_dialogue_brief');
+    await app.close();
+  });
+
+  it('compacts non-workflow pi session messages and records tool trace summaries', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-session-compact',
+      topic: '司棋人物文章',
+      writingGoal: '撰写司棋人物文章。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: ['司棋'], themes: ['司棋'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'session-compact-user', name: '上下文压缩工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'session-compact-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+
+    for (let index = 0; index < 16; index += 1) {
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/articles/${article.id}/dialogue`,
+        payload: { userId: 'session-compact-user', message: `当前写作标准是什么？第 ${index} 轮`, context: { kind: 'task-card' } },
+      });
+      expect(response.statusCode).toBe(200);
+    }
+
+    const [compactedSession] = await container.stores.piAgentSessionStore.listSessions({ userId: 'session-compact-user', articleId: article.id, contextKind: 'task-card' });
+    expect(compactedSession.messages.length).toBeLessThanOrEqual(24);
+    expect(compactedSession.compactSummary).toContain('第 0 轮');
+
+    const proposalResponse = await app.inject({
+      method: 'POST',
+      url: `/api/articles/${article.id}/dialogue`,
+      payload: { userId: 'session-compact-user', message: '请修改任务卡，强调司棋不只是反抗者。', context: { kind: 'task-card' } },
+    });
+    expect(proposalResponse.statusCode).toBe(200);
+    expect(proposalResponse.json().mode).toBe('proposal');
+
+    const [tracedSession] = await container.stores.piAgentSessionStore.listSessions({ userId: 'session-compact-user', articleId: article.id, contextKind: 'task-card' });
+    expect(tracedSession.messages.length).toBeLessThanOrEqual(24);
+    expect(tracedSession.compactSummary).toContain('第 0 轮');
+    expect(tracedSession.toolTraceSummary).toContain('create_revision_proposal');
+    expect(tracedSession.toolTraceSummary).toContain('completed');
     await app.close();
   });
 

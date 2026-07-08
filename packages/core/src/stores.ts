@@ -18,7 +18,7 @@ import {
   Session,
   UserWritingProfile,
   WritingWorkspace,
-  WorkflowOperation,
+  AgentOperation,
   WorkflowRun,
 } from './types';
 
@@ -65,11 +65,11 @@ export interface HumanGateStore {
   updateGate(gate: HumanGate): Promise<HumanGate>;
 }
 
-export interface WorkflowOperationStore {
-  startOperation(input: Omit<WorkflowOperation, 'status' | 'createdAt' | 'updatedAt'>): Promise<WorkflowOperation>;
-  getOperation(operationId: string): Promise<WorkflowOperation | undefined>;
-  listOperations(filter?: { runId?: string; agentSessionId?: string; articleId?: string; userId?: string; statuses?: AgentOperationStatus[] }): Promise<WorkflowOperation[]>;
-  updateOperation(operation: WorkflowOperation): Promise<WorkflowOperation>;
+export interface AgentOperationStore {
+  startOperation(input: Omit<AgentOperation, 'status' | 'createdAt' | 'updatedAt'>): Promise<AgentOperation>;
+  getOperation(operationId: string): Promise<AgentOperation | undefined>;
+  listOperations(filter?: { runId?: string; agentSessionId?: string; articleId?: string; userId?: string; statuses?: AgentOperationStatus[] }): Promise<AgentOperation[]>;
+  updateOperation(operation: AgentOperation): Promise<AgentOperation>;
 }
 
 export interface ReviewArtifactStore {
@@ -139,7 +139,7 @@ export interface ExternalStores {
   artifactStore: ArtifactStore;
   piAgentSessionStore: PiAgentSessionStore;
   humanGateStore: HumanGateStore;
-  workflowOperationStore: WorkflowOperationStore;
+  agentOperationStore: AgentOperationStore;
   reviewArtifactStore: ReviewArtifactStore;
   revisionProposalStore: RevisionProposalStore;
   dialogueMessageStore: DialogueMessageStore;

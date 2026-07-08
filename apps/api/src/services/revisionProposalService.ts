@@ -69,7 +69,7 @@ export function createRevisionProposalService(deps: {
     let runPayload: Record<string, unknown> | undefined;
     for (const [operationIndex, operation] of proposal.operations.entries()) {
       const operationId = revisionProposalOperationId(proposal.id, operationIndex);
-      const operationRecord = await container.stores.workflowOperationStore.startOperation({
+      const operationRecord = await container.stores.agentOperationStore.startOperation({
         operationId,
         runId: proposal.runId,
         userId,
@@ -88,9 +88,9 @@ export function createRevisionProposalService(deps: {
       let result: Awaited<ReturnType<typeof applyRevisionOperation>>;
       try {
         result = await applyRevisionOperation(article, operation, userId, sessionId, { baseRevision: article.revision, operationId });
-        await container.stores.workflowOperationStore.updateOperation({ ...operationRecord, status: 'completed', error: undefined, articleRevisionAfter: result.article.revision, resultRef: result.article.id });
+        await container.stores.agentOperationStore.updateOperation({ ...operationRecord, status: 'completed', error: undefined, articleRevisionAfter: result.article.revision, resultRef: result.article.id });
       } catch (error) {
-        await container.stores.workflowOperationStore.updateOperation({ ...operationRecord, status: 'failed', error: error instanceof Error ? error.message : String(error) });
+        await container.stores.agentOperationStore.updateOperation({ ...operationRecord, status: 'failed', error: error instanceof Error ? error.message : String(error) });
         throw error;
       }
       if (result.runPayload) runPayload = result.runPayload;

@@ -12,6 +12,7 @@ import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfi
 import { getWritingStandardDisplaySummary, getWritingStandardSummary, resolveWritingStandardSelection, WritingStandardSelectionRequest } from './writingStandards';
 import { resolveUserContext } from './userContext';
 import { agentOperationId } from './agent/agentOperationIds';
+import { appendAgentSessionMessages } from './agent/agentSessionCompaction';
 import { AgentSessionTarget, getOrCreateAgentSession } from './agent/agentSessionTarget';
 import { registerDialogueRoutes } from './routes/dialogueRoutes';
 import { createRevisionProposalService, RevisionProposalStaleError, type RevisionProposalService } from './services/revisionProposalService';
@@ -256,7 +257,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const baseRevision = parseBaseRevision(body.baseRevision);
     if (baseRevision === undefined) return reply.code(400).send({ error: 'baseRevision is required.' });
     const operationId = articleMutationOperationId('delete', { articleId, baseRevision });
-    const existingOperation = await container.stores.workflowOperationStore.getOperation(operationId);
+    const existingOperation = await container.stores.agentOperationStore.getOperation(operationId);
     if (existingOperation?.status === 'completed') {
       const deletedArticle = await container.stores.artifactStore.getArticleIncludingDeleted(articleId);
       if (!deletedArticle) return reply.code(404).send({ error: 'Article not found' });
@@ -309,7 +310,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const existing = article.outline.find((item) => item.id === sectionId);
     if (!existing) return reply.code(404).send({ error: 'Outline section not found' });
     const operationId = manualOutlineEditOperationId(article.id, sectionId, baseRevision, title, goal);
-    const existingOperation = await container.stores.workflowOperationStore.getOperation(operationId);
+    const existingOperation = await container.stores.agentOperationStore.getOperation(operationId);
     if (existingOperation?.status === 'completed') {
       const currentArticle = await container.stores.artifactStore.getArticle(article.id);
       return currentArticle ? withWritingStandardSummary(currentArticle) : currentArticle;
@@ -325,8 +326,8 @@ export function createApp(config: AppConfig, container: AppContainer) {
       articleRevisionBefore: baseRevision,
     };
     const runningOperation = existingOperation?.status === 'failed'
-      ? await container.stores.workflowOperationStore.updateOperation({ ...existingOperation, ...operationInput, status: 'running', error: undefined })
-      : await container.stores.workflowOperationStore.startOperation(operationInput);
+      ? await container.stores.agentOperationStore.updateOperation({ ...existingOperation, ...operationInput, status: 'running', error: undefined })
+      : await container.stores.agentOperationStore.startOperation(operationInput);
     let updated: ArticleArtifact;
     let invalidation: ReturnType<typeof clearBlocksForOutlineSections>;
     try {
@@ -334,10 +335,10 @@ export function createApp(config: AppConfig, container: AppContainer) {
       article.outline = article.outline.map((item) => item.id === sectionId ? { ...item, title, goal, status: item.status === 'written' ? 'confirmed' : item.status } : item);
       updated = await container.stores.artifactStore.updateArticleWithRevision({ article, baseRevision, operationId });
       await container.stores.artifactStore.commitVersion(article.id, invalidation.blockCount ? `编辑大纲章节并清空本节正文：${title}` : `编辑大纲章节：${title}`, 'user');
-      await container.stores.workflowOperationStore.updateOperation({ ...runningOperation, status: 'completed', error: undefined, articleRevisionAfter: updated.revision, resultRef: updated.id });
+      await container.stores.agentOperationStore.updateOperation({ ...runningOperation, status: 'completed', error: undefined, articleRevisionAfter: updated.revision, resultRef: updated.id });
       await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, sectionId, reason: 'outline-section-edited', invalidated: invalidation, userId, operationId }, createdAt: nowIso() });
     } catch (error) {
-      await container.stores.workflowOperationStore.updateOperation({ ...runningOperation, status: 'failed', error: error instanceof Error ? error.message : String(error) });
+      await container.stores.agentOperationStore.updateOperation({ ...runningOperation, status: 'failed', error: error instanceof Error ? error.message : String(error) });
       if (error instanceof ArticleRevisionConflictError) return reply.code(409).send({ error: error.message });
       throw error;
     }
@@ -822,14 +823,11 @@ async function appendDialoguePiMessages(container: AppContainer, article: Articl
     if (message.proposalId) serialized.proposalId = message.proposalId;
     return serialized;
   });
-  const session = await container.stores.piAgentSessionStore.saveSession({
-    ...existing,
+  const updatedSession = await container.stores.piAgentSessionStore.updateSession(existing.id, {
     workspaceId: article.workspaceId,
     baseArticleRevision: article.revision,
-    messages: [...existing.messages, ...serializedMessages],
-    lockVersion: existing.lockVersion + 1,
-    updatedAt: now,
   });
+  const session = await appendAgentSessionMessages(container.stores, updatedSession, serializedMessages);
   await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'pi.session.updated', payload: { userId, articleId: article.id, piAgentSessionId: session.id, contextKind: target.contextKind, targetId: target.targetId, reason: 'dialogue-turn' }, createdAt: nowIso() });
 }
 
@@ -1077,7 +1075,7 @@ async function applyAuditedArticleMutation(
     mutate: (article: ArticleArtifact) => void;
   },
 ): Promise<AuditedArticleMutationResult> {
-  const existingOperation = await container.stores.workflowOperationStore.getOperation(input.operationId);
+  const existingOperation = await container.stores.agentOperationStore.getOperation(input.operationId);
   if (existingOperation?.status === 'completed') {
     const currentArticle = await container.stores.artifactStore.getArticle(input.article.id);
     if (!currentArticle) throw new Error('Article not found after completed article mutation.');
@@ -1096,16 +1094,16 @@ async function applyAuditedArticleMutation(
     articleRevisionBefore: input.baseRevision,
   };
   const runningOperation = existingOperation?.status === 'failed'
-    ? await container.stores.workflowOperationStore.updateOperation({ ...existingOperation, ...operationInput, status: 'running', error: undefined })
-    : await container.stores.workflowOperationStore.startOperation(operationInput);
+    ? await container.stores.agentOperationStore.updateOperation({ ...existingOperation, ...operationInput, status: 'running', error: undefined })
+    : await container.stores.agentOperationStore.startOperation(operationInput);
   try {
     input.mutate(input.article);
     const updated = await container.stores.artifactStore.updateArticleWithRevision({ article: input.article, baseRevision: input.baseRevision, operationId: input.operationId });
-    await container.stores.workflowOperationStore.updateOperation({ ...runningOperation, status: 'completed', error: undefined, articleRevisionAfter: updated.revision, resultRef: input.resultRef ?? updated.id });
+    await container.stores.agentOperationStore.updateOperation({ ...runningOperation, status: 'completed', error: undefined, articleRevisionAfter: updated.revision, resultRef: input.resultRef ?? updated.id });
     await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { ...input.eventPayload, operationId: input.operationId }, createdAt: nowIso() });
     return { ok: true, article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated };
   } catch (error) {
-    await container.stores.workflowOperationStore.updateOperation({ ...runningOperation, status: 'failed', error: error instanceof Error ? error.message : String(error) });
+    await container.stores.agentOperationStore.updateOperation({ ...runningOperation, status: 'failed', error: error instanceof Error ? error.message : String(error) });
     if (error instanceof ArticleRevisionConflictError) return { ok: false, statusCode: 409, error: error.message };
     throw error;
   }
@@ -1198,7 +1196,7 @@ async function applyAcceptedHumanGate(container: AppContainer, gate: Awaited<Ret
   if (gate.targetKind !== 'task-card') throw new Error(`Unsupported accepted HumanGate target: ${gate.targetKind}`);
   if (!article.taskCard) throw new Error('Article task card not found for HumanGate.');
   const operationId = `op_human_gate_${gate.id}`;
-  const operation = await container.stores.workflowOperationStore.startOperation({
+  const operation = await container.stores.agentOperationStore.startOperation({
     operationId,
     runId: gate.runId,
     userId: gate.userId,
@@ -1223,11 +1221,11 @@ async function applyAcceptedHumanGate(container: AppContainer, gate: Awaited<Ret
       operationId,
     });
     await container.stores.artifactStore.commitVersion(article.id, 'HumanGate 确认任务卡', 'user');
-    await container.stores.workflowOperationStore.updateOperation({ ...operation, status: 'completed', error: undefined, articleRevisionAfter: updated.revision, resultRef: updated.id });
+    await container.stores.agentOperationStore.updateOperation({ ...operation, status: 'completed', error: undefined, articleRevisionAfter: updated.revision, resultRef: updated.id });
     await container.stores.eventTraceStore.append({ id: newId('evt'), runId: gate.runId, type: 'artifact.updated', payload: { articleId: article.id, reason: 'human-gate-task-card-confirmed', userId: gate.userId, gateId: gate.id, operationId }, createdAt: nowIso() });
     return { articleId: updated.id, revision: updated.revision, taskCardStatus: updated.taskCard?.status, operationId };
   } catch (error) {
-    await container.stores.workflowOperationStore.updateOperation({ ...operation, status: 'failed', error: error instanceof Error ? error.message : String(error) });
+    await container.stores.agentOperationStore.updateOperation({ ...operation, status: 'failed', error: error instanceof Error ? error.message : String(error) });
     throw error;
   }
 }
@@ -1350,7 +1348,7 @@ async function enrichRun(container: AppContainer, runId: string) {
   const [events, humanGates, operations, reviewArtifacts, revisionProposals] = await Promise.all([
     container.stores.eventTraceStore.listByRun(run.id),
     container.stores.humanGateStore.listGates({ runId: run.id }),
-    container.stores.workflowOperationStore.listOperations({ runId: run.id }),
+    container.stores.agentOperationStore.listOperations({ runId: run.id }),
     container.stores.reviewArtifactStore.listReviewArtifacts({ runId: run.id }),
     article ? container.stores.revisionProposalStore.listPendingProposals(article.id, run.metadata.userId) : Promise.resolve([]),
   ]);

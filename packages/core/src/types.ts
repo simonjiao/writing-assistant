@@ -368,9 +368,6 @@ export interface AgentOperation {
   updatedAt: string;
 }
 
-export type WorkflowOperationStatus = AgentOperationStatus;
-export type WorkflowOperation = AgentOperation;
-
 export type ReviewArtifactType = 'consistency-review' | 'polish-report';
 export type ReviewFindingSeverity = 'info' | 'warning' | 'blocking';
 

@@ -33,9 +33,9 @@ import {
   SessionStore,
   StateStore,
   UserWritingProfile,
-  WorkflowOperation,
+  AgentOperation,
   AgentOperationStatus,
-  WorkflowOperationStore,
+  AgentOperationStore,
   WorkspaceStore,
   WritingWorkspace,
   WorkflowRun,
@@ -154,16 +154,16 @@ export class SqliteHumanGateStore implements HumanGateStore {
   close() { this.db.close(); }
 }
 
-type StoredWorkflowOperation = WorkflowOperation & { id: string };
+type StoredAgentOperation = AgentOperation & { id: string };
 
-export class SqliteWorkflowOperationStore implements WorkflowOperationStore {
-  private readonly db: SqliteJsonDb<StoredWorkflowOperation>;
-  constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'workflow_operations'); }
-  async startOperation(input: Omit<WorkflowOperation, 'status' | 'createdAt' | 'updatedAt'>) {
+export class SqliteAgentOperationStore implements AgentOperationStore {
+  private readonly db: SqliteJsonDb<StoredAgentOperation>;
+  constructor(dataDir: string) { this.db = new SqliteJsonDb(dbPath(dataDir), 'agent_operations'); }
+  async startOperation(input: Omit<AgentOperation, 'status' | 'createdAt' | 'updatedAt'>) {
     const existing = await this.getOperation(input.operationId);
     if (existing) return existing;
     const now = nowIso();
-    const operation: WorkflowOperation = { ...input, status: 'running', createdAt: now, updatedAt: now };
+    const operation: AgentOperation = { ...input, status: 'running', createdAt: now, updatedAt: now };
     await this.db.upsert(toStoredOperation(operation));
     return operation;
   }
@@ -184,7 +184,7 @@ export class SqliteWorkflowOperationStore implements WorkflowOperationStore {
       )
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
-  async updateOperation(operation: WorkflowOperation) {
+  async updateOperation(operation: AgentOperation) {
     const updated = { ...operation, updatedAt: nowIso() };
     await this.db.upsert(toStoredOperation(updated));
     return updated;
@@ -192,11 +192,11 @@ export class SqliteWorkflowOperationStore implements WorkflowOperationStore {
   close() { this.db.close(); }
 }
 
-function toStoredOperation(operation: WorkflowOperation): StoredWorkflowOperation {
+function toStoredOperation(operation: AgentOperation): StoredAgentOperation {
   return { ...operation, id: operation.operationId };
 }
 
-function fromStoredOperation(operation: StoredWorkflowOperation): WorkflowOperation {
+function fromStoredOperation(operation: StoredAgentOperation): AgentOperation {
   const { id: _id, ...rest } = operation;
   return rest;
 }

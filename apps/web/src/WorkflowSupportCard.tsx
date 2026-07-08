@@ -1,4 +1,4 @@
-import type { HumanGate, ReviewArtifact, RunResponse, WorkflowOperation } from './types';
+import type { HumanGate, ReviewArtifact, RunResponse, AgentOperation } from './types';
 
 type WorkflowSupportCardProps = {
   runResponse?: RunResponse;
@@ -27,7 +27,7 @@ export function WorkflowSupportCard(props: WorkflowSupportCardProps) {
       <WorkflowNextStep pendingGates={pendingGates} nextAction={nextAction} runStatus={run.status} waitingReason={waitingReason} />
       {pendingGates.length ? <WorkflowGateList gates={pendingGates} busy={props.busy} onResolve={props.onResolveHumanGate} /> : null}
       {reviewArtifacts.length ? <WorkflowReviewList artifacts={reviewArtifacts} /> : null}
-      {operations.length ? <WorkflowOperationList operations={operations} /> : null}
+      {operations.length ? <AgentOperationList operations={operations} /> : null}
     </section>
   );
 }
@@ -70,7 +70,7 @@ function WorkflowReviewList(props: { artifacts: ReviewArtifact[] }) {
   );
 }
 
-function WorkflowOperationList(props: { operations: WorkflowOperation[] }) {
+function AgentOperationList(props: { operations: AgentOperation[] }) {
   return (
     <div className="workflow-section">
       <h4>执行记录</h4>
@@ -123,8 +123,8 @@ function workflowTerminalLabel(status: string): string {
   return '暂无待执行动作';
 }
 
-function operationStatusLabel(status: WorkflowOperation['status']): string {
-  const labels: Record<WorkflowOperation['status'], string> = { running: '进行中', completed: '完成', failed: '失败' };
+function operationStatusLabel(status: AgentOperation['status']): string {
+  const labels: Record<AgentOperation['status'], string> = { running: '进行中', completed: '完成', failed: '失败' };
   return labels[status];
 }
 

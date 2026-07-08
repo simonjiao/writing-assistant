@@ -24,11 +24,11 @@ import {
   SkillRegistry,
   StateStore,
   WorkspaceStore,
-  WorkflowOperationStore,
+  AgentOperationStore,
 } from '@wa/core';
 import { registerDefaultSkills } from '@wa/skills';
 import { AppConfig } from './config';
-import { SqliteArtifactStore, SqliteDialogueBriefStore, SqliteDialogueBriefUpdateJobStore, SqliteDialogueMessageStore, SqliteEventTraceStore, SqliteHumanGateStore, SqliteKnowledgeStore, SqliteMemoryStore, SqlitePiAgentSessionStore, SqliteReviewArtifactStore, SqliteRevisionProposalStore, SqliteSessionStore, SqliteStateStore, SqliteWorkflowOperationStore, SqliteWorkspaceStore } from './stores/sqliteStores';
+import { SqliteArtifactStore, SqliteDialogueBriefStore, SqliteDialogueBriefUpdateJobStore, SqliteDialogueMessageStore, SqliteEventTraceStore, SqliteHumanGateStore, SqliteKnowledgeStore, SqliteMemoryStore, SqlitePiAgentSessionStore, SqliteReviewArtifactStore, SqliteRevisionProposalStore, SqliteSessionStore, SqliteStateStore, SqliteAgentOperationStore, SqliteWorkspaceStore } from './stores/sqliteStores';
 import { HttpRagKnowledgeStore } from './stores/httpRagKnowledgeStore';
 import { TonglingyuRetrieverKnowledgeStore } from './stores/tonglingyuRetrieverKnowledgeStore';
 import { PiWorkflowActionExecutor } from './piWorkflowActionExecutor';
@@ -51,7 +51,7 @@ interface StoreBundle {
   artifactStore: ArtifactStore;
   piAgentSessionStore: PiAgentSessionStore;
   humanGateStore: HumanGateStore;
-  workflowOperationStore: WorkflowOperationStore;
+  agentOperationStore: AgentOperationStore;
   reviewArtifactStore: ReviewArtifactStore;
   revisionProposalStore: RevisionProposalStore;
   dialogueMessageStore: DialogueMessageStore;
@@ -67,7 +67,7 @@ export function createContainer(config: AppConfig): AppContainer {
   const eventBus: EventBus = new InMemoryEventBus();
   const eventTraceStore = new PublishingEventTraceStore(base.eventTraceStore, eventBus) as EventTraceStore;
   const knowledgeStore = createKnowledgeStore(config, base.localKnowledgeStore, eventTraceStore);
-  const stores: ExternalStores = { stateStore: base.stateStore, sessionStore: base.sessionStore, memoryStore: base.memoryStore, workspaceStore: base.workspaceStore, artifactStore: base.artifactStore, piAgentSessionStore: base.piAgentSessionStore, humanGateStore: base.humanGateStore, workflowOperationStore: base.workflowOperationStore, reviewArtifactStore: base.reviewArtifactStore, revisionProposalStore: base.revisionProposalStore, dialogueMessageStore: base.dialogueMessageStore, dialogueBriefStore: base.dialogueBriefStore, dialogueBriefUpdateJobStore: base.dialogueBriefUpdateJobStore, knowledgeStore, eventTraceStore };
+  const stores: ExternalStores = { stateStore: base.stateStore, sessionStore: base.sessionStore, memoryStore: base.memoryStore, workspaceStore: base.workspaceStore, artifactStore: base.artifactStore, piAgentSessionStore: base.piAgentSessionStore, humanGateStore: base.humanGateStore, agentOperationStore: base.agentOperationStore, reviewArtifactStore: base.reviewArtifactStore, revisionProposalStore: base.revisionProposalStore, dialogueMessageStore: base.dialogueMessageStore, dialogueBriefStore: base.dialogueBriefStore, dialogueBriefUpdateJobStore: base.dialogueBriefUpdateJobStore, knowledgeStore, eventTraceStore };
 
   const llm = config.llmProvider === 'openai-compatible' ? new OpenAICompatibleProvider({ baseURL: config.openaiBaseURL, apiKey: config.openaiApiKey, model: config.openaiModel }) : new MockLLMProvider();
   const skills = registerDefaultSkills(new SkillRegistry());
@@ -86,7 +86,7 @@ function createStores(config: AppConfig): StoreBundle {
   const artifactStore = new SqliteArtifactStore(config.dataDir);
   const piAgentSessionStore = new SqlitePiAgentSessionStore(config.dataDir);
   const humanGateStore = new SqliteHumanGateStore(config.dataDir);
-  const workflowOperationStore = new SqliteWorkflowOperationStore(config.dataDir);
+  const agentOperationStore = new SqliteAgentOperationStore(config.dataDir);
   const reviewArtifactStore = new SqliteReviewArtifactStore(config.dataDir);
   const revisionProposalStore = new SqliteRevisionProposalStore(config.dataDir);
   const dialogueMessageStore = new SqliteDialogueMessageStore(config.dataDir);
@@ -102,7 +102,7 @@ function createStores(config: AppConfig): StoreBundle {
     artifactStore,
     piAgentSessionStore,
     humanGateStore,
-    workflowOperationStore,
+    agentOperationStore,
     reviewArtifactStore,
     revisionProposalStore,
     dialogueMessageStore,
@@ -118,7 +118,7 @@ function createStores(config: AppConfig): StoreBundle {
       artifactStore.close();
       piAgentSessionStore.close();
       humanGateStore.close();
-      workflowOperationStore.close();
+      agentOperationStore.close();
       reviewArtifactStore.close();
       revisionProposalStore.close();
       dialogueMessageStore.close();
