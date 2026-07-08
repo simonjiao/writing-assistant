@@ -80,6 +80,24 @@ test('shows a polish proposal in the browser and applies it only after confirmat
   await expect(page.getByTestId('workflow-next-step')).toContainText('流程已完成');
 });
 
+test('dismisses a polish proposal without mutating article text', async ({ page }) => {
+  const userId = uniqueUserId('browser-polish-dismiss');
+  const fixture = await createPolishFixture(userId);
+  await openAppForUser(page, userId);
+
+  await page.getByTestId('history-item').filter({ hasText: fixture.title }).click();
+  await expect(page.getByTestId('article-block-text').first()).toContainText(fixture.originalText);
+
+  await page.getByTestId('start-writing-button').click();
+  await expect(page.getByTestId('dialogue-proposal')).toContainText('修订建议', { timeout: 60_000 });
+
+  await page.getByTestId('dialogue-proposal-dismiss').click();
+  await expect(page.getByTestId('dialogue-proposal')).toHaveCount(0);
+  await expect(page.getByText('已取消这次修改提案。')).toBeVisible();
+  await expect(page.getByTestId('article-block-text').first()).toContainText(fixture.originalText);
+  await expect(page.getByTestId('article-block-text').first()).not.toContainText('修改说明');
+});
+
 test('keeps a stale polish proposal from mutating article text', async ({ page }) => {
   const userId = uniqueUserId('browser-polish-stale');
   const fixture = await createPolishFixture(userId);
