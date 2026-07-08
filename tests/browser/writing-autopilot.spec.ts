@@ -108,6 +108,26 @@ test('shows a failed workflow when tool execution rejects invalid article data',
   await expect(page.getByTestId('workflow-cancel')).toHaveCount(0);
 });
 
+test('isolates task lists when switching dev users', async ({ page }) => {
+  const userA = uniqueUserId('browser-user-a');
+  const userB = uniqueUserId('browser-user-b');
+  const fixtureA = await createBasicArticleFixture(userA, '用户A隔离任务');
+  const fixtureB = await createBasicArticleFixture(userB, '用户B隔离任务');
+
+  expect(await requestStatus(`/api/articles/${fixtureA.articleId}?userId=${encodeURIComponent(userB)}`)).toBe(403);
+  expect(await requestStatus(`/api/articles/${fixtureB.articleId}?userId=${encodeURIComponent(userA)}`)).toBe(403);
+
+  await openAppForUser(page, userA);
+  await expect(page.getByTestId('history-item').filter({ hasText: fixtureA.title })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('history-item').filter({ hasText: fixtureB.title })).toHaveCount(0);
+
+  await page.locator('#dev-user-id').fill(userB);
+  await page.locator('.user-switcher button').click();
+  await expect(page.locator('#dev-user-id')).toHaveValue(userB);
+  await expect(page.getByTestId('history-item').filter({ hasText: fixtureB.title })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('history-item').filter({ hasText: fixtureA.title })).toHaveCount(0);
+});
+
 test('shows a polish proposal in the browser and applies it only after confirmation', async ({ page }) => {
   const userId = uniqueUserId('browser-polish');
   const fixture = await createPolishFixture(userId);
@@ -302,10 +322,42 @@ async function createWorkflowFailureFixture(userId: string): Promise<{ articleId
   return { articleId, title };
 }
 
+async function createBasicArticleFixture(userId: string, titlePrefix: string): Promise<{ articleId: string; title: string }> {
+  const session = await requestJson<{ currentWorkspaceId?: string }>('/api/sessions', { method: 'POST', body: JSON.stringify({ userId }) });
+  const workspaceId = session.currentWorkspaceId;
+  if (!workspaceId) throw new Error('Fixture session did not create a default workspace.');
+  const now = new Date().toISOString();
+  const title = `${titlePrefix} ${now}`;
+  const articleId = `art_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  const article = {
+    id: articleId,
+    userId,
+    workspaceId,
+    revision: 1,
+    title,
+    taskCard: confirmedFixtureTaskCard(`task_${articleId}`, title, now),
+    outline: [],
+    blocks: [],
+    citations: [],
+    themeTags: [],
+    comments: [],
+    versions: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  upsertJsonRecord('artifacts', articleId, article);
+  return { articleId, title };
+}
+
 async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(options?.headers ?? {}) } });
   if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
   return response.json() as Promise<T>;
+}
+
+async function requestStatus(path: string): Promise<number> {
+  const response = await fetch(`${apiBase}${path}`, { headers: { 'Content-Type': 'application/json' } });
+  return response.status;
 }
 
 function upsertJsonRecord(namespace: string, id: string, record: Record<string, unknown>) {
