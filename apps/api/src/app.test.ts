@@ -1196,6 +1196,61 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('supersedes a stale HumanGate instead of confirming with an old revision', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-stale-gate',
+      topic: '过期确认主题',
+      writingGoal: '写一篇待确认文章。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: [], themes: ['过期确认主题'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'draft',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'stale-gate-user', name: '过期确认工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'stale-gate-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    const started = await app.inject({
+      method: 'POST',
+      url: '/api/workflows/writing/start',
+      payload: { userId: 'stale-gate-user', articleId: article.id, targetStage: 'task-card', message: '确认任务卡' },
+    });
+    expect(started.statusCode).toBe(200);
+    const startedBody = started.json();
+    const gateId = startedBody.humanGates[0].id;
+    article.taskCard!.writingGoal = '文章已经被外部修改过。';
+    await saveArticleFixture(container, article);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/workflows/${startedBody.run.id}/human-gates/${gateId}/resolve`,
+      payload: { userId: 'stale-gate-user', decision: 'accept' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.run.status).toBe('waiting');
+    expect(body.run.waitingFor.reason).toContain('确认项已过期');
+    expect(body.humanGates.find((gate: { id: string }) => gate.id === gateId).status).toBe('superseded');
+    expect(body.article.taskCard.status).toBe('draft');
+    expect(body.article.taskCard.writingGoal).toBe('文章已经被外部修改过。');
+    const operations = await container.stores.workflowOperationStore.listOperations({ runId: startedBody.run.id });
+    expect(operations.map((operation) => operation.toolName)).not.toContain('human_gate_accept');
+    const events = await container.stores.eventTraceStore.listByRun(startedBody.run.id);
+    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({
+      type: 'human_gate.resolved',
+      payload: expect.objectContaining({ gateId, decision: 'superseded', stale: true }),
+    })]));
+    await app.close();
+  });
+
   it('regenerates an outline when an article already has one', async () => {
     const config = testConfig();
     const container = createContainer(config);

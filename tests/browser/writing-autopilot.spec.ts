@@ -75,6 +75,24 @@ test('cancels a waiting workflow and hides stale HumanGates', async ({ page }) =
   await expect(page.getByTestId('workflow-cancel')).toHaveCount(0);
 });
 
+test('supersedes a stale HumanGate when the article revision changes', async ({ page }) => {
+  const userId = uniqueUserId('browser-gate-stale');
+  await openAppForUser(page, userId);
+
+  await page.getByTestId('task-dialog-input').fill('写一篇关于司棋的短文，先生成任务卡。');
+  await page.getByTestId('task-dialog-send').click();
+  await expect(page.getByRole('heading', { name: '任务卡草稿' })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('workflow-gate')).toBeVisible();
+
+  const article = findArticleByUserId(userId);
+  markArticleRevisionStale(article.id);
+  await page.getByTestId('workflow-gate-accept').click();
+
+  await expect(page.getByTestId('workflow-next-step')).toContainText('确认项已过期', { timeout: 60_000 });
+  await expect(page.getByTestId('workflow-gate')).toHaveCount(0);
+  await expect(page.getByTestId('generate-outline-button')).toHaveCount(0);
+});
+
 test('shows a polish proposal in the browser and applies it only after confirmation', async ({ page }) => {
   const userId = uniqueUserId('browser-polish');
   const fixture = await createPolishFixture(userId);
@@ -254,6 +272,15 @@ function markArticleRevisionStale(articleId: string) {
   upsertJsonRecord('artifacts', articleId, { ...article, revision: revision + 1, updatedAt: new Date().toISOString() });
 }
 
+function findArticleByUserId(userId: string): { id: string } {
+  const articles = listJsonRecords('artifacts')
+    .filter((article) => article.userId === userId && !article.deletedAt)
+    .sort((left, right) => String(right.createdAt ?? '').localeCompare(String(left.createdAt ?? '')));
+  const article = articles[0];
+  if (!article || typeof article.id !== 'string') throw new Error(`Article not found for user ${userId}`);
+  return { id: article.id };
+}
+
 function readJsonRecord(namespace: string, id: string): Record<string, unknown> {
   const { DatabaseSync } = require('node:sqlite') as { DatabaseSync: new (path: string) => { prepare(sql: string): { get(...args: unknown[]): unknown }; close(): void } };
   const db = new DatabaseSync(join(dataDir, 'writing-assistant.sqlite'));
@@ -261,6 +288,17 @@ function readJsonRecord(namespace: string, id: string): Record<string, unknown> 
     const row = db.prepare('SELECT json FROM json_records WHERE namespace = ? AND id = ?').get(namespace, id) as { json?: string } | undefined;
     if (!row?.json) throw new Error(`JSON record not found: ${namespace}/${id}`);
     return JSON.parse(row.json) as Record<string, unknown>;
+  } finally {
+    db.close();
+  }
+}
+
+function listJsonRecords(namespace: string): Record<string, unknown>[] {
+  const { DatabaseSync } = require('node:sqlite') as { DatabaseSync: new (path: string) => { prepare(sql: string): { all(...args: unknown[]): unknown[] }; close(): void } };
+  const db = new DatabaseSync(join(dataDir, 'writing-assistant.sqlite'));
+  try {
+    const rows = db.prepare('SELECT json FROM json_records WHERE namespace = ?').all(namespace) as { json?: string }[];
+    return rows.map((row) => row.json ? JSON.parse(row.json) as Record<string, unknown> : undefined).filter((row): row is Record<string, unknown> => Boolean(row));
   } finally {
     db.close();
   }

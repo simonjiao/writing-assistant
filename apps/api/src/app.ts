@@ -1,7 +1,7 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply, FastifyRequest } from 'fastify';
-import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, ArticleRevisionConflictError, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, hashOperationArgs, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, ArticleRevisionConflictError, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, hashOperationArgs, HumanGate, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
 import { normalizeTaskCardPolicies } from '@wa/skills';
 import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, PatchEditorInput, PatchEditorOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
@@ -15,6 +15,12 @@ import { resolveUserContext } from './userContext';
 class RevisionProposalStaleError extends Error {
   constructor(currentRevision: number, proposalRevision: number) {
     super(`Revision proposal is stale: article revision is ${currentRevision}, proposal was created at ${proposalRevision}.`);
+  }
+}
+
+class HumanGateStaleError extends Error {
+  constructor(readonly currentRevision: number, readonly gateRevision: number) {
+    super(`HumanGate is stale: article revision is ${currentRevision}, gate was created at ${gateRevision}.`);
   }
 }
 
@@ -629,7 +635,15 @@ export function createApp(config: AppConfig, container: AppContainer) {
       await container.stores.stateStore.updateRun(runId, { status: 'waiting', waitingFor: { nodeId: 'human-gate', reason: '用户拒绝了当前确认项，需要新的指令。' }, state: { ...run.state, pendingHumanGateId: undefined, lastResolvedHumanGateId: resolvedGate.id }, updatedAt: nowIso() });
       return enrichRun(container, runId);
     }
-    const gateResult = await applyAcceptedHumanGate(container, gate, body.payload ?? {});
+    let gateResult: Record<string, unknown>;
+    try {
+      gateResult = await applyAcceptedHumanGate(container, gate, body.payload ?? {});
+    } catch (error) {
+      if (error instanceof HumanGateStaleError || error instanceof ArticleRevisionConflictError) {
+        return supersedeStaleHumanGate(container, run, gate, userId, error);
+      }
+      throw error;
+    }
     const resolvedGate = await container.stores.humanGateStore.updateGate({ ...gate, status: 'accepted', resolvedByUserId: userId, resolvedAt: nowIso() });
     await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'human_gate.resolved', payload: { userId, gateId, decision: body.decision, articleId: gate.articleId, actionType: gate.actionType }, createdAt: nowIso() });
     const statePatch = readObject(gateResult.statePatch) ?? {};
@@ -1471,10 +1485,8 @@ async function applyAcceptedHumanGate(container: AppContainer, gate: Awaited<Ret
   if (!gate.articleId) throw new Error('HumanGate is missing articleId.');
   const article = await container.stores.artifactStore.getArticle(gate.articleId);
   if (!article) throw new Error('Article not found for HumanGate.');
+  assertHumanGateFresh(gate, article.revision);
   if (gate.targetKind === 'outline') {
-    if (typeof gate.baseRevision === 'number' && article.revision !== gate.baseRevision) {
-      throw new Error(`HumanGate is stale: article revision is ${article.revision}, gate was created at ${gate.baseRevision}.`);
-    }
     return {
       articleId: article.id,
       revision: article.revision,
@@ -1516,6 +1528,42 @@ async function applyAcceptedHumanGate(container: AppContainer, gate: Awaited<Ret
   } catch (error) {
     await container.stores.workflowOperationStore.updateOperation({ ...operation, status: 'failed', error: error instanceof Error ? error.message : String(error) });
     throw error;
+  }
+}
+
+async function supersedeStaleHumanGate(container: AppContainer, run: WorkflowRun, gate: HumanGate, userId: string, error: HumanGateStaleError | ArticleRevisionConflictError) {
+  const now = nowIso();
+  const currentRevision = error instanceof HumanGateStaleError ? error.currentRevision : error.actualRevision;
+  const gateRevision = error instanceof HumanGateStaleError ? error.gateRevision : error.expectedRevision;
+  await container.stores.humanGateStore.updateGate({ ...gate, status: 'superseded', resolvedByUserId: userId, resolvedAt: now });
+  await container.stores.eventTraceStore.append({
+    id: newId('evt'),
+    runId: run.id,
+    type: 'human_gate.resolved',
+    payload: {
+      userId,
+      gateId: gate.id,
+      decision: 'superseded',
+      stale: true,
+      articleId: gate.articleId,
+      actionType: gate.actionType,
+      currentRevision,
+      gateRevision,
+    },
+    createdAt: now,
+  });
+  await container.stores.stateStore.updateRun(run.id, {
+    status: 'waiting',
+    waitingFor: { nodeId: 'human-gate', reason: '当前确认项已过期，文章内容已经变化。请重新发起确认或直接说明下一步修改。' },
+    state: { ...run.state, pendingHumanGateId: undefined, staleHumanGateId: gate.id, staleHumanGateRevision: gateRevision, currentArticleRevision: currentRevision },
+    updatedAt: now,
+  });
+  return enrichRun(container, run.id);
+}
+
+function assertHumanGateFresh(gate: HumanGate, currentRevision: number): void {
+  if (typeof gate.baseRevision === 'number' && currentRevision !== gate.baseRevision) {
+    throw new HumanGateStaleError(currentRevision, gate.baseRevision);
   }
 }
 
