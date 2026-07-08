@@ -100,4 +100,31 @@ describe('PiWorkflowRunner', () => {
     expect(result.error).toContain('did not select an action');
     expect(executed).toBe(false);
   });
+
+  it('returns a failed run when the selected workflow action throws', async () => {
+    let executed = false;
+    const testStores = stores();
+    const runner = new PiWorkflowRunner({
+      stores: testStores,
+      decisionProvider: {
+        async decide(input: { allowedActions: Array<{ id: string; type: string; reason: string; requiresHumanGate: boolean }> }) {
+          const action = input.allowedActions[0];
+          return {
+            decision: { intent: action.type, selectedActionId: action.id, rationale: action.reason, requiresHumanGate: action.requiresHumanGate },
+            messages: [],
+          };
+        },
+      } as never,
+      actionExecutor: { async execute() { executed = true; throw new Error('Action execution failed.'); } } as WorkflowActionExecutor,
+    });
+
+    const result = await runner.runUntilBlocked('run_1');
+
+    expect(executed).toBe(true);
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('Action execution failed');
+    await expect(testStores.eventTraceStore.listByRun('run_1')).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'workflow.failed', payload: expect.objectContaining({ error: 'Action execution failed.' }) }),
+    ]));
+  });
 });

@@ -93,6 +93,21 @@ test('supersedes a stale HumanGate when the article revision changes', async ({ 
   await expect(page.getByTestId('generate-outline-button')).toHaveCount(0);
 });
 
+test('shows a failed workflow when tool execution rejects invalid article data', async ({ page }) => {
+  const userId = uniqueUserId('browser-workflow-failed');
+  await createWorkflowFailureFixture(userId);
+  await openAppForUser(page, userId);
+
+  await expect(page.getByTestId('outline-list')).toBeVisible();
+
+  await page.getByTestId('start-writing-button').click();
+
+  await expect(page.getByText(/生成内容包含任务卡中需要避免的词语/)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('workflow-support-card')).toContainText('失败');
+  await expect(page.getByTestId('workflow-next-step')).toContainText('需要处理失败');
+  await expect(page.getByTestId('workflow-cancel')).toHaveCount(0);
+});
+
 test('shows a polish proposal in the browser and applies it only after confirmation', async ({ page }) => {
   const userId = uniqueUserId('browser-polish');
   const fixture = await createPolishFixture(userId);
@@ -247,6 +262,44 @@ async function createPolishFixture(userId: string): Promise<{ articleId: string;
   };
   upsertJsonRecord('artifacts', articleId, article);
   return { articleId, title, originalText };
+}
+
+async function createWorkflowFailureFixture(userId: string): Promise<{ articleId: string; title: string }> {
+  const session = await requestJson<{ currentWorkspaceId?: string }>('/api/sessions', { method: 'POST', body: JSON.stringify({ userId }) });
+  const workspaceId = session.currentWorkspaceId;
+  if (!workspaceId) throw new Error('Fixture session did not create a default workspace.');
+  const now = new Date().toISOString();
+  const title = '浏览器失败流程测试';
+  const articleId = `art_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  const taskCard = confirmedFixtureTaskCard(`task_${articleId}`, title, now);
+  taskCard.constraints.mustAvoid = ['本节正文'];
+  const article = {
+    id: articleId,
+    userId,
+    workspaceId,
+    revision: 1,
+    title,
+    taskCard,
+    outline: [{
+      id: `sec_${articleId}`,
+      title: '触发保存校验的大纲',
+      goal: '用于验证 workflow failed 的页面表现。',
+      order: 1,
+      expectedBlocks: 1,
+      sourceHints: [],
+      themeTags: ['失败流程'],
+      status: 'draft',
+    }],
+    blocks: [],
+    citations: [],
+    themeTags: [],
+    comments: [],
+    versions: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  upsertJsonRecord('artifacts', articleId, article);
+  return { articleId, title };
 }
 
 async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {

@@ -67,7 +67,11 @@ export class PiWorkflowRunner {
       const selectedAction = allowedActions.find((action) => action.id === decision.selectedActionId);
       if (!selectedAction) return this.fail(run, new Error(`Pi agent selected unauthorized action: ${decision.selectedActionId}`));
       if (!this.deps.actionExecutor) return this.fail(run, new Error('PiWorkflowRunner requires an actionExecutor when actions are available.'));
-      await this.deps.actionExecutor.execute({ policy: this.policy, run, action: selectedAction });
+      try {
+        await this.deps.actionExecutor.execute({ policy: this.policy, run, action: selectedAction });
+      } catch (error) {
+        return this.fail(run, error);
+      }
       run = await this.requireRun(run.id);
       if (run.status === 'waiting' || run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') return run;
     }
