@@ -29,6 +29,7 @@ import {
   TaskCardBuilderInput,
   TaskCardBuilderOutput,
 } from '@wa/skills';
+import { AgentToolExecutor } from './agent/agentToolExecutor';
 import { processArticleComments } from './articleComments';
 
 type WorkflowActionHandler = (run: WorkflowRun, action: AllowedAction) => Promise<WorkflowActionExecutionResult>;
@@ -37,7 +38,7 @@ type WorkflowToolRegistry = Readonly<Record<AllowedActionType, WorkflowActionHan
 export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
   private readonly tools: WorkflowToolRegistry;
 
-  constructor(private readonly deps: { stores: ExternalStores; skillExecutor: SkillExecutor }) {
+  constructor(private readonly deps: { stores: ExternalStores; skillExecutor: SkillExecutor; agentToolExecutor: AgentToolExecutor }) {
     this.tools = {
       create_task_card_draft: this.createTaskCardDraft.bind(this),
       ask_followup: this.requestTaskCardGate.bind(this),

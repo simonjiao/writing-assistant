@@ -1,7 +1,7 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply, FastifyRequest } from 'fastify';
-import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, ArticleRevisionConflictError, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, hashOperationArgs, HumanGate, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, ArticleRevisionConflictError, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, hashOperationArgs, HumanGate, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, PiAgentSession, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
 import { normalizeTaskCardPolicies } from '@wa/skills';
 import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, PatchEditorInput, PatchEditorOutput, TaskCardReviserOutput } from '@wa/skills';
 import { AppConfig } from './config';
@@ -11,6 +11,8 @@ import { addKnowledgeEvidenceToBrief, buildCompactDialogueConversation, compactD
 import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfileSummaries, recommendDomainProfiles, resolveDomainProfileSelection } from './domainProfiles';
 import { getWritingStandardDisplaySummary, getWritingStandardSummary, resolveWritingStandardSelection, WritingStandardSelectionRequest } from './writingStandards';
 import { resolveUserContext } from './userContext';
+import { agentOperationId } from './agent/agentOperationIds';
+import { AgentSessionTarget, getOrCreateAgentSession } from './agent/agentSessionTarget';
 
 class RevisionProposalStaleError extends Error {
   constructor(currentRevision: number, proposalRevision: number) {
@@ -414,23 +416,31 @@ export function createApp(config: AppConfig, container: AppContainer) {
     await enqueueDialogueBriefUpdate({ container, article: access.article, userId, sessionId: body.sessionId, message: userMessage, context: { kind: context.value.context.kind, title: context.value.context.title } });
     let result: DialogueCoordinatorOutput;
     try {
-      result = await container.skillExecutor.executeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
-        'dialogue-coordinator',
-        {
-          articleId: access.article.id,
-          message,
-          skipKnowledge: true,
-          conversation: buildCompactDialogueConversation(conversation),
-          conversationBrief: compactDialogueBriefForPrompt(conversationBrief),
-          pendingProposal: pendingProposal ? proposalForDialogue(pendingProposal) : undefined,
-          context: context.value.context,
-          taskCard: access.article.taskCard,
-          outline: access.article.outline,
-          selectedOutlineItem: context.value.selectedOutlineItem,
-          selectedBlock: context.value.selectedBlock,
-        },
-        { userId, sessionId: body.sessionId, articleId: access.article.id },
-      );
+      const skillInput: DialogueCoordinatorInput = {
+        articleId: access.article.id,
+        message,
+        skipKnowledge: true,
+        conversation: buildCompactDialogueConversation(conversation),
+        conversationBrief: compactDialogueBriefForPrompt(conversationBrief),
+        pendingProposal: pendingProposal ? proposalForDialogue(pendingProposal) : undefined,
+        context: context.value.context,
+        taskCard: access.article.taskCard,
+        outline: access.article.outline,
+        selectedOutlineItem: context.value.selectedOutlineItem,
+        selectedBlock: context.value.selectedBlock,
+      };
+      result = await executeDialogueSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>({
+        container,
+        article: access.article,
+        userId,
+        sessionId: body.sessionId,
+        target: dialogueSessionTargetFromContext(context.value.context),
+        allowedTools: ['create_revision_proposal', 'ask_clarifying_question', 'answer'],
+        toolName: 'create_revision_proposal',
+        skillId: 'dialogue-coordinator',
+        skillInput,
+        operationPrefix: 'dialogue_coordinator',
+      });
     } catch (error) {
       if (!isDialogueCoordinatorRecoverableFailure(error)) throw error;
       const assistantMessage = '这次修改范围较大，方案没有生成成功。请把要改的大纲项、要新增的情节或要删除的部分拆成更明确的一两条再发。';
@@ -898,16 +908,24 @@ function extractKnowledgeTerms(message: string, article: ArticleArtifact): strin
 }
 
 async function refineDialogueRoute(container: AppContainer, article: ArticleArtifact, userId: string, sessionId: string | undefined, message: string, context: DialogueCoordinatorInput['context'], hasPendingProposal: boolean): Promise<DialogueRoute> {
-  const result = await container.skillExecutor.executeSkill<DialogueRouterInput, DialogueRouterOutput>(
-    'dialogue-router',
-    {
-      message,
-      skipKnowledge: true,
-      hasPendingProposal,
-      context: { kind: context.kind, title: context.title },
-    },
-    { userId, sessionId, articleId: article.id },
-  );
+  const skillInput: DialogueRouterInput = {
+    message,
+    skipKnowledge: true,
+    hasPendingProposal,
+    context: { kind: context.kind, title: context.title },
+  };
+  const result = await executeDialogueSkill<DialogueRouterInput, DialogueRouterOutput>({
+    container,
+    article,
+    userId,
+    sessionId,
+    target: dialogueSessionTargetFromContext(context),
+    allowedTools: ['route_dialogue'],
+    toolName: 'route_dialogue',
+    skillId: 'dialogue-router',
+    skillInput,
+    operationPrefix: 'dialogue_router',
+  });
   return result.route;
 }
 
@@ -924,36 +942,67 @@ async function appendDialogueMessage(container: AppContainer, input: Omit<Dialog
 type DialoguePiSessionTarget = { contextKind: DialogueContextKind; targetId?: string };
 type DialoguePiMessage = { role: 'user' | 'assistant'; content: string; proposalId?: string };
 
+async function getDialoguePiSession(container: AppContainer, article: ArticleArtifact, userId: string, target: DialoguePiSessionTarget): Promise<PiAgentSession> {
+  const sessionTarget: AgentSessionTarget = {
+    userId,
+    workspaceId: article.workspaceId,
+    articleId: article.id,
+    contextKind: target.contextKind,
+    targetId: target.targetId,
+  };
+  return (await getOrCreateAgentSession(container.stores, sessionTarget)).session;
+}
+
+async function executeDialogueSkill<I = unknown, O = unknown>(input: {
+  container: AppContainer;
+  article: ArticleArtifact;
+  userId: string;
+  sessionId?: string;
+  target: DialoguePiSessionTarget;
+  allowedTools: readonly string[];
+  toolName: string;
+  skillId: string;
+  skillInput: I;
+  operationPrefix: string;
+  blockId?: string;
+}): Promise<O> {
+  const agentSession = await getDialoguePiSession(input.container, input.article, input.userId, input.target);
+  const operationTarget: AgentSessionTarget = {
+    userId: input.userId,
+    workspaceId: input.article.workspaceId,
+    articleId: input.article.id,
+    contextKind: input.target.contextKind,
+    targetId: input.target.targetId,
+  };
+  return input.container.agentToolExecutor.executeSkillTool<I, O>({
+    agentSession,
+    allowedTools: input.allowedTools,
+    toolName: input.toolName,
+    skillId: input.skillId,
+    input: input.skillInput,
+    operationId: agentOperationId(input.operationPrefix, operationTarget, input.skillInput),
+    sessionId: input.sessionId,
+    articleId: input.article.id,
+    blockId: input.blockId,
+  });
+}
+
 async function appendDialoguePiMessages(container: AppContainer, article: ArticleArtifact, userId: string, target: DialoguePiSessionTarget, messages: DialoguePiMessage[]): Promise<void> {
-  const existing = await container.stores.piAgentSessionStore.findSession({ userId, articleId: article.id, contextKind: target.contextKind, targetId: target.targetId });
+  const existing = await getDialoguePiSession(container, article, userId, target);
   const now = nowIso();
   const serializedMessages = messages.map((message) => {
     const serialized: Record<string, string | number> = { role: message.role, content: message.content, timestamp: Date.now() };
     if (message.proposalId) serialized.proposalId = message.proposalId;
     return serialized;
   });
-  const session = existing
-    ? await container.stores.piAgentSessionStore.saveSession({
-      ...existing,
-      workspaceId: article.workspaceId,
-      baseArticleRevision: article.revision,
-      messages: [...existing.messages, ...serializedMessages],
-      lockVersion: existing.lockVersion + 1,
-      updatedAt: now,
-    })
-    : await container.stores.piAgentSessionStore.saveSession({
-      id: newId('pi_ses'),
-      userId,
-      workspaceId: article.workspaceId,
-      articleId: article.id,
-      contextKind: target.contextKind,
-      targetId: target.targetId,
-      messages: serializedMessages,
-      baseArticleRevision: article.revision,
-      lockVersion: 0,
-      createdAt: now,
-      updatedAt: now,
-    });
+  const session = await container.stores.piAgentSessionStore.saveSession({
+    ...existing,
+    workspaceId: article.workspaceId,
+    baseArticleRevision: article.revision,
+    messages: [...existing.messages, ...serializedMessages],
+    lockVersion: existing.lockVersion + 1,
+    updatedAt: now,
+  });
   await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'pi.session.updated', payload: { userId, articleId: article.id, piAgentSessionId: session.id, contextKind: target.contextKind, targetId: target.targetId, reason: 'dialogue-turn' }, createdAt: nowIso() });
 }
 
@@ -1060,23 +1109,31 @@ async function handleWorkflowPendingProposalMessage(container: AppContainer, run
   const conversationBrief = await getOrCreateDialogueBrief(container, access.article.id, userId);
   let result: DialogueCoordinatorOutput;
   try {
-    result = await container.skillExecutor.executeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
-      'dialogue-coordinator',
-      {
-        articleId: access.article.id,
-        message,
-        skipKnowledge: true,
-        conversation,
-        conversationBrief: compactDialogueBriefForPrompt(conversationBrief),
-        pendingProposal: proposalForDialogue(proposal),
-        context: context.value.context,
-        taskCard: access.article.taskCard,
-        outline: access.article.outline,
-        selectedOutlineItem: context.value.selectedOutlineItem,
-        selectedBlock: context.value.selectedBlock,
-      },
-      { userId, sessionId, runId: run.id, articleId: access.article.id },
-    );
+    const skillInput: DialogueCoordinatorInput = {
+      articleId: access.article.id,
+      message,
+      skipKnowledge: true,
+      conversation,
+      conversationBrief: compactDialogueBriefForPrompt(conversationBrief),
+      pendingProposal: proposalForDialogue(proposal),
+      context: context.value.context,
+      taskCard: access.article.taskCard,
+      outline: access.article.outline,
+      selectedOutlineItem: context.value.selectedOutlineItem,
+      selectedBlock: context.value.selectedBlock,
+    };
+    result = await executeDialogueSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>({
+      container,
+      article: access.article,
+      userId,
+      sessionId,
+      target: dialogueSessionTargetFromContext(context.value.context),
+      allowedTools: ['create_revision_proposal', 'ask_clarifying_question', 'answer'],
+      toolName: 'create_revision_proposal',
+      skillId: 'dialogue-coordinator',
+      skillInput,
+      operationPrefix: 'workflow_dialogue_coordinator',
+    });
   } catch (error) {
     if (!isDialogueCoordinatorRecoverableFailure(error)) throw error;
     const assistantMessage = '这次修改方案没有刷新成功，原方案仍保留。请把要合并的意见拆成更明确的一两条再发。';

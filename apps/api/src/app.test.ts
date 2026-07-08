@@ -230,7 +230,7 @@ describe('api app', () => {
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
-    const executor = new PiWorkflowActionExecutor({ stores: container.stores, skillExecutor: container.skillExecutor });
+    const executor = new PiWorkflowActionExecutor({ stores: container.stores, skillExecutor: container.skillExecutor, agentToolExecutor: container.agentToolExecutor });
     await expect(executor.execute({ policy: { id: 'writing-autopilot', goal: '', allowedActionPolicy: '', humanGatePolicy: '', completionPolicy: '' }, run, action: forgedAction })).rejects.toThrow('Unauthorized workflow action');
     expect(await container.stores.workflowOperationStore.listOperations({ runId: run.id })).toEqual([]);
     await container.close();
@@ -591,8 +591,12 @@ describe('api app', () => {
     expect(body.article.comments[0]).toMatchObject({ status: 'resolved', resolutionKind: 'revision' });
     expect(body.article.blocks[0].text).not.toContain('触柱而亡');
     const operations = await container.stores.workflowOperationStore.listOperations({ runId: body.run.id });
-    expect(operations.map((operation) => operation.toolName)).toEqual(['process_article_comments']);
-    expect(operations[0].articleRevisionBefore).toBe(created.json().revision);
+    expect(operations.map((operation) => operation.toolName).sort()).toEqual(['process_article_comments', 'resolve_article_comment']);
+    expect(operations.find((operation) => operation.toolName === 'process_article_comments')?.articleRevisionBefore).toBe(created.json().revision);
+    const commentSessions = await container.stores.piAgentSessionStore.listSessions({ userId: 'workflow-comment-user', articleId: article.id, contextKind: 'article-comment' });
+    expect(commentSessions).toHaveLength(1);
+    expect(commentSessions[0].targetId).toBe(commentId);
+    expect(operations.find((operation) => operation.toolName === 'resolve_article_comment')?.agentSessionId).toBe(commentSessions[0].id);
     await app.close();
   });
 

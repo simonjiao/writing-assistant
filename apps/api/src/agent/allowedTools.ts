@@ -3,6 +3,7 @@ import { DialogueContextKind } from '@wa/core';
 export type NonWorkflowToolName =
   | 'answer'
   | 'ask_clarifying_question'
+  | 'route_dialogue'
   | 'create_revision_proposal'
   | 'revise_task_card'
   | 'revise_outline'

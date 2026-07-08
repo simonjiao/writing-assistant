@@ -1,5 +1,8 @@
-import { ArticleArtifact, ArticleBlock, ArticleComment, ExternalStores, newId, nowIso, SkillExecutor } from '@wa/core';
+import { ArticleArtifact, ArticleBlock, ArticleComment, ExternalStores, newId, nowIso } from '@wa/core';
 import type { ArticleCommentResolverInput, ArticleCommentResolverOutput } from '@wa/skills';
+import { AgentToolExecutor } from './agent/agentToolExecutor';
+import { agentOperationId } from './agent/agentOperationIds';
+import { AgentSessionTarget, getOrCreateAgentSession } from './agent/agentSessionTarget';
 
 export type ArticleCommentProcessResult = {
   commentId: string;
@@ -11,7 +14,7 @@ export type ArticleCommentProcessResult = {
 };
 
 export async function processArticleComments(
-  deps: { stores: ExternalStores; skillExecutor: SkillExecutor },
+  deps: { stores: ExternalStores; agentToolExecutor: AgentToolExecutor },
   article: ArticleArtifact,
   userId: string,
   options: { sessionId?: string; commentIds?: string[]; runId?: string; baseRevision?: number; operationId?: string } = {},
@@ -30,17 +33,33 @@ export async function processArticleComments(
       continue;
     }
     try {
-      const output = await deps.skillExecutor.executeSkill<ArticleCommentResolverInput, ArticleCommentResolverOutput>(
-        'article-comment-resolver',
-        {
-          articleId: article.id,
-          comment,
-          block,
-          taskCard: article.taskCard,
-          adjacentBlocks: adjacentBlocksForArticle(article.blocks, block.id),
-        },
-        { userId, sessionId: options.sessionId, runId: options.runId, articleId: article.id, blockId: block.id },
-      );
+      const target: AgentSessionTarget = { userId, workspaceId: article.workspaceId, articleId: article.id, contextKind: 'article-comment', targetId: comment.id };
+      const { session } = await getOrCreateAgentSession(deps.stores, target);
+      const skillInput: ArticleCommentResolverInput = {
+        articleId: article.id,
+        comment,
+        block,
+        taskCard: article.taskCard,
+        adjacentBlocks: adjacentBlocksForArticle(article.blocks, block.id),
+      };
+      const output = await deps.agentToolExecutor.executeSkillTool<ArticleCommentResolverInput, ArticleCommentResolverOutput>({
+        agentSession: session,
+        allowedTools: ['resolve_article_comment'],
+        toolName: 'resolve_article_comment',
+        skillId: 'article-comment-resolver',
+        input: skillInput,
+        operationId: agentOperationId('article_comment_resolve', target, {
+          commentId: comment.id,
+          selectedText: comment.selectedText,
+          comment: comment.comment,
+          replies: comment.replies ?? [],
+          blockText: block.text,
+        }),
+        sessionId: options.sessionId,
+        runId: options.runId,
+        articleId: article.id,
+        blockId: block.id,
+      });
       const applied = applyArticleCommentResolution(article, comment, output);
       if (applied.changed) revisedCount += 1;
       results.push({ commentId: comment.id, blockId: comment.blockId, action: output.action, status: comment.status, message: comment.response ?? output.response, changed: applied.changed });
