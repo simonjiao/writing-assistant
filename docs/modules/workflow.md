@@ -45,6 +45,7 @@ running -> cancelled
 - `PiWorkflowActionExecutor` 通过强类型工具注册表执行 `AllowedActionType`，新增 action 必须同时注册 handler，不能回到分散 if 链。
 - 一致性检查出现 blocking finding 时，runner 先用 `create_revision_proposal` 生成绑定当前 run 的待确认方案，再等待用户应用或取消；同一 revision 上不会继续生成正文。
 - workflow 生成的 `RevisionProposal` 带 `runId`。应用后清理当前一致性阻断并恢复 runner；取消后清理 pending proposal，但保留一致性阻断，让 run 回到 `consistency-review` 等待态。
+- 同一文章已有 running `writing-autopilot` run 时，新的 `/api/workflows/writing/start` intent 直接返回 409；这个互斥按 article 生效，不按 user 放宽，避免共享工作台下并发写同一篇文章。
 - run 等待 pending proposal 时，workflow message 会先处理这个 proposal：应用、取消、或基于新意见刷新 proposal；普通“继续写作”不会绕过未处理的 pending proposal。
 - 同一文章、同一用户已有 workflow pending proposal 时，新的 `/api/workflows/writing/start` intent 会复用原 run，不创建并行 run。
 - 同一文章、同一用户已有 pending HumanGate 时，新的 `/api/workflows/writing/start` intent 会返回原 run，让用户先处理该确认项。
