@@ -4,7 +4,7 @@
 
 本版已经加入：
 
-- TypeScript monorepo：`apps/api`、`apps/web`、`packages/core`、`packages/workflows`
+- TypeScript monorepo：`apps/api`、`apps/web`、`packages/core`、`packages/runtime`、`packages/writing-assistant`
 - Fastify API 后端 + React/Vite 前端
 - OpenAI-compatible LLM Provider；本地/生产必须显式配置真实模型 key
 - Product Tool + Prompt Program 机制：任务卡、大纲、章节写作、局部修改、引用/连贯性检查

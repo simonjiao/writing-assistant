@@ -27,7 +27,7 @@ const services = {
     stdout: resolve(projectRoot, '.data/logs/api.log'),
     stderr: resolve(projectRoot, '.data/logs/api.err'),
     command: 'exec node apps/api/dist/server.js',
-    buildWorkspaces: ['@wa/core', '@wa/workflows', '@wa/api'],
+    buildWorkspaces: ['@wa/core', '@wa/runtime', '@wa/writing-assistant', '@wa/api'],
   },
   web: {
     label: 'local.writing-assistant.web',

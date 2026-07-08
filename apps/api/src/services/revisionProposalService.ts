@@ -1,6 +1,6 @@
 import { ArticleArtifact, hashOperationArgs, newId, nowIso, RevisionOperation, RevisionProposal, WritingTaskCard } from '@wa/core';
-import { normalizeTaskCardPolicies } from '@wa/workflows';
-import type { OutlineItemReviserOutput, OutlineReviserOutput, PatchEditorInput, PatchEditorOutput, TaskCardReviserOutput } from '@wa/workflows';
+import { normalizeTaskCardPolicies } from '@wa/writing-assistant';
+import type { OutlineItemReviserOutput, OutlineReviserOutput, PatchEditorInput, PatchEditorOutput, TaskCardReviserOutput } from '@wa/writing-assistant';
 import { AppContainer } from '../bootstrap';
 
 export class RevisionProposalStaleError extends Error {

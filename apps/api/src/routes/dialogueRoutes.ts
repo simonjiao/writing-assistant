@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import { ArticleArtifact, ArticleBlock, DialogueMessage, KnowledgeItem, OutlineItem, RevisionProposal } from '@wa/core';
-import type { DialogueCoordinatorInput, DialogueCoordinatorOutput } from '@wa/workflows';
+import type { DialogueCoordinatorInput, DialogueCoordinatorOutput } from '@wa/writing-assistant';
 import { AppContainer } from '../bootstrap';
 import { addKnowledgeEvidenceToBrief, buildCompactDialogueConversation, compactDialogueBriefForPrompt, enqueueDialogueBriefUpdate, ensureDialogueBriefSettled, getDialogueBriefStatus, getOrCreateDialogueBrief } from '../dialogueBrief';
 

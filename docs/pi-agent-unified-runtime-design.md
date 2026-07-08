@@ -68,7 +68,7 @@ flowchart TB
 | `PiWorkflowRunner` | 保留 | workflow-scoped pi-agent runner |
 | 无 | `AgentToolExecutor` + session target helpers | 非 workflow 路径不保留空 runner façade，直接按上下文绑定 pi session 并执行受限工具 |
 | 旧 `WorkflowOperationStore` 概念 | `AgentOperationStore` | operation log 已泛化，workflow 和非 workflow 共用 |
-| `PiWorkflowActionExecutor` | 保留并接入通用 tool executor | workflow action 继续处理 workflow policy 和 HumanGate |
+| `WritingAutopilotActionExecutor` | 作为写作助手产品 executor 接入通用 tool executor | workflow action 继续处理 writing-autopilot policy 和 HumanGate |
 
 约束：
 

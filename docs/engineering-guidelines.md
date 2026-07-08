@@ -3,19 +3,21 @@
 ## Monorepo 边界
 
 ```text
-packages/core       框架无关基础设施和领域类型，不依赖 Fastify/React/Redis
-packages/workflows  产品 workflow、ToolRegistry、PromptProgram、HumanGate/action 执行
-apps/api            API、SQLite store adapter、RAG client、container bootstrap
-apps/web        UI 和 API client
+packages/core               框架无关基础类型、store/LLM/event 协议
+packages/runtime            通用 agent、tool、skill、workflow 执行基础设施
+packages/writing-assistant  写作助手产品 skills、workflows、domain 规则
+apps/api                    API、SQLite store adapter、RAG client、container bootstrap
+apps/web                    UI 和 API client
 ```
 
 ## 依赖方向
 
 ```text
 apps/web  → HTTP API
-apps/api  → packages/core + packages/workflows
-workflows → packages/core
-core      → 无业务框架依赖
+apps/api           → packages/core + packages/runtime + packages/writing-assistant
+writing-assistant → packages/core + packages/runtime
+runtime           → packages/core
+core              → 无业务框架依赖
 ```
 
 禁止 `core` 反向依赖 `apps/api` 或 `apps/web`。
@@ -52,11 +54,12 @@ npm run local:restart -- web
 模块应围绕稳定职责划分，而不是围绕临时页面或接口堆叠。新增能力时先判断它属于哪一层，再决定文件位置。
 
 - `packages/core` 放跨端共享的领域类型、LLM adapter、pi-agent loader、store 接口、event 抽象和框架无关工具。
-- `packages/workflows` 放产品 workflow、allowed action planner、ToolRegistry、PromptProgram、工具 schema、HumanGate/action 执行和写作产品规则；一个复杂 prompt program 应拆成 prompt 组装、预算/策略计算、输出归一化、质量校验和测试夹具。
+- `packages/runtime` 放通用 ToolRegistry、PromptProgramRegistry、ProductSkill parser、ActionCatalog、AgentToolExecutor、PiWorkflowRunner、agent session helper 和 operation 幂等执行。
+- `packages/writing-assistant` 放写作助手产品 workflow、allowed action planner、工具 schema、prompt programs、skill.md/module.ts、写作产品 domain 规则；一个复杂 prompt program 应拆成 prompt 组装、预算/策略计算、输出归一化、质量校验和测试夹具。
 - `apps/api` 放 HTTP 路由、container/bootstrap、store adapter、RAG client 和运行配置；不要把产品 workflow/action 逻辑长期放在 API 层。
 - `apps/web` 放页面编排、组件、hooks、API client、展示类型和样式；页面组件只做组合和状态协调，复杂展示组件应独立。
 - 跨层共享类型优先放 `packages/core`；仅 API 入参/出参使用的 DTO 留在 `apps/api`；仅 UI 展示需要的 view model 留在 `apps/web`。
-- 禁止为了省事让 `apps/web` 直接依赖 `packages/workflows` 或 `apps/api` 内部模块；Web 只通过 HTTP API 使用后端能力。
+- 禁止为了省事让 `apps/web` 直接依赖 `packages/runtime`、`packages/writing-assistant` 或 `apps/api` 内部模块；Web 只通过 HTTP API 使用后端能力。
 - 避免用大而全的 barrel export 掩盖模块边界；如果 barrel 导出会造成循环依赖或所有模块互相可见，应改为显式导入。
 - 内部 id、run id、section id、block id 等只用于状态和 API，不直接作为 UI 文案展示。
 
@@ -78,7 +81,8 @@ npm run local:restart -- web
 拆分时按职责和分层边界移动代码：
 
 - `packages/core`：只放框架无关的类型、接口、pi-agent loader、LLM adapter、event/store 抽象和通用实现。
-- `packages/workflows`：一个 prompt program 一个主要文件；`register.ts` 只注册 prompt program，`tool-catalog.ts` 只注册产品工具和 schema，不放工具业务逻辑。
+- `packages/runtime`：只放产品无关的 agent/tool/workflow/skill 基础设施，不出现任务卡、大纲、正文等产品概念。
+- `packages/writing-assistant`：一个 product skill 一个目录，`skill.md`、`module.ts`、`programs/`、`tools/` 和测试放在一起；workflow planner/executor 放在 `workflows/<workflow-id>/`。
 - `apps/api`：路由、container 组装、store adapter、RAG client 分开维护。
 - `apps/web`：页面编排、组件、hooks、API client、类型、样式分开维护；`App.tsx` 应偏向页面组合，不承载全部 UI 细节。
 
@@ -87,7 +91,7 @@ npm run local:restart -- web
 - `apps/web/src/App.tsx` 继续变大时，优先拆出任务导航、任务卡工作区、大纲工作区、辅助列、对话输入区、运行进度和选择态 hooks。
 - `apps/api/src/app.ts` 继续变大时，按 sessions、workspaces、articles、workflows、dialogue、knowledge 拆路由注册文件。
 - `apps/api/src/bootstrap.ts` 继续变大时，拆出 store/container factory、runtime provider factory、workflow runner factory。
-- `packages/workflows/src/section-writer.ts` 继续变大时，拆出 writing budget、continuity context、source policy validation、length/quote validation、prompt builder。
+- `packages/writing-assistant/src/skills/write-section/programs/section-writer.ts` 继续变大时，拆出 writing budget、continuity context、source policy validation、length/quote validation、prompt builder。
 
 拆分步骤应保守：
 

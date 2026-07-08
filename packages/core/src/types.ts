@@ -400,19 +400,7 @@ export interface ReviewArtifact {
   updatedAt: string;
 }
 
-export type AllowedActionType =
-  | 'create_task_intake'
-  | 'refine_task_card'
-  | 'ask_followup'
-  | 'plan_outline'
-  | 'confirm_outline_for_writing'
-  | 'review_task_card_outline_consistency'
-  | 'write_next_section'
-  | 'write_section'
-  | 'process_article_comments'
-  | 'generate_polish_report'
-  | 'create_revision_proposal'
-  | 'request_human_gate';
+export type AllowedActionType = string;
 
 export interface AllowedAction {
   id: string;

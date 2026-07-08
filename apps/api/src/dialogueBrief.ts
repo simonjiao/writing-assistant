@@ -1,5 +1,6 @@
 import { ArticleArtifact, DialogueBrief, DialogueBriefConflict, DialogueBriefItem, DialogueBriefUpdateJob, DialogueContextKind, DialogueMessage, KnowledgeItem, newId, nowIso } from '@wa/core';
-import { AgentSessionTarget, agentOperationId, DialogueBriefUpdaterInput, DialogueBriefUpdaterOutput, getOrCreateAgentSession } from '@wa/workflows';
+import { AgentSessionTarget, agentOperationId, getOrCreateAgentSession } from '@wa/runtime';
+import { DialogueBriefUpdaterInput, DialogueBriefUpdaterOutput } from '@wa/writing-assistant';
 import type { AppContainer } from './bootstrap';
 
 const maxBriefUpdateAttempts = 3;

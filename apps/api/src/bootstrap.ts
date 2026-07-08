@@ -23,7 +23,8 @@ import {
   WorkspaceStore,
   AgentOperationStore,
 } from '@wa/core';
-import { AgentToolExecutor, PiWorkflowActionExecutor, registerDefaultProductSkills, registerDefaultPromptPrograms, registerDefaultTools, ProductSkillRegistry, PromptProgramRegistry, ToolRegistry, PiWorkflowRunner } from '@wa/workflows';
+import { AgentToolExecutor, PiWorkflowRunner, ProductSkillRegistry, PromptProgramRegistry, ToolRegistry } from '@wa/runtime';
+import { AllowedActionPlanner, registerWritingAssistantProductSkills, registerWritingAssistantPromptPrograms, registerWritingAssistantTools, WRITING_AUTOPILOT_POLICY, WritingAutopilotActionExecutor } from '@wa/writing-assistant';
 import { AppConfig } from './config';
 import { SqliteArtifactStore, SqliteDialogueBriefStore, SqliteDialogueBriefUpdateJobStore, SqliteDialogueMessageStore, SqliteEventTraceStore, SqliteHumanGateStore, SqliteKnowledgeStore, SqliteMemoryStore, SqlitePiAgentSessionStore, SqliteReviewArtifactStore, SqliteRevisionProposalStore, SqliteSessionStore, SqliteStateStore, SqliteAgentOperationStore, SqliteWorkspaceStore } from './stores/sqliteStores';
 import { HttpRagKnowledgeStore } from './stores/httpRagKnowledgeStore';
@@ -67,12 +68,12 @@ export function createContainer(config: AppConfig, overrides: { llm?: LLMProvide
   const stores: ExternalStores = { stateStore: base.stateStore, sessionStore: base.sessionStore, memoryStore: base.memoryStore, workspaceStore: base.workspaceStore, artifactStore: base.artifactStore, piAgentSessionStore: base.piAgentSessionStore, humanGateStore: base.humanGateStore, agentOperationStore: base.agentOperationStore, reviewArtifactStore: base.reviewArtifactStore, revisionProposalStore: base.revisionProposalStore, dialogueMessageStore: base.dialogueMessageStore, dialogueBriefStore: base.dialogueBriefStore, dialogueBriefUpdateJobStore: base.dialogueBriefUpdateJobStore, knowledgeStore, eventTraceStore };
 
   const llm = overrides.llm ?? createLlmProvider(config);
-  const productSkills = registerDefaultProductSkills();
-  const promptPrograms = registerDefaultPromptPrograms();
-  const tools = registerDefaultTools(new ToolRegistry(), productSkills);
+  const productSkills = registerWritingAssistantProductSkills();
+  const promptPrograms = registerWritingAssistantPromptPrograms();
+  const tools = registerWritingAssistantTools(new ToolRegistry(), productSkills);
   const contextBuilder = new DefaultContextBuilder({ sessionStore: stores.sessionStore, stateStore: stores.stateStore, memoryStore: stores.memoryStore, artifactStore: stores.artifactStore, knowledgeStore: stores.knowledgeStore });
   const agentToolExecutor = new AgentToolExecutor({ stores, toolRegistry: tools, promptPrograms, contextBuilder, llm });
-  const piRunner = new PiWorkflowRunner({ stores, actionExecutor: new PiWorkflowActionExecutor({ stores, agentToolExecutor }), decisionProvider: new PiAgentDecisionProvider(llm), maxTurns: 20 });
+  const piRunner = new PiWorkflowRunner({ stores, planner: new AllowedActionPlanner(), actionExecutor: new WritingAutopilotActionExecutor({ stores, agentToolExecutor }), decisionProvider: new PiAgentDecisionProvider(llm), maxTurns: 20 }, WRITING_AUTOPILOT_POLICY);
   return { piRunner, agentToolExecutor, stores, productSkills, promptPrograms, tools, eventBus, async close() { await base.close?.(); await eventBus.close?.(); } };
 }
 

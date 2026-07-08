@@ -2,10 +2,10 @@
 
 ## 文件
 
-- `packages/core/src/pi-workflow-runner.ts`
-- `packages/core/src/allowed-actions.ts`
+- `packages/runtime/src/pi-workflow-runner.ts`
+- `packages/writing-assistant/src/workflows/writing-autopilot/allowed-actions.ts`
 - `packages/core/src/pi-agent-decision.ts`
-- `apps/api/src/piWorkflowActionExecutor.ts`
+- `packages/writing-assistant/src/workflows/writing-autopilot/writing-workflow-action-executor.ts`
 
 ## 作用
 
@@ -15,8 +15,8 @@ Workflow 模块以 `writing-autopilot` 为主流程。Runner 每轮读取 run、
 
 | 对象 | 说明 |
 |---|---|
-| PiWorkflowRunner | 推进 `writing-autopilot`，每轮计算 allowed actions、调用 pi-agent decision、执行工具或进入等待 |
-| AllowedActionPlanner | 根据任务卡、大纲、正文、revision 和 targetStage 生成单步可执行动作 |
+| PiWorkflowRunner | 通用 workflow runner，读取产品 planner 给出的 allowed actions，调用 pi-agent decision，执行工具或进入等待 |
+| AllowedActionPlanner | 写作助手产品 planner，根据任务卡、大纲、正文、revision 和 targetStage 生成单步可执行动作 |
 | PiAgentSession | 保存每个 run 的 agent 会话状态、消息、base revision 和 pending gate |
 | WorkflowOperation | 幂等工具调用记录，使用稳定 operationId 防止重复写入；workflow 动作绑定 run，普通对话 proposal 写入绑定 article/user |
 | HumanGate | 用户确认模型，用于任务卡确认、大纲覆盖等需要人工裁决的步骤 |
@@ -42,7 +42,7 @@ running -> cancelled
 - 修改 artifact 时要校验 article revision，防止过期操作覆盖新内容。
 - 开始写作时如果大纲仍有 draft 项，runner 先执行 `confirm_outline_for_writing`，把当前大纲作为写作依据正式确认，再进入一致性检查和章节生成。
 - 任务卡-大纲一致性检查按任务卡与大纲内容签名触发；写入正文只改变 article revision，不应重复触发这类检查。
-- `PiWorkflowActionExecutor` 通过强类型工具注册表执行 `AllowedActionType`，新增 action 必须同时注册 handler，不能回到分散 if 链。
+- `WritingAutopilotActionExecutor` 执行写作产品 action；新增 action 必须在对应 product skill `module.ts`、action catalog 和 executor handler 中注册，不能回到分散 if 链。
 - 一致性检查出现 blocking finding 时，runner 先用 `create_revision_proposal` 生成绑定当前 run 的待确认方案，再等待用户应用或取消；同一 revision 上不会继续生成正文。
 - workflow 生成的 `RevisionProposal` 带 `runId`。应用后清理当前一致性阻断并恢复 runner；取消后清理 pending proposal，但保留一致性阻断，让 run 回到 `consistency-review` 等待态。
 - 同一文章已有 running `writing-autopilot` run 时，新的 `/api/workflows/writing/start` intent 直接返回 409；这个互斥按 article 生效，不按 user 放宽，避免共享工作台下并发写同一篇文章。

@@ -333,7 +333,7 @@ interface AllowedAction {
 工具必须满足：
 
 - 参数 schema 明确。
-- 所有 `AllowedActionType` 必须在工具注册表中有唯一 handler。
+- 所有 product action type 由 product skill module 声明，并必须在 action catalog 与对应产品 executor 中有唯一 handler。
 - 幂等。
 - 检查权限。
 - 检查 `baseRevision`。

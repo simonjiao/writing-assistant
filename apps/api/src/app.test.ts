@@ -8,8 +8,8 @@ import { createApp } from './app';
 import { createContainer as createAppContainer } from './bootstrap';
 import { AppConfig } from './config';
 import { mergeDialogueBrief } from './dialogueBrief';
-import { PiWorkflowActionExecutor } from '@wa/workflows';
-import type { AgentToolExecutionInput } from '@wa/workflows';
+import type { AgentToolExecutionInput } from '@wa/runtime';
+import { WritingAutopilotActionExecutor } from '@wa/writing-assistant';
 import { TestLLMProvider } from './testing/mockLlmProvider';
 
 let dataDir: string | undefined;
@@ -287,7 +287,7 @@ describe('api app', () => {
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
-    const executor = new PiWorkflowActionExecutor({ stores: container.stores, agentToolExecutor: container.agentToolExecutor });
+    const executor = new WritingAutopilotActionExecutor({ stores: container.stores, agentToolExecutor: container.agentToolExecutor });
     await expect(executor.execute({ policy: { id: 'writing-autopilot', goal: '', allowedActionPolicy: '', humanGatePolicy: '', completionPolicy: '' }, run, action: forgedAction })).rejects.toThrow('Unauthorized workflow action');
     expect(await container.stores.agentOperationStore.listOperations({ runId: run.id })).toEqual([]);
     await container.close();

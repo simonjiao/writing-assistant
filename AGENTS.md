@@ -7,8 +7,9 @@ This file applies to the whole repository.
 - Follow `docs/engineering-guidelines.md` before making code changes.
 - Keep the monorepo dependency direction intact:
   - `apps/web` calls `apps/api` over HTTP.
-  - `apps/api` depends on `packages/core` and `packages/workflows`.
-  - `packages/workflows` depends on `packages/core`.
+  - `apps/api` depends on `packages/core`, `packages/runtime`, and `packages/writing-assistant`.
+  - `packages/runtime` depends on `packages/core`.
+  - `packages/writing-assistant` depends on `packages/core` and `packages/runtime`.
   - `packages/core` must not depend on apps or framework adapters.
 - Apply the file-splitting rules in `docs/engineering-guidelines.md` when a file becomes too heavy.
 

@@ -2,10 +2,11 @@
 
 ## 文件
 
-- `packages/workflows/src/product-tool-executor.ts`
-- `packages/workflows/src/tool-catalog.ts`
-- `packages/workflows/src/tool-schemas.ts`
-- `packages/workflows/src/prompt-program.ts`
+- `packages/runtime/src/product-tool-executor.ts`
+- `packages/runtime/src/product-tool.ts`
+- `packages/runtime/src/prompt-program.ts`
+- `packages/writing-assistant/src/tool-catalog.ts`
+- `packages/writing-assistant/src/schemas/tool-schemas.ts`
 - `packages/core/src/context.ts`
 - `packages/core/src/llm.ts`
 
