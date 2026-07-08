@@ -2,9 +2,9 @@
 
 ## 状态
 
-实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、`create_revision_proposal`、proposal apply/dismiss 回流、workflow message 刷新 pending proposal、workflow proposal 续聊持久化、批注处理 workflow action、统稿建议可应用提案化、开发期多用户工作台隔离、统一 `/api/workflows/writing/start`、旧节点式 runner/queue 删除，并移除批注处理、任务卡确认、任务卡智能修订和大纲项智能修订的直连 REST 入口。手工大纲编辑、正文批注写入、任务删除也已纳入 revision 校验和 operation 审计。workflow action 执行已改为强类型工具注册表，新增 action type 时必须注册对应 handler。workflow proposal 浏览器端展示、续聊 dirty 提示、更新方案交互已完成真实本地验收，并补充了前端状态自动化覆盖。
+实施中。当前已落地 `writing-autopilot`、pi-agent decision provider、独立 HumanGate、WorkflowOperation 幂等日志、ReviewArtifact、`create_revision_proposal`、proposal apply/dismiss 回流、workflow message 刷新 pending proposal、workflow proposal 续聊持久化、批注处理 workflow action、统稿建议可应用提案化、开发期多用户工作台隔离、统一 `/api/workflows/writing/start`、旧节点式 runner/queue 删除，并移除批注处理、任务卡确认、任务卡智能修订和大纲项智能修订的直连 REST 入口。手工大纲编辑、正文批注写入、任务删除也已纳入 revision 校验和 operation 审计。workflow action 执行已改为强类型工具注册表，新增 action type 时必须注册对应 handler。workflow proposal 浏览器端展示、续聊 dirty 提示、更新方案交互已完成真实本地验收，并补充了前端状态自动化覆盖。真实浏览器 smoke 已覆盖创建任务、确认任务卡、生成大纲、开始写作、正文选区批注和批量处理批注。
 
-仍需补齐的重点：更完整的端到端自动化覆盖，尤其是真实浏览器下的创建任务、开始写作、批注处理和统稿 proposal 回归。
+仍需补齐的重点：统稿 proposal 的真实浏览器回归，以及面向失败/等待 HumanGate 场景的端到端自动化覆盖。
 
 本文记录一次破坏式重构方案：以 `@earendil-works/pi-agent-core` 作为 workflow runner 基座，让 agent 在受控边界内自主选择下一步，并统一工具调用。重构后不保留旧节点式 workflow 双轨兼容。
 

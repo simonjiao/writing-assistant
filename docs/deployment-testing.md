@@ -115,11 +115,25 @@ RAG_PROVIDER=local
 ```bash
 npm run build
 npm run test
+npm run test:browser:local
 ./scripts/smoke.sh
+```
+
+浏览器回归测试会通过统一本地运行入口重启服务，并固定使用 `LLM_PROVIDER=mock`、`RAG_PROVIDER=local`：
+
+```bash
+npm run test:browser:local
+```
+
+如果需要在已经启动的本地实例上只跑 Playwright：
+
+```bash
+npm run test:browser
 ```
 
 ## 已验证项
 
 - TypeScript build：core / skills / api / web
-- Unit tests：core / skills
+- Unit tests：core / skills / api / web workflow state
 - API tests：health、writing-autopilot、HumanGate、SQLite persistent store、HTTP RAG
+- Browser smoke：创建任务卡、确认任务卡、生成大纲、开始写作、添加并处理正文批注

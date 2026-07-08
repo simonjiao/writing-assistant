@@ -6,6 +6,19 @@ import { mkdirSync } from 'node:fs';
 const projectRoot = resolve(dirname(new URL(import.meta.url).pathname), '..');
 const userId = process.getuid?.();
 const nodeDir = dirname(process.execPath);
+const serviceEnvKeys = [
+  'HOST',
+  'PORT',
+  'DATA_DIR',
+  'WEB_ORIGIN',
+  'VITE_API_BASE',
+  'LLM_PROVIDER',
+  'RAG_PROVIDER',
+  'RAG_BASE_URL',
+  'RAG_SEARCH_PATH',
+  'RAG_REFS_PATH',
+  'RAG_TIMEOUT_MS',
+];
 
 const services = {
   api: {
@@ -71,7 +84,7 @@ function start(entries) {
       fail(`${name}: port ${service.port} is already in use by an unmanaged process. Stop it before using npm run local:start -- ${name}.`);
     }
     if (existing) removeService(service);
-    const shellCommand = `cd ${shellQuote(projectRoot)} && PATH=${shellQuote(nodeDir)}:$PATH ${service.command}`;
+    const shellCommand = `cd ${shellQuote(projectRoot)} && ${serviceEnvAssignments()} PATH=${shellQuote(nodeDir)}:$PATH ${service.command}`;
     run('launchctl', ['submit', '-l', service.label, '-o', service.stdout, '-e', service.stderr, '--', '/bin/zsh', '-lc', shellCommand]);
     console.log(`${name}: started (${service.label})`);
   }
@@ -142,6 +155,13 @@ function checkNode22() {
 
 function shellQuote(value) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function serviceEnvAssignments() {
+  return serviceEnvKeys
+    .filter((key) => Object.prototype.hasOwnProperty.call(process.env, key))
+    .map((key) => `${key}=${shellQuote(process.env[key] ?? '')}`)
+    .join(' ');
 }
 
 function fail(message) {
