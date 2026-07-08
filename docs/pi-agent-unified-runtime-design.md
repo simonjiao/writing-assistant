@@ -2,7 +2,7 @@
 
 ## 状态
 
-实施中，核心 runtime 边界已落地。本设计承接 `docs/pi-agent-workflow-runner-design.md`：workflow runner 已迁移到 pi-agent；API、对话、对话摘要、批注处理和局部修订不再直接调用自研 `AgentRuntime.invokeSkill` 或公开的 `SkillExecutor`，而是按上下文绑定 pi-agent session，并通过 `AgentToolExecutor` 执行受限工具。dialogue route 已从 `app.ts` 拆出，proposal apply/dismiss 相关逻辑已进入 service。operation store 已泛化为 `AgentOperationStore`；非 workflow session 会压缩旧消息到 `compactSummary`，并维护 `toolTraceSummary`。剩余工作主要是继续拆分其它 API 路由这一结构债务。
+核心 runtime 迁移已完成。本设计承接 `docs/pi-agent-workflow-runner-design.md`：workflow runner 已迁移到 pi-agent；API、对话、对话摘要、批注处理和局部修订不再直接调用自研 `AgentRuntime.invokeSkill` 或公开的 `SkillExecutor`，而是按上下文绑定 pi-agent session，并通过 `AgentToolExecutor` 执行受限工具。dialogue route 已从 `app.ts` 拆出，proposal apply/dismiss 相关逻辑已进入 service。operation store 已泛化为 `AgentOperationStore`；非 workflow session 会压缩旧消息到 `compactSummary`，并维护 `toolTraceSummary`。继续拆分其它 API 路由属于后续结构债务。
 
 ## 背景
 
