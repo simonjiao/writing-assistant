@@ -771,6 +771,9 @@ export function App() {
   async function resolveWorkflowHumanGate(gate: NonNullable<RunResponse['humanGates']>[number], decision: 'accept' | 'reject') {
     await execute(() => api.resolveHumanGate(gate.runId, gate.id, { userId, decision }));
   }
+  async function cancelWorkflowRun(run: WorkflowRun) {
+    await execute(() => api.cancelWorkflow(run.id, { userId }));
+  }
   async function startWriting() {
     if (!visibleArticle?.outline.length) return;
     setBusy(true);
@@ -845,7 +848,7 @@ export function App() {
           })}</div> : null}
           <div className="article-blocks">{unassignedBlocks.map((block) => <ArticleBlockView key={block.id} block={block} comments={visibleComments} commentDraft={commentDraft} commentReplyDrafts={commentReplyDrafts} selected={block.id === selectedBlockId} collapsed={collapsedBlockIds.includes(block.id)} onSelect={() => { setSelectedBlockId(block.id); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }} onToggleCollapse={() => toggleBlockCollapsed(block.id)} onCaptureSelection={captureCommentSelection} onUpdateCommentDraft={(comment) => setCommentDraft((current) => current ? { ...current, comment } : current)} onSubmitComment={() => void submitArticleComment()} onCancelComment={() => setCommentDraft(undefined)} onUpdateCommentReplyDraft={updateCommentReplyDraft} onSubmitCommentReply={(commentId) => void submitArticleCommentReply(commentId)} onDeleteComment={(commentId) => void deleteArticleComment(commentId)} onDeleteCommentReply={(commentId, replyId) => void deleteArticleCommentReply(commentId, replyId)} busy={busy} />)}</div>
           {!outlineGenerated ? <div className="editor-support">
-            {lastRun ? <WorkflowSupportCard runResponse={lastRun} busy={writeBusy} onResolveHumanGate={resolveWorkflowHumanGate} /> : null}
+            {lastRun ? <WorkflowSupportCard runResponse={lastRun} busy={writeBusy} onResolveHumanGate={resolveWorkflowHumanGate} onCancelRun={cancelWorkflowRun} /> : null}
             {visibleArticle ? <CommentReviewCard comments={visibleComments} processingSummary={commentProcessingSummary} busy={writeBusy} onProcess={() => void processArticleComments()} /> : null}
             {visibleArticle ? <DialogueBriefCard status={dialogueBriefStatus} /> : null}
             {visibleArticle ? <KnowledgeTagsCard article={visibleArticle} selectedOutline={selectedOutline} outlineWholeSelected={outlineWholeSelected} selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}
@@ -873,7 +876,7 @@ export function App() {
               <button aria-label="收起辅助列" className="right-column-collapse-handle" disabled={busy} title="收起辅助列" onClick={() => updateSupportColumnCollapsed(true)}>&gt;</button>
             </div>
             <div className="right-support-content">
-              {lastRun ? <WorkflowSupportCard runResponse={lastRun} busy={writeBusy} onResolveHumanGate={resolveWorkflowHumanGate} /> : null}
+              {lastRun ? <WorkflowSupportCard runResponse={lastRun} busy={writeBusy} onResolveHumanGate={resolveWorkflowHumanGate} onCancelRun={cancelWorkflowRun} /> : null}
               {visibleArticle ? <CommentReviewCard comments={visibleComments} processingSummary={commentProcessingSummary} busy={writeBusy} onProcess={() => void processArticleComments()} /> : null}
               {visibleArticle ? <DialogueBriefCard status={dialogueBriefStatus} /> : null}
               {visibleArticle ? <KnowledgeTagsCard article={visibleArticle} selectedOutline={selectedOutline} outlineWholeSelected={outlineWholeSelected} selectedBlock={selectedBlock} hasWritingBlocks={hasWritingBlocks} /> : null}

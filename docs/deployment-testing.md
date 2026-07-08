@@ -136,4 +136,4 @@ npm run test:browser
 - TypeScript build：core / skills / api / web
 - Unit tests：core / skills / api / web workflow state
 - API tests：health、writing-autopilot、HumanGate、SQLite persistent store、HTTP RAG
-- Browser smoke：创建任务卡、确认任务卡、生成大纲、开始写作、添加并处理正文批注、HumanGate waiting 确认、HumanGate 拒绝等待新指令、统稿 proposal 应用、统稿 proposal 取消、stale proposal 阻止写入
+- Browser smoke：创建任务卡、确认任务卡、生成大纲、开始写作、添加并处理正文批注、HumanGate waiting 确认、HumanGate 拒绝等待新指令、workflow 取消、统稿 proposal 应用、统稿 proposal 取消、stale proposal 阻止写入

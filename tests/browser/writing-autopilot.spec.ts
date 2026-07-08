@@ -61,6 +61,20 @@ test('rejects a workflow HumanGate without confirming the task card', async ({ p
   await expect(page.getByTestId('generate-outline-button')).toHaveCount(0);
 });
 
+test('cancels a waiting workflow and hides stale HumanGates', async ({ page }) => {
+  await openAppForUser(page, uniqueUserId('browser-workflow-cancel'));
+
+  await page.getByTestId('task-dialog-input').fill('写一篇关于司棋的短文，先生成任务卡。');
+  await page.getByTestId('task-dialog-send').click();
+  await expect(page.getByRole('heading', { name: '任务卡草稿' })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('workflow-gate')).toBeVisible();
+
+  await page.getByTestId('workflow-cancel').click();
+  await expect(page.getByTestId('workflow-next-step')).toContainText('已取消');
+  await expect(page.getByTestId('workflow-gate')).toHaveCount(0);
+  await expect(page.getByTestId('workflow-cancel')).toHaveCount(0);
+});
+
 test('shows a polish proposal in the browser and applies it only after confirmation', async ({ page }) => {
   const userId = uniqueUserId('browser-polish');
   const fixture = await createPolishFixture(userId);

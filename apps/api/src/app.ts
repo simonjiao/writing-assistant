@@ -680,8 +680,11 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (!run) return reply.code(404).send({ error: 'Run not found.' });
     if (run.metadata.userId !== userId) return reply.code(403).send({ error: 'Run belongs to another user.' });
     if (run.status === 'completed' || run.status === 'cancelled') return reply.code(400).send({ error: `Run is already ${run.status}.` });
-    await container.stores.stateStore.updateRun(runId, { status: 'cancelled', updatedAt: nowIso() });
-    await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'workflow.failed', payload: { workflowId: run.workflowId, cancelled: true, userId }, createdAt: nowIso() });
+    const now = nowIso();
+    const pendingGates = await container.stores.humanGateStore.listGates({ runId, userId, statuses: ['pending'] });
+    await Promise.all(pendingGates.map((gate) => container.stores.humanGateStore.updateGate({ ...gate, status: 'superseded', updatedAt: now })));
+    await container.stores.stateStore.updateRun(runId, { status: 'cancelled', waitingFor: undefined, state: { ...run.state, pendingHumanGateId: undefined }, updatedAt: now });
+    await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'workflow.failed', payload: { workflowId: run.workflowId, cancelled: true, userId, supersededGateIds: pendingGates.map((gate) => gate.id) }, createdAt: now });
     return enrichRun(container, runId);
   });
   app.get('/api/workflows/:runId/events', async (request) => { const { runId } = request.params as { runId: string }; return container.stores.eventTraceStore.listByRun(runId); });

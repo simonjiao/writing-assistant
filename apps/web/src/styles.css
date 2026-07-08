@@ -1349,6 +1349,16 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
   color: #6f665b;
   font-size: 12px;
 }
+.workflow-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.workflow-cancel-button {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
 .workflow-next-step {
   display: grid;
   gap: 3px;

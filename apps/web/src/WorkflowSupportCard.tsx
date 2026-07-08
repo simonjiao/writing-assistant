@@ -4,6 +4,7 @@ type WorkflowSupportCardProps = {
   runResponse?: RunResponse;
   busy: boolean;
   onResolveHumanGate: (gate: HumanGate, decision: 'accept' | 'reject') => void | Promise<void>;
+  onCancelRun: (run: RunResponse['run']) => void | Promise<void>;
 };
 
 type AllowedActionView = {
@@ -14,14 +15,15 @@ type AllowedActionView = {
 export function WorkflowSupportCard(props: WorkflowSupportCardProps) {
   const run = props.runResponse?.run;
   if (!run) return null;
-  const pendingGates = (props.runResponse?.humanGates ?? []).filter((gate) => gate.status === 'pending');
+  const canCancelRun = isCancellableRun(run.status);
+  const pendingGates = canCancelRun ? (props.runResponse?.humanGates ?? []).filter((gate) => gate.status === 'pending') : [];
   const operations = (props.runResponse?.operations ?? []).slice(0, 5);
   const reviewArtifacts = (props.runResponse?.reviewArtifacts ?? []).slice(0, 3);
   const waitingReason = typeof run.waitingFor?.reason === 'string' ? run.waitingFor.reason : undefined;
-  const nextAction = pendingGates.length || waitingReason ? undefined : readAllowedActions(run.state)[0];
+  const nextAction = pendingGates.length || waitingReason || !canCancelRun ? undefined : readAllowedActions(run.state)[0];
   return (
     <section data-testid="workflow-support-card" className="support-card workflow-support-card">
-      <div className="workflow-card-head"><h3>流程</h3><span>{workflowRunStatusLabel(run.status)}</span></div>
+      <div className="workflow-card-head"><h3>流程</h3><div className="workflow-card-actions"><span>{workflowRunStatusLabel(run.status)}</span>{canCancelRun ? <button data-testid="workflow-cancel" type="button" className="danger-button workflow-cancel-button" disabled={props.busy} onClick={() => void props.onCancelRun(run)}>取消</button> : null}</div></div>
       <WorkflowNextStep pendingGates={pendingGates} nextAction={nextAction} runStatus={run.status} waitingReason={waitingReason} />
       {pendingGates.length ? <WorkflowGateList gates={pendingGates} busy={props.busy} onResolve={props.onResolveHumanGate} /> : null}
       {reviewArtifacts.length ? <WorkflowReviewList artifacts={reviewArtifacts} /> : null}
@@ -108,6 +110,10 @@ function workflowActionLabel(type?: string): string {
 function workflowRunStatusLabel(status: string): string {
   const labels: Record<string, string> = { running: '处理中', waiting: '等待确认', completed: '已完成', failed: '失败', cancelled: '已取消', idle: '就绪' };
   return labels[status] ?? status;
+}
+
+function isCancellableRun(status: string): boolean {
+  return status !== 'completed' && status !== 'cancelled' && status !== 'failed';
 }
 
 function workflowTerminalLabel(status: string): string {
