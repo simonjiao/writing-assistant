@@ -40,6 +40,8 @@ running -> cancelled
 - agent 决策必须显式选择一个授权 action；runner 不能在缺少 selectedActionId 或缺少 decision provider 时默认执行第一个 action。
 - 覆盖当前大纲、确认任务卡等用户裁决点必须生成 HumanGate。
 - 修改 artifact 时要校验 article revision，防止过期操作覆盖新内容。
+- 开始写作时如果大纲仍有 draft 项，runner 先执行 `confirm_outline_for_writing`，把当前大纲作为写作依据正式确认，再进入一致性检查和章节生成。
+- 任务卡-大纲一致性检查按任务卡与大纲内容签名触发；写入正文只改变 article revision，不应重复触发这类检查。
 - 一致性检查出现 blocking finding 时，runner 先用 `create_revision_proposal` 生成绑定当前 run 的待确认方案，再等待用户应用或取消；同一 revision 上不会继续生成正文。
 - workflow 生成的 `RevisionProposal` 带 `runId`。应用后清理当前一致性阻断并恢复 runner；取消后清理 pending proposal，但保留一致性阻断，让 run 回到 `consistency-review` 等待态。
 - run 等待 pending proposal 时，workflow message 会先处理这个 proposal：应用、取消、或基于新意见刷新 proposal；普通“继续写作”不会绕过未处理的 pending proposal。

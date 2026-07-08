@@ -3,6 +3,7 @@ import {
   AllowedAction,
   ArticleArtifact,
   ArticleBlock,
+  consistencyReviewSignature,
   ExternalStores,
   hashOperationArgs,
   HumanGate,
@@ -59,6 +60,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     if (action.type === 'create_task_card_draft') return this.createTaskCardDraft(run, action);
     if (action.type === 'ask_followup') return this.requestTaskCardGate(run, action);
     if (action.type === 'plan_outline') return this.planOutline(run, action);
+    if (action.type === 'confirm_outline_for_writing') return this.confirmOutlineForWriting(run, action);
     if (action.type === 'request_human_gate') return this.requestHumanGate(run, action);
     if (action.type === 'review_task_card_outline_consistency') return this.reviewTaskCardOutlineConsistency(run, action);
     if (action.type === 'create_revision_proposal') return this.createRevisionProposal(run, action);
@@ -122,6 +124,29 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     return { article: updated, summary: result.summary };
   }
 
+  private async confirmOutlineForWriting(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
+    const article = await this.requireArticle(action.articleId);
+    this.requireBaseRevision(action, article);
+    const hasDraftOutline = article.outline.some((item) => item.status === 'draft');
+    if (!hasDraftOutline) return { article, summary: '当前大纲已可写作。' };
+    const updated = await this.deps.stores.artifactStore.updateArticleWithRevision({
+      article: {
+        ...article,
+        outline: article.outline.map((item) => item.status === 'draft' ? { ...item, status: 'confirmed' as const } : item),
+      },
+      baseRevision: action.baseRevision as number,
+      operationId: action.operationId,
+    });
+    await this.deps.stores.artifactStore.commitVersion(article.id, 'pi 确认大纲并开始写作', 'agent');
+    await this.deps.stores.stateStore.updateRun(run.id, {
+      state: { ...run.state, finalizedOutline: { articleId: article.id, articleRevision: updated.revision } },
+      metadata: { ...run.metadata, articleId: article.id, workspaceId: article.workspaceId },
+      updatedAt: nowIso(),
+    });
+    await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'artifact.updated', payload: { articleId: article.id, reason: 'pi-outline-confirmed-for-writing', outlineCount: updated.outline.length, userId: run.metadata.userId }, createdAt: nowIso() });
+    return { article: updated, summary: '已确认大纲，开始写作。' };
+  }
+
   private async requestHumanGate(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
     const article = await this.requireArticle(action.articleId);
     if (!article.outline.length) throw new Error('Outline overwrite gate requires an existing outline.');
@@ -140,6 +165,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
 
   private async reviewTaskCardOutlineConsistency(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
     const article = await this.requireArticle(action.articleId);
+    const reviewSignature = consistencyReviewSignature(article);
     const findings = consistencyFindings(article);
     const hasBlockingFindings = findings.some((finding) => finding.severity === 'blocking');
     const suggestions = findings
@@ -160,11 +186,14 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
       state: {
         ...run.state,
         consistencyReviewRevision: article.revision,
+        consistencyReviewSignature: reviewSignature,
         consistencyReviewId: reviewArtifact.id,
         consistencyBlockingReviewId: hasBlockingFindings ? reviewArtifact.id : undefined,
         consistencyBlockingRevision: hasBlockingFindings ? article.revision : undefined,
+        consistencyBlockingSignature: hasBlockingFindings ? reviewSignature : undefined,
         pendingReviewProposal: hasBlockingFindings && firstSuggestion ? {
           articleRevision: article.revision,
+          consistencyReviewSignature: reviewSignature,
           reviewArtifactId: reviewArtifact.id,
           suggestionId: firstSuggestion.id,
           targetKind: firstSuggestion.targetKind,

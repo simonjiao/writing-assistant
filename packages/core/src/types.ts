@@ -397,6 +397,7 @@ export type AllowedActionType =
   | 'create_task_card_draft'
   | 'ask_followup'
   | 'plan_outline'
+  | 'confirm_outline_for_writing'
   | 'review_task_card_outline_consistency'
   | 'write_next_section'
   | 'write_section'

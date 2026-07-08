@@ -8,7 +8,7 @@ import {
   WorkflowRun,
 } from './types';
 import { newId, nowIso } from './utils';
-import { AllowedActionPlanner } from './allowed-actions';
+import { AllowedActionPlanner, consistencyReviewSignature } from './allowed-actions';
 import { WorkflowActionExecutor } from './workflow-action-executor';
 import { PiAgentDecisionProvider } from './pi-agent-decision';
 
@@ -176,8 +176,9 @@ export class PiWorkflowRunner {
 
 function isBlockedByCurrentConsistencyReview(run: WorkflowRun, article?: ArticleArtifact): boolean {
   if (!article) return false;
+  const currentSignature = consistencyReviewSignature(article);
   return typeof run.state.consistencyBlockingReviewId === 'string'
-    && run.state.consistencyBlockingRevision === article.revision;
+    && run.state.consistencyBlockingSignature === currentSignature;
 }
 
 function hasPendingReviewProposal(run: WorkflowRun, article?: ArticleArtifact): boolean {

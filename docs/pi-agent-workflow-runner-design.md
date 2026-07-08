@@ -283,6 +283,7 @@ interface AllowedAction {
     | "create_task_card_draft"
     | "ask_followup"
     | "plan_outline"
+    | "confirm_outline_for_writing"
     | "review_task_card_outline_consistency"
     | "write_next_section"
     | "write_section"
@@ -309,6 +310,8 @@ interface AllowedAction {
 - agent 只能选择 `allowedActions` 中的 action。
 - tool registry 拒绝任何未授权 action。
 - 每次写正文最多只暴露一个 `write_next_section` action。
+- 用户请求 `targetStage=article` 且当前大纲仍有 draft 项时，先暴露 `confirm_outline_for_writing`，由 workflow 正式确认大纲后再写正文。
+- `review_task_card_outline_consistency` 由任务卡与大纲内容签名触发，正文写入造成的 article revision 增长不触发重复检查。
 - 一致性检查出现 blocking issue 时，下一轮只暴露 `create_revision_proposal`；生成待确认修改方案后 workflow 等待用户处理，不继续写正文。
 
 ## 工具集合
@@ -318,6 +321,7 @@ interface AllowedAction {
 - `create_task_card_draft`
 - `ask_followup`
 - `plan_outline`
+- `confirm_outline_for_writing`
 - `review_task_card_outline_consistency`
 - `write_next_section`
 - `write_section`

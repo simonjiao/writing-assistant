@@ -93,6 +93,7 @@ function workflowActionLabel(type?: string): string {
     create_task_card_draft: '创建任务卡草稿',
     ask_followup: '确认任务卡',
     plan_outline: '生成大纲',
+    confirm_outline_for_writing: '确认大纲',
     review_task_card_outline_consistency: '检查任务卡与大纲',
     process_article_comments: '处理正文批注',
     write_next_section: '生成下一节',

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AllowedActionPlanner, type ArticleArtifact, type WorkflowRun } from './index';
+import { AllowedActionPlanner, consistencyReviewSignature, type ArticleArtifact, type WorkflowRun } from './index';
 
 const now = '2026-07-07T00:00:00.000Z';
 
@@ -67,25 +67,50 @@ describe('AllowedActionPlanner', () => {
 
   it('exposes only one next-section writing action', () => {
     const planner = new AllowedActionPlanner();
+    const readyArticle = article({
+      outline: [
+        { id: 'sec_1', title: '第一节', goal: '写第一节', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' },
+        { id: 'sec_2', title: '第二节', goal: '写第二节', order: 2, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' },
+      ],
+    });
     const actions = planner.plan({
-      run: run({ consistencyReviewRevision: 3 }),
-      article: article({
-        outline: [
-          { id: 'sec_1', title: '第一节', goal: '写第一节', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' },
-          { id: 'sec_2', title: '第二节', goal: '写第二节', order: 2, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' },
-        ],
-      }),
+      run: run({ consistencyReviewSignature: consistencyReviewSignature(readyArticle) }),
+      article: readyArticle,
     });
     expect(actions).toHaveLength(1);
     expect(actions[0].type).toBe('write_next_section');
     expect(actions[0].sectionId).toBe('sec_1');
   });
 
-  it('creates a revision proposal action before writing when a review suggestion is pending', () => {
+  it('confirms draft outline before article writing', () => {
     const planner = new AllowedActionPlanner();
     const actions = planner.plan({
+      run: run({}, { targetStage: 'article', message: '开始写作' }),
+      article: article({
+        outline: [
+          { id: 'sec_1', title: '第一节', goal: '写第一节', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'draft' },
+          { id: 'sec_2', title: '第二节', goal: '写第二节', order: 2, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' },
+        ],
+      }),
+    });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      type: 'confirm_outline_for_writing',
+      articleId: 'art_1',
+      baseRevision: 3,
+    });
+  });
+
+  it('creates a revision proposal action before writing when a review suggestion is pending', () => {
+    const planner = new AllowedActionPlanner();
+    const reviewedArticle = article({
+      outline: [
+        { id: 'sec_1', title: '第一节', goal: '写第一节', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' },
+      ],
+    });
+    const actions = planner.plan({
       run: run({
-        consistencyReviewRevision: 3,
+        consistencyReviewSignature: consistencyReviewSignature(reviewedArticle),
         consistencyBlockingRevision: 3,
         consistencyBlockingReviewId: 'review_1',
         pendingReviewProposal: {
@@ -96,11 +121,7 @@ describe('AllowedActionPlanner', () => {
           summary: '大纲仍包含任务卡要求避免的表达',
         },
       }),
-      article: article({
-        outline: [
-          { id: 'sec_1', title: '第一节', goal: '写第一节', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' },
-        ],
-      }),
+      article: reviewedArticle,
     });
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({

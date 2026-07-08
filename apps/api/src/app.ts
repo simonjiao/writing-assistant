@@ -1294,7 +1294,7 @@ async function syncWorkflowRunAfterProposal(container: AppContainer, proposal: R
       pendingRevisionProposalId: undefined,
       pendingRevisionProposalRevision: undefined,
       pendingReviewProposal: undefined,
-      ...(shouldClearBlocking ? { consistencyBlockingReviewId: undefined, consistencyBlockingRevision: undefined } : {}),
+      ...(shouldClearBlocking ? { consistencyBlockingReviewId: undefined, consistencyBlockingRevision: undefined, consistencyBlockingSignature: undefined } : {}),
       revisionProposalResult: { proposalId: proposal.id, status: resolution },
     },
     updatedAt: nowIso(),

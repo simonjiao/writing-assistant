@@ -49,8 +49,11 @@ export class AllowedActionPlanner {
         targetId: stableCommentTargetId(commentTargets.map((comment) => comment.id)),
       })];
     }
+    if (targetStage === 'article' && article.outline.some((item) => item.status === 'draft')) {
+      return [this.action(input.run, 'confirm_outline_for_writing', { article, reason: '用户开始写作，先确认当前大纲，随后再进入一致性检查和章节生成。' })];
+    }
     if (this.needsConsistencyReview(input.run, article)) {
-      return [this.action(input.run, 'review_task_card_outline_consistency', { article, reason: '任务卡或大纲 revision 变化后，需要先做一致性检查。' })];
+      return [this.action(input.run, 'review_task_card_outline_consistency', { article, reason: '任务卡或大纲内容变化后，需要先做一致性检查。' })];
     }
     const pendingReviewProposal = readPendingReviewProposal(input.run.state, article.revision);
     if (pendingReviewProposal) {
@@ -74,7 +77,7 @@ export class AllowedActionPlanner {
   }
 
   private needsConsistencyReview(run: WorkflowRun, article: ArticleArtifact): boolean {
-    return run.state.consistencyReviewRevision !== article.revision;
+    return run.state.consistencyReviewSignature !== consistencyReviewSignature(article);
   }
 
   private nextWritableSection(article: ArticleArtifact, requestedSectionId?: string): OutlineItem | undefined {
@@ -108,6 +111,36 @@ export class AllowedActionPlanner {
       reason: input.reason,
     };
   }
+}
+
+export function consistencyReviewSignature(article: ArticleArtifact): string {
+  return hashOperationArgs({
+    taskCard: article.taskCard ? {
+      topic: article.taskCard.topic,
+      writingGoal: article.taskCard.writingGoal,
+      audience: article.taskCard.audience,
+      scope: article.taskCard.scope,
+      structure: article.taskCard.structure,
+      style: article.taskCard.style,
+      constraints: article.taskCard.constraints,
+      topRules: article.taskCard.topRules,
+    } : undefined,
+    outline: article.outline
+      .slice()
+      .sort((left, right) => left.order - right.order)
+      .map((item) => ({
+        id: item.id,
+        title: item.title,
+        goal: item.goal,
+        order: item.order,
+        expectedBlocks: item.expectedBlocks,
+        rhetoricalRole: item.rhetoricalRole,
+        keySection: item.keySection,
+        specialHandling: item.specialHandling,
+        sourceHints: item.sourceHints,
+        themeTags: item.themeTags,
+      })),
+  });
 }
 
 function stableActionId(prefix: string, value: unknown): string {

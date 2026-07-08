@@ -419,8 +419,9 @@ function mockOutlineRevision(currentOutline: Array<{ id?: string; title?: string
 }
 
 function mockSection(section?: { id?: string; title?: string; goal?: string; themeTags?: string[] }) {
+  const sectionId = section?.id ?? 'mock';
   return {
-    block: { id: 'blk_mock', type: 'section', sectionId: section?.id, title: section?.title ?? '测试章节', text: `${section?.goal ?? '测试章节目标'}\n\n这是 mock 模型生成的章节正文。`, sourceRefs: [], themeTags: section?.themeTags ?? [] },
+    block: { id: `blk_${sectionId}`, type: 'section', sectionId: section?.id, title: section?.title ?? '测试章节', text: `${section?.goal ?? '测试章节目标'}\n\n本节正文按目标展开，先承接前文，再推进本节判断。`, sourceRefs: [], themeTags: section?.themeTags ?? [] },
     candidateSources: [],
     summary: 'Mock section generated.',
   };
