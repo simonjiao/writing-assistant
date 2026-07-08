@@ -2,7 +2,7 @@
 
 ## 状态
 
-实施中，核心 runtime 边界已落地。本设计承接 `docs/pi-agent-workflow-runner-design.md`：workflow runner 已迁移到 pi-agent；API、对话、对话摘要、批注处理和局部修订不再直接调用自研 `AgentRuntime.invokeSkill` 或公开的 `SkillExecutor`，而是按上下文绑定 pi-agent session，并通过 `AgentToolExecutor` 执行受限工具。剩余工作主要是 API 大文件拆分、operation store 命名泛化和更完整的非 workflow 上下文压缩策略。
+实施中，核心 runtime 边界已落地。本设计承接 `docs/pi-agent-workflow-runner-design.md`：workflow runner 已迁移到 pi-agent；API、对话、对话摘要、批注处理和局部修订不再直接调用自研 `AgentRuntime.invokeSkill` 或公开的 `SkillExecutor`，而是按上下文绑定 pi-agent session，并通过 `AgentToolExecutor` 执行受限工具。dialogue route 已从 `app.ts` 拆出，proposal apply/dismiss 相关逻辑已进入 service。剩余工作主要是继续拆分其它 API 路由、operation store 命名泛化和更完整的非 workflow 上下文压缩策略。
 
 ## 背景
 
@@ -386,7 +386,7 @@ DELETE /api/articles/:articleId/comments/:commentId/replies/:replyId
 
 ## 文件拆分要求
 
-runtime 边界已经收敛，API 大文件拆分仍是后续必须处理的结构债务。拆分时应移动代码和行为修改分提交。
+runtime 边界已经收敛，API 大文件拆分仍需继续推进。已完成 dialogue route 和 revision proposal service 拆分；后续拆分时仍应移动代码和行为修改分提交。
 
 建议结构：
 
@@ -409,12 +409,12 @@ apps/api/src/
     articleCommentAgentService.ts
 ```
 
-第一批至少做到：
+第一批已做到：
 
 - 新 agent runtime 代码不进入 `app.ts`。
 - dialogue route 从 `app.ts` 拆出。
 - proposal apply/dismiss 相关逻辑进入 service。
-- `bootstrap.ts` 只做组装。
+- `bootstrap.ts` 只做 runtime 和 store 组装。
 
 ## 验收标准
 

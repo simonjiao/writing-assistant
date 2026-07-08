@@ -3,7 +3,7 @@ import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply, FastifyRequest } from 'fastify';
 import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, ArticleRevisionConflictError, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, hashOperationArgs, HumanGate, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, PiAgentSession, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
 import { normalizeTaskCardPolicies } from '@wa/skills';
-import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput, OutlineItemReviserOutput, OutlineReviserOutput, PatchEditorInput, PatchEditorOutput, TaskCardReviserOutput } from '@wa/skills';
+import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput } from '@wa/skills';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
 import { appendCommentReply, canDeleteUnprocessedComment, canDeleteUnprocessedReply, reconcileCommentAfterReplyDeletion, updateComment } from './articleComments';
@@ -13,12 +13,8 @@ import { getWritingStandardDisplaySummary, getWritingStandardSummary, resolveWri
 import { resolveUserContext } from './userContext';
 import { agentOperationId } from './agent/agentOperationIds';
 import { AgentSessionTarget, getOrCreateAgentSession } from './agent/agentSessionTarget';
-
-class RevisionProposalStaleError extends Error {
-  constructor(currentRevision: number, proposalRevision: number) {
-    super(`Revision proposal is stale: article revision is ${currentRevision}, proposal was created at ${proposalRevision}.`);
-  }
-}
+import { registerDialogueRoutes } from './routes/dialogueRoutes';
+import { createRevisionProposalService, RevisionProposalStaleError, type RevisionProposalService } from './services/revisionProposalService';
 
 class HumanGateStaleError extends Error {
   constructor(readonly currentRevision: number, readonly gateRevision: number) {
@@ -28,6 +24,16 @@ class HumanGateStaleError extends Error {
 
 export function createApp(config: AppConfig, container: AppContainer) {
   const app = Fastify({ logger: true });
+  const revisionProposalService = createRevisionProposalService({
+    container,
+    requireArticleAccess: (userId, articleId) => requireArticleAccess(container, userId, articleId),
+    executeArticleAgentSkill,
+    enrichRun: (runId) => enrichRun(container, runId),
+    withWritingStandardSummary,
+    clearDownstreamForTaskCardChange,
+    clearAllBlocks,
+    clearBlocksForOutlineSections,
+  });
   void app.register(cors, { origin: [config.webOrigin, 'http://localhost:5173', 'http://127.0.0.1:5173'] });
   void app.register(websocket);
   app.addHook('onClose', async () => { await container.close(); });
@@ -338,214 +344,29 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const updatedArticle = await container.stores.artifactStore.getArticle(updated.id);
     return updatedArticle ? withWritingStandardSummary(updatedArticle) : updatedArticle;
   });
-  app.post('/api/articles/:articleId/dialogue', async (request, reply) => {
-    const articleId = ((request.params as { articleId?: string }).articleId ?? '').trim();
-    if (!articleId) return reply.code(400).send({ error: 'articleId is required.' });
-    const body = (request.body ?? {}) as { message?: string; userId?: string; sessionId?: string; context?: DialogueContextRequest; pendingProposalId?: string };
-    const message = body.message?.trim();
-    if (!message) return reply.code(400).send({ error: 'Dialogue message is required.' });
-    const userId = readRequestUserId(request, body.userId);
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
-    const access = await requireArticleAccess(container, userId, articleId);
-    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
-    try {
-      await ensureDialogueBriefSettled(container, access.article.id, userId);
-    } catch (error) {
-      return reply.code(409).send({ error: dialogueBriefBarrierError(error), briefStatus: await getDialogueBriefStatus(container, access.article.id, userId) });
-    }
-    const pendingProposal = body.pendingProposalId ? await container.stores.revisionProposalStore.getProposal(body.pendingProposalId) : undefined;
-    if (body.pendingProposalId && (!pendingProposal || pendingProposal.articleId !== access.article.id)) return reply.code(404).send({ error: 'Revision proposal not found.' });
-    if (pendingProposal && pendingProposal.userId !== userId) return reply.code(403).send({ error: 'Revision proposal belongs to another user.' });
-    if (pendingProposal && pendingProposal.status !== 'pending') return reply.code(400).send({ error: `Revision proposal is already ${pendingProposal.status}.` });
-    let route = routeDialogueMessage(message, pendingProposal);
-    if (pendingProposal && route === 'apply') {
-      await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: pendingProposal.contextKind, role: 'user', content: message, proposalId: pendingProposal.id });
-      let applied: Awaited<ReturnType<typeof applyRevisionProposal>>;
-      try {
-        applied = await applyRevisionProposal(container, pendingProposal.id, userId, body.sessionId);
-      } catch (error) {
-        if (error instanceof RevisionProposalStaleError) return reply.code(409).send({ error: error.message });
-        throw error;
-      }
-      await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: pendingProposal.contextKind, role: 'assistant', content: applied.message, proposalId: pendingProposal.id });
-      await appendDialoguePiMessages(container, applied.article ?? access.article, userId, dialogueSessionTargetFromProposal(pendingProposal), [
-        { role: 'user', content: message, proposalId: pendingProposal.id },
-        { role: 'assistant', content: applied.message, proposalId: pendingProposal.id },
-      ]);
-      return { ...applied, messages: await listDialogueMessages(container, access.article.id, userId) };
-    }
-    if (pendingProposal && route === 'dismiss') {
-      await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: pendingProposal.contextKind, role: 'user', content: message, proposalId: pendingProposal.id });
-      const { proposal: dismissed, runPayload } = await dismissRevisionProposal(container, pendingProposal, userId);
-      const assistantMessage = '已取消这次修改方案。';
-      await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: pendingProposal.contextKind, role: 'assistant', content: assistantMessage, proposalId: pendingProposal.id });
-      await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromProposal(pendingProposal), [
-        { role: 'user', content: message, proposalId: pendingProposal.id },
-        { role: 'assistant', content: assistantMessage, proposalId: pendingProposal.id },
-      ]);
-      return { mode: 'answer', message: assistantMessage, proposal: dismissed, ...(runPayload ?? {}), messages: await listDialogueMessages(container, access.article.id, userId) };
-    }
-    const context = resolveDialogueContext(access.article, body.context);
-    if (!context.ok) return reply.code(context.statusCode).send({ error: context.error });
-    if (route === 'clarify') route = await refineDialogueRoute(container, access.article, userId, body.sessionId, message, context.value.context, Boolean(pendingProposal));
-    const userMessage = await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'user', content: message, proposalId: pendingProposal?.id });
-    const conversation = await listDialogueMessages(container, access.article.id, userId, 24);
-    if (route === 'answer' || route === 'clarify' || route === 'discuss') {
-      if (shouldUpdateDialogueBrief(route, message, pendingProposal)) {
-        await enqueueDialogueBriefUpdate({ container, article: access.article, userId, sessionId: body.sessionId, message: userMessage, context: { kind: context.value.context.kind, title: context.value.context.title } });
-      }
-      const assistantMessage = localDialogueReply(route, context.value.context, access.article, message, pendingProposal);
-      await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id });
-      await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromContext(context.value.context), [
-        { role: 'user', content: message, proposalId: pendingProposal?.id },
-        { role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id },
-      ]);
-      return { mode: route, message: assistantMessage, messages: await listDialogueMessages(container, access.article.id, userId) };
-    }
-    if (route === 'needs-rag') {
-      const knowledgeAnswer = await answerWithKnowledge(container, access.article, context.value.context, message);
-      await addKnowledgeEvidenceToBrief({ container, articleId: access.article.id, userId, query: knowledgeAnswer.query, items: knowledgeAnswer.items });
-      await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: knowledgeAnswer.message, proposalId: pendingProposal?.id });
-      await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromContext(context.value.context), [
-        { role: 'user', content: message, proposalId: pendingProposal?.id },
-        { role: 'assistant', content: knowledgeAnswer.message, proposalId: pendingProposal?.id },
-      ]);
-      return { mode: 'answer', message: knowledgeAnswer.message, messages: await listDialogueMessages(container, access.article.id, userId) };
-    }
-    const conversationBrief = await getOrCreateDialogueBrief(container, access.article.id, userId);
-    await enqueueDialogueBriefUpdate({ container, article: access.article, userId, sessionId: body.sessionId, message: userMessage, context: { kind: context.value.context.kind, title: context.value.context.title } });
-    let result: DialogueCoordinatorOutput;
-    try {
-      const skillInput: DialogueCoordinatorInput = {
-        articleId: access.article.id,
-        message,
-        skipKnowledge: true,
-        conversation: buildCompactDialogueConversation(conversation),
-        conversationBrief: compactDialogueBriefForPrompt(conversationBrief),
-        pendingProposal: pendingProposal ? proposalForDialogue(pendingProposal) : undefined,
-        context: context.value.context,
-        taskCard: access.article.taskCard,
-        outline: access.article.outline,
-        selectedOutlineItem: context.value.selectedOutlineItem,
-        selectedBlock: context.value.selectedBlock,
-      };
-      result = await executeArticleAgentSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>({
-        container,
-        article: access.article,
-        userId,
-        sessionId: body.sessionId,
-        target: dialogueSessionTargetFromContext(context.value.context),
-        allowedTools: ['create_revision_proposal', 'ask_clarifying_question', 'answer'],
-        toolName: 'create_revision_proposal',
-        skillId: 'dialogue-coordinator',
-        skillInput,
-        operationPrefix: 'dialogue_coordinator',
-      });
-    } catch (error) {
-      if (!isDialogueCoordinatorRecoverableFailure(error)) throw error;
-      const assistantMessage = '这次修改范围较大，方案没有生成成功。请把要改的大纲项、要新增的情节或要删除的部分拆成更明确的一两条再发。';
-      await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id });
-      await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromContext(context.value.context), [
-        { role: 'user', content: message, proposalId: pendingProposal?.id },
-        { role: 'assistant', content: assistantMessage, proposalId: pendingProposal?.id },
-      ]);
-      return { mode: 'clarify', message: assistantMessage, messages: await listDialogueMessages(container, access.article.id, userId) };
-    }
-    if (result.mode !== 'proposal') {
-      await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: result.message, proposalId: pendingProposal?.id });
-      await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromContext(context.value.context), [
-        { role: 'user', content: message, proposalId: pendingProposal?.id },
-        { role: 'assistant', content: result.message, proposalId: pendingProposal?.id },
-      ]);
-      return { mode: result.mode, message: result.message, messages: await listDialogueMessages(container, access.article.id, userId) };
-    }
-    if (pendingProposal) await container.stores.revisionProposalStore.updateProposal({ ...pendingProposal, status: 'dismissed' });
-    const proposal = await container.stores.revisionProposalStore.createProposal({
-      articleId: access.article.id,
-      userId,
-      runId: pendingProposal?.runId,
-      authorUserId: userId,
-      baseRevision: access.article.revision,
-      contextKind: context.value.context.kind,
-      summary: result.summary ?? result.message,
-      message: result.message,
-      operations: result.operations,
-      warnings: result.warnings,
-    });
-    if (pendingProposal?.runId) await syncWorkflowRunToRefreshedProposal(container, pendingProposal, proposal);
-    await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: context.value.context.kind, role: 'assistant', content: result.message, proposalId: proposal.id });
-    await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromContext(context.value.context), [
-      { role: 'user', content: message, proposalId: pendingProposal?.id },
-      { role: 'assistant', content: result.message, proposalId: proposal.id },
-    ]);
-    return { mode: 'proposal', message: result.message, proposal, messages: await listDialogueMessages(container, access.article.id, userId) };
-  });
-  app.get('/api/articles/:articleId/dialogue/brief', async (request, reply) => {
-    const { articleId } = request.params as { articleId: string };
-    const query = request.query as { userId?: string };
-    const userId = readRequestUserId(request, query.userId);
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
-    const access = await requireArticleAccess(container, userId, articleId);
-    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
-    return getDialogueBriefStatus(container, articleId, userId);
-  });
-  app.get('/api/articles/:articleId/dialogue/messages', async (request, reply) => {
-    const { articleId } = request.params as { articleId: string };
-    const query = request.query as { userId?: string; limit?: string };
-    const userId = readRequestUserId(request, query.userId);
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
-    const access = await requireArticleAccess(container, userId, articleId);
-    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
-    const limit = query.limit ? Number.parseInt(query.limit, 10) : undefined;
-    return listDialogueMessages(container, articleId, userId, Number.isFinite(limit) ? limit : undefined);
-  });
-  app.get('/api/articles/:articleId/dialogue/proposals', async (request, reply) => {
-    const { articleId } = request.params as { articleId: string };
-    const query = request.query as { userId?: string };
-    const userId = readRequestUserId(request, query.userId);
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
-    const access = await requireArticleAccess(container, userId, articleId);
-    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
-    return container.stores.revisionProposalStore.listPendingProposals(articleId, userId);
-  });
-  app.post('/api/articles/:articleId/dialogue/:proposalId/apply', async (request, reply) => {
-    const { articleId, proposalId } = request.params as { articleId: string; proposalId: string };
-    const body = (request.body ?? {}) as { userId?: string; sessionId?: string };
-    const userId = readRequestUserId(request, body.userId);
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
-    const access = await requireArticleAccess(container, userId, articleId);
-    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
-    const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
-    if (!proposal || proposal.articleId !== articleId) return reply.code(404).send({ error: 'Revision proposal not found.' });
-    let applied: Awaited<ReturnType<typeof applyRevisionProposal>>;
-    try {
-      applied = await applyRevisionProposal(container, proposal.id, userId, body.sessionId);
-    } catch (error) {
-      if (error instanceof RevisionProposalStaleError) return reply.code(409).send({ error: error.message });
-      throw error;
-    }
-    await appendDialogueMessage(container, { articleId, userId, contextKind: proposal.contextKind, role: 'assistant', content: applied.message, proposalId: proposal.id });
-    await appendDialoguePiMessages(container, applied.article ?? access.article, userId, dialogueSessionTargetFromProposal(proposal), [
-      { role: 'assistant', content: applied.message, proposalId: proposal.id },
-    ]);
-    return { ...applied, messages: await listDialogueMessages(container, articleId, userId) };
-  });
-  app.post('/api/articles/:articleId/dialogue/:proposalId/dismiss', async (request, reply) => {
-    const { articleId, proposalId } = request.params as { articleId: string; proposalId: string };
-    const body = (request.body ?? {}) as { userId?: string };
-    const userId = readRequestUserId(request, body.userId);
-    if (!userId) return reply.code(400).send({ error: 'userId is required.' });
-    const access = await requireArticleAccess(container, userId, articleId);
-    if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
-    const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
-    if (!proposal || proposal.articleId !== articleId) return reply.code(404).send({ error: 'Revision proposal not found.' });
-    if (proposal.userId !== userId) return reply.code(403).send({ error: 'Revision proposal belongs to another user.' });
-    const { proposal: dismissed, runPayload } = await dismissRevisionProposal(container, proposal, userId);
-    await appendDialogueMessage(container, { articleId, userId, contextKind: proposal.contextKind, role: 'assistant', content: '已取消这次修改提案。', proposalId: proposal.id });
-    await appendDialoguePiMessages(container, access.article, userId, dialogueSessionTargetFromProposal(proposal), [
-      { role: 'assistant', content: '已取消这次修改提案。', proposalId: proposal.id },
-    ]);
-    return { mode: 'answer', message: '已取消这次修改提案。', proposal: dismissed, ...(runPayload ?? {}), messages: await listDialogueMessages(container, articleId, userId) };
+  registerDialogueRoutes(app, {
+    container,
+    readRequestUserId,
+    requireArticleAccess,
+    routeDialogueMessage,
+    resolveDialogueContext,
+    refineDialogueRoute,
+    appendDialogueMessage,
+    appendDialoguePiMessages,
+    dialogueSessionTargetFromContext,
+    dialogueSessionTargetFromProposal,
+    listDialogueMessages,
+    shouldUpdateDialogueBrief,
+    localDialogueReply,
+    answerWithKnowledge,
+    proposalForDialogue,
+    executeArticleAgentSkill,
+    isDialogueCoordinatorRecoverableFailure,
+    dialogueBriefBarrierError,
+    applyRevisionProposal: (_container, proposalId, userId, sessionId) => revisionProposalService.applyRevisionProposal(proposalId, userId, sessionId),
+    dismissRevisionProposal: (_container, proposal, userId) => revisionProposalService.dismissRevisionProposal(proposal, userId),
+    syncWorkflowRunToRefreshedProposal: (_container, previousProposal, nextProposal) => revisionProposalService.syncWorkflowRunToRefreshedProposal(previousProposal, nextProposal),
+    isRevisionProposalStaleError: (error) => error instanceof RevisionProposalStaleError,
   });
   app.post('/api/knowledge/search', async (request) => {
     const body = request.body as { query: string } & KnowledgeSearchOptions;
@@ -583,7 +404,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
         await container.stores.eventTraceStore.append({ id: newId('evt'), runId: pendingProposalRun.id, type: 'pi.session.updated', payload: { userId, reason: 'workflow-user-message' }, createdAt: nowIso() });
         let refreshedProposalRun: (Awaited<ReturnType<typeof enrichRun>> & { messages?: DialogueMessage[] }) | undefined;
         try {
-          refreshedProposalRun = await handleWorkflowPendingProposalMessage(container, pendingProposalRun, message, userId);
+          refreshedProposalRun = await handleWorkflowPendingProposalMessage(container, revisionProposalService, pendingProposalRun, message, userId);
         } catch (error) {
           if (error instanceof RevisionProposalStaleError) return reply.code(409).send({ error: error.message });
           throw error;
@@ -679,7 +500,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (pendingGates.length) return reply.code(409).send({ error: 'Resolve pending HumanGate before sending a workflow message.', gateId: pendingGates[0].id });
     await appendWorkflowUserMessage(container, run, message);
     await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'pi.session.updated', payload: { userId, reason: 'workflow-user-message' }, createdAt: nowIso() });
-    const pendingProposalRun = await handleWorkflowPendingProposalMessage(container, run, message, userId);
+    const pendingProposalRun = await handleWorkflowPendingProposalMessage(container, revisionProposalService, run, message, userId);
     if (pendingProposalRun) return pendingProposalRun;
     const existingInput = readObject(run.input) ?? {};
     const targetStage = normalizeWorkflowTargetStage(body.targetStage);
@@ -1072,7 +893,7 @@ async function findPendingWorkflowProposalRun(container: AppContainer, articleId
   return undefined;
 }
 
-async function handleWorkflowPendingProposalMessage(container: AppContainer, run: WorkflowRun, message: string, userId: string): Promise<(Awaited<ReturnType<typeof enrichRun>> & { messages?: DialogueMessage[] }) | undefined> {
+async function handleWorkflowPendingProposalMessage(container: AppContainer, revisionProposalService: RevisionProposalService, run: WorkflowRun, message: string, userId: string): Promise<(Awaited<ReturnType<typeof enrichRun>> & { messages?: DialogueMessage[] }) | undefined> {
   const pendingProposalId = typeof run.state.pendingRevisionProposalId === 'string' ? run.state.pendingRevisionProposalId : undefined;
   if (!pendingProposalId) return undefined;
   const proposal = await container.stores.revisionProposalStore.getProposal(pendingProposalId);
@@ -1096,14 +917,14 @@ async function handleWorkflowPendingProposalMessage(container: AppContainer, run
 
   const route = routeDialogueMessage(message, proposal);
   if (route === 'apply') {
-    const applied = await applyRevisionProposal(container, proposal.id, userId, sessionId);
+    const applied = await revisionProposalService.applyRevisionProposal(proposal.id, userId, sessionId);
     await appendWorkflowProposalAssistantTurn(container, applied.article ?? access.article, userId, context.value.context, applied.message, proposal.id);
     return enrichRunWithDialogueMessages(container, run.id, access.article.id, userId);
   }
   if (route === 'dismiss') {
-    const { runPayload } = await dismissRevisionProposal(container, proposal, userId);
+    const { runPayload } = await revisionProposalService.dismissRevisionProposal(proposal, userId);
     await appendWorkflowProposalAssistantTurn(container, access.article, userId, context.value.context, '已取消这次修改方案。', proposal.id);
-    return { ...(runPayload ?? (await enrichRun(container, run.id))), messages: await listDialogueMessages(container, access.article.id, userId) };
+    return { ...((runPayload as Awaited<ReturnType<typeof enrichRun>> | undefined) ?? (await enrichRun(container, run.id))), messages: await listDialogueMessages(container, access.article.id, userId) };
   }
   if (route !== 'propose' && !(route === 'discuss' && isModificationIntent(message))) {
     const assistantMessage = workflowPendingProposalReply(route, context.value.context, proposal);
@@ -1164,7 +985,7 @@ async function handleWorkflowPendingProposalMessage(container: AppContainer, run
     operations: result.operations,
     warnings: result.warnings,
   });
-  await syncWorkflowRunToRefreshedProposal(container, proposal, nextProposal);
+  await revisionProposalService.syncWorkflowRunToRefreshedProposal(proposal, nextProposal);
   await appendWorkflowProposalAssistantTurn(container, access.article, userId, context.value.context, result.message, nextProposal.id);
   return enrichRunWithDialogueMessages(container, run.id, access.article.id, userId);
 }
@@ -1223,64 +1044,6 @@ function isModificationIntent(message: string): boolean {
 
 function isDialogueCoordinatorRecoverableFailure(error: unknown): boolean {
   return error instanceof Error && /Dialogue coordinator (did not return valid JSON|returned invalid|returned empty|returned unsupported|returned proposal without operations)/.test(error.message);
-}
-
-async function applyRevisionProposal(container: AppContainer, proposalId: string, userId: string, sessionId?: string) {
-  const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
-  if (!proposal) throw new Error('Revision proposal not found.');
-  if (proposal.userId !== userId) throw new Error('Revision proposal belongs to another user.');
-  if (proposal.status !== 'pending') throw new Error(`Revision proposal is already ${proposal.status}.`);
-  const access = await requireArticleAccess(container, userId, proposal.articleId);
-  if (!access.ok) throw new Error(access.error);
-  let article = access.article;
-  if (typeof proposal.baseRevision === 'number' && article.revision !== proposal.baseRevision) {
-    throw new RevisionProposalStaleError(article.revision, proposal.baseRevision);
-  }
-  let runPayload: Awaited<ReturnType<typeof enrichRun>> | undefined;
-  for (const [operationIndex, operation] of proposal.operations.entries()) {
-    const operationId = revisionProposalOperationId(proposal.id, operationIndex);
-    const operationRecord = await container.stores.workflowOperationStore.startOperation({
-      operationId,
-      runId: proposal.runId,
-      userId,
-      articleId: article.id,
-      toolName: revisionOperationToolName(operation),
-      allowedActionId: proposal.id,
-      argsHash: hashOperationArgs({ proposalId: proposal.id, operationIndex, operation }),
-      articleRevisionBefore: article.revision,
-    });
-    if (operationRecord.status === 'completed') {
-      const currentArticle = await container.stores.artifactStore.getArticle(article.id);
-      if (!currentArticle) throw new Error('Article not found after completed revision operation.');
-      article = currentArticle;
-      continue;
-    }
-    let result: Awaited<ReturnType<typeof applyRevisionOperation>>;
-    try {
-      result = await applyRevisionOperation(container, article, operation, userId, sessionId, { baseRevision: article.revision, operationId });
-      await container.stores.workflowOperationStore.updateOperation({ ...operationRecord, status: 'completed', error: undefined, articleRevisionAfter: result.article.revision, resultRef: result.article.id });
-    } catch (error) {
-      await container.stores.workflowOperationStore.updateOperation({ ...operationRecord, status: 'failed', error: error instanceof Error ? error.message : String(error) });
-      throw error;
-    }
-    if (result.runPayload) runPayload = result.runPayload;
-    article = result.article;
-  }
-  const applied = await container.stores.revisionProposalStore.updateProposal({ ...proposal, status: 'applied' });
-  const articlePayload = await container.stores.artifactStore.getArticle(article.id);
-  const workflowRunPayload = await syncWorkflowRunAfterProposal(container, applied, 'applied');
-  const finalRunPayload = workflowRunPayload ?? runPayload;
-  return {
-    mode: 'applied',
-    message: finalRunPayload ? '修改已应用，工作流已继续推进。' : '修改已应用。',
-    proposal: applied,
-    article: articlePayload ? withWritingStandardSummary(articlePayload) : articlePayload,
-    ...(finalRunPayload ?? {}),
-  };
-}
-
-function revisionProposalOperationId(proposalId: string, operationIndex: number): string {
-  return `op_revision_proposal_${proposalId}_${operationIndex + 1}`;
 }
 
 function manualOutlineEditOperationId(articleId: string, sectionId: string, baseRevision: number, title: string, goal: string): string {
@@ -1346,181 +1109,6 @@ async function applyAuditedArticleMutation(
     if (error instanceof ArticleRevisionConflictError) return { ok: false, statusCode: 409, error: error.message };
     throw error;
   }
-}
-
-function revisionOperationToolName(operation: RevisionOperation): string {
-  return `apply_${operation.type}`;
-}
-
-async function dismissRevisionProposal(container: AppContainer, proposal: RevisionProposal, userId: string): Promise<{ proposal: RevisionProposal; runPayload?: Awaited<ReturnType<typeof enrichRun>> }> {
-  if (proposal.userId !== userId) throw new Error('Revision proposal belongs to another user.');
-  if (proposal.status !== 'pending') throw new Error(`Revision proposal is already ${proposal.status}.`);
-  const dismissed = await container.stores.revisionProposalStore.updateProposal({ ...proposal, status: 'dismissed' });
-  const runPayload = await syncWorkflowRunAfterProposal(container, dismissed, 'dismissed');
-  return { proposal: dismissed, runPayload };
-}
-
-async function syncWorkflowRunToRefreshedProposal(container: AppContainer, previousProposal: RevisionProposal, nextProposal: RevisionProposal): Promise<void> {
-  if (!previousProposal.runId || previousProposal.runId !== nextProposal.runId) return;
-  const run = await container.stores.stateStore.getRun(previousProposal.runId);
-  if (!run) return;
-  if (run.metadata.userId !== nextProposal.userId) throw new Error('Workflow proposal belongs to another user.');
-  if (run.state.pendingRevisionProposalId !== previousProposal.id) return;
-  await container.stores.stateStore.updateRun(run.id, {
-    status: 'waiting',
-    waitingFor: { nodeId: 'revision-proposal', reason: '已刷新待确认修改方案，请先应用或取消后再继续写作。' },
-    state: {
-      ...run.state,
-      pendingRevisionProposalId: nextProposal.id,
-      pendingRevisionProposalRevision: nextProposal.baseRevision,
-      pendingReviewProposal: undefined,
-    },
-    updatedAt: nowIso(),
-  });
-  await container.stores.eventTraceStore.append({
-    id: newId('evt'),
-    runId: run.id,
-    type: 'revision_proposal.created',
-    payload: {
-      articleId: nextProposal.articleId,
-      proposalId: nextProposal.id,
-      replacedProposalId: previousProposal.id,
-      userId: nextProposal.userId,
-    },
-    createdAt: nowIso(),
-  });
-}
-
-async function syncWorkflowRunAfterProposal(container: AppContainer, proposal: RevisionProposal, resolution: 'applied' | 'dismissed'): Promise<Awaited<ReturnType<typeof enrichRun>> | undefined> {
-  if (!proposal.runId) return undefined;
-  const run = await container.stores.stateStore.getRun(proposal.runId);
-  if (!run) return undefined;
-  if (run.metadata.userId !== proposal.userId) throw new Error('Workflow proposal belongs to another user.');
-  if (run.status === 'completed' || run.status === 'cancelled' || run.status === 'failed') return enrichRun(container, run.id);
-  if (run.state.pendingRevisionProposalId !== proposal.id) return enrichRun(container, run.id);
-  const shouldClearBlocking = resolution === 'applied';
-  await container.stores.stateStore.updateRun(run.id, {
-    status: 'running',
-    waitingFor: undefined,
-    state: {
-      ...run.state,
-      pendingRevisionProposalId: undefined,
-      pendingRevisionProposalRevision: undefined,
-      pendingReviewProposal: undefined,
-      ...(shouldClearBlocking ? { consistencyBlockingReviewId: undefined, consistencyBlockingRevision: undefined, consistencyBlockingSignature: undefined } : {}),
-      revisionProposalResult: { proposalId: proposal.id, status: resolution },
-    },
-    updatedAt: nowIso(),
-  });
-  await container.stores.eventTraceStore.append({
-    id: newId('evt'),
-    runId: run.id,
-    type: 'revision_proposal.resolved',
-    payload: { articleId: proposal.articleId, proposalId: proposal.id, status: resolution, userId: proposal.userId },
-    createdAt: nowIso(),
-  });
-  await container.piRunner.runUntilBlocked(run.id);
-  return enrichRun(container, run.id);
-}
-
-async function applyRevisionOperation(container: AppContainer, article: ArticleArtifact, operation: RevisionOperation, userId: string, sessionId: string | undefined, write: { baseRevision: number; operationId: string }): Promise<{ article: ArticleArtifact; runPayload?: Awaited<ReturnType<typeof enrichRun>> }> {
-  if (operation.type === 'revise-task-card') {
-    if (!article.taskCard) throw new Error('Article has no task card to revise.');
-    const skillInput = { articleId: article.id, instruction: operation.instruction, currentTaskCard: article.taskCard, skipKnowledge: true };
-    const result = await executeArticleAgentSkill<typeof skillInput, TaskCardReviserOutput>({
-      container,
-      article,
-      userId,
-      sessionId,
-      target: { contextKind: 'task-card' },
-      allowedTools: ['revise_task_card'],
-      toolName: 'revise_task_card',
-      skillId: 'task-card-reviser',
-      skillInput,
-      operationPrefix: 'revision_apply_task_card',
-      operationId: `${write.operationId}_skill`,
-      operationPayload: { writeOperationId: write.operationId, operation, skillInput },
-    });
-    const invalidation = clearDownstreamForTaskCardChange(article);
-    article.taskCard = normalizeTaskCardPolicies(result.taskCard, operation.instruction).taskCard;
-    article.title = result.taskCard.topic;
-    const updated = await container.stores.artifactStore.updateArticleWithRevision({ article, baseRevision: write.baseRevision, operationId: write.operationId });
-    await container.stores.artifactStore.commitVersion(article.id, invalidation.outlineCount || invalidation.blockCount ? `修订任务卡并清空下游内容：${result.summary.slice(0, 80)}` : `修订任务卡：${result.summary.slice(0, 80)}`, 'user');
-    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'task-card-revised', changedFields: result.changedFields, invalidated: invalidation, userId, operationId: write.operationId }, createdAt: nowIso() });
-    return { article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated };
-  }
-  if (operation.type === 'revise-outline-item') {
-    const existing = article.outline.find((item) => item.id === operation.outlineItemId);
-    if (!existing) throw new Error(`Outline section not found: ${operation.outlineItemId}`);
-    const skillInput = { articleId: article.id, instruction: operation.instruction, currentOutlineItem: existing, taskCard: article.taskCard, articleOutline: article.outline };
-    const result = await executeArticleAgentSkill<typeof skillInput, OutlineItemReviserOutput>({
-      container,
-      article,
-      userId,
-      sessionId,
-      target: { contextKind: 'outline-item', targetId: operation.outlineItemId },
-      allowedTools: ['revise_outline_item'],
-      toolName: 'revise_outline_item',
-      skillId: 'outline-item-reviser',
-      skillInput,
-      operationPrefix: 'revision_apply_outline_item',
-      operationId: `${write.operationId}_skill`,
-      operationPayload: { writeOperationId: write.operationId, operation, skillInput },
-    });
-    const invalidation = clearBlocksForOutlineSections(article, [operation.outlineItemId]);
-    const revisedItem = { ...result.outlineItem, status: result.outlineItem.status === 'written' ? 'confirmed' as const : result.outlineItem.status };
-    article.outline = article.outline.map((item) => item.id === operation.outlineItemId ? revisedItem : item);
-    const updated = await container.stores.artifactStore.updateArticleWithRevision({ article, baseRevision: write.baseRevision, operationId: write.operationId });
-    await container.stores.artifactStore.commitVersion(article.id, invalidation.blockCount ? `修订大纲章节并清空本节正文：${result.summary.slice(0, 80)}` : `修订大纲章节：${result.summary.slice(0, 80)}`, 'user');
-    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, sectionId: operation.outlineItemId, reason: 'outline-section-revised', changedFields: result.changedFields, invalidated: invalidation, userId, operationId: write.operationId }, createdAt: nowIso() });
-    return { article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated };
-  }
-  if (operation.type === 'revise-outline') {
-    const writtenSectionIds = [...new Set(article.blocks.map((block) => block.sectionId).filter((id): id is string => Boolean(id)))];
-    const skillInput = { articleId: article.id, instruction: operation.instruction, taskCard: article.taskCard, currentOutline: article.outline, writtenSectionIds };
-    const result = await executeArticleAgentSkill<typeof skillInput, OutlineReviserOutput>({
-      container,
-      article,
-      userId,
-      sessionId,
-      target: { contextKind: 'outline' },
-      allowedTools: ['revise_outline'],
-      toolName: 'revise_outline',
-      skillId: 'outline-reviser',
-      skillInput,
-      operationPrefix: 'revision_apply_outline',
-      operationId: `${write.operationId}_skill`,
-      operationPayload: { writeOperationId: write.operationId, operation, skillInput },
-    });
-    const invalidation = clearAllBlocks(article);
-    article.outline = result.outline.map((item) => ({ ...item, status: item.status === 'written' ? 'confirmed' as const : item.status }));
-    const updated = await container.stores.artifactStore.updateArticleWithRevision({ article, baseRevision: write.baseRevision, operationId: write.operationId });
-    await container.stores.artifactStore.commitVersion(article.id, invalidation.blockCount ? `修订大纲并清空正文：${result.summary.slice(0, 80)}` : `修订大纲：${result.summary.slice(0, 80)}`, 'user');
-    await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'outline-revised', changedFields: result.changedFields, warnings: result.warnings, invalidated: invalidation, userId, operationId: write.operationId }, createdAt: nowIso() });
-    return { article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated };
-  }
-  const skillInput: PatchEditorInput = { articleId: article.id, blockId: operation.blockId, instruction: operation.instruction };
-  const patchResult = await executeArticleAgentSkill<PatchEditorInput, PatchEditorOutput>({
-    container,
-    article,
-    userId,
-    sessionId,
-    target: { contextKind: 'block', targetId: operation.blockId },
-    allowedTools: ['patch_block'],
-    toolName: 'patch_block',
-    skillId: 'patch-editor',
-    skillInput,
-    operationPrefix: 'revision_apply_patch_block',
-    operationId: `${write.operationId}_skill`,
-    operationPayload: { writeOperationId: write.operationId, operation, skillInput },
-    blockId: operation.blockId,
-  });
-  article.blocks = article.blocks.map((block) => block.id === patchResult.patch.blockId ? { ...block, text: patchResult.patch.after, updatedAt: nowIso(), status: 'draft' } : block);
-  const updated = await container.stores.artifactStore.updateArticleWithRevision({ article, baseRevision: write.baseRevision, operationId: write.operationId });
-  await container.stores.artifactStore.commitVersion(article.id, `应用局部修改：${patchResult.patch.instruction}`, 'agent');
-  await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, blockId: operation.blockId, reason: 'dialogue-patch-applied', userId, operationId: write.operationId }, createdAt: nowIso() });
-  if (sessionId) await container.stores.sessionStore.updateSession(sessionId, { currentArticleId: article.id, currentWorkspaceId: article.workspaceId, currentBlockId: operation.blockId });
-  return { article: updated };
 }
 
 function defaultWorkspaceId(userId: string): string {
