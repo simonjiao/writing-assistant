@@ -19,7 +19,7 @@ export function WorkflowSupportCard(props: WorkflowSupportCardProps) {
   const reviewArtifacts = (props.runResponse?.reviewArtifacts ?? []).slice(0, 3);
   const nextAction = pendingGates.length ? undefined : readAllowedActions(run.state)[0];
   return (
-    <section className="support-card workflow-support-card">
+    <section data-testid="workflow-support-card" className="support-card workflow-support-card">
       <div className="workflow-card-head"><h3>流程</h3><span>{workflowRunStatusLabel(run.status)}</span></div>
       <WorkflowNextStep pendingGates={pendingGates} nextAction={nextAction} runStatus={run.status} />
       {pendingGates.length ? <WorkflowGateList gates={pendingGates} busy={props.busy} onResolve={props.onResolveHumanGate} /> : null}
@@ -31,24 +31,24 @@ export function WorkflowSupportCard(props: WorkflowSupportCardProps) {
 
 function WorkflowNextStep(props: { pendingGates: HumanGate[]; nextAction?: AllowedActionView; runStatus: string }) {
   if (props.pendingGates.length) {
-    return <div className="workflow-next-step"><span>下一步</span><strong>等待确认</strong><p>{props.pendingGates[0].question}</p></div>;
+    return <div data-testid="workflow-next-step" className="workflow-next-step"><span>下一步</span><strong>等待确认</strong><p>{props.pendingGates[0].question}</p></div>;
   }
   if (props.nextAction) {
-    return <div className="workflow-next-step"><span>下一步</span><strong>{workflowActionLabel(props.nextAction.type)}</strong><p>{props.nextAction.reason ?? '继续推进当前写作流程。'}</p></div>;
+    return <div data-testid="workflow-next-step" className="workflow-next-step"><span>下一步</span><strong>{workflowActionLabel(props.nextAction.type)}</strong><p>{props.nextAction.reason ?? '继续推进当前写作流程。'}</p></div>;
   }
-  return <div className="workflow-next-step"><span>下一步</span><strong>{workflowTerminalLabel(props.runStatus)}</strong></div>;
+  return <div data-testid="workflow-next-step" className="workflow-next-step"><span>下一步</span><strong>{workflowTerminalLabel(props.runStatus)}</strong></div>;
 }
 
 function WorkflowGateList(props: { gates: HumanGate[]; busy: boolean; onResolve: (gate: HumanGate, decision: 'accept' | 'reject') => void | Promise<void> }) {
   return (
     <div className="workflow-section">
       <h4>待确认</h4>
-      {props.gates.map((gate) => <div className="workflow-gate" key={gate.id}>
+      {props.gates.map((gate) => <div data-testid="workflow-gate" className="workflow-gate" key={gate.id}>
         <p>{gate.question}</p>
         <div className="workflow-gate-options">{gate.options.slice(0, 3).map((option) => <span key={option.id}>{option.label}</span>)}</div>
         <div className="workflow-gate-actions">
-          <button type="button" className="secondary-button compact" disabled={props.busy} onClick={() => void props.onResolve(gate, 'reject')}>保留</button>
-          <button type="button" className="compact" disabled={props.busy} onClick={() => void props.onResolve(gate, 'accept')}>确认</button>
+          <button data-testid="workflow-gate-reject" type="button" className="secondary-button compact" disabled={props.busy} onClick={() => void props.onResolve(gate, 'reject')}>保留</button>
+          <button data-testid="workflow-gate-accept" type="button" className="compact" disabled={props.busy} onClick={() => void props.onResolve(gate, 'accept')}>确认</button>
         </div>
       </div>)}
     </div>
@@ -59,7 +59,7 @@ function WorkflowReviewList(props: { artifacts: ReviewArtifact[] }) {
   const findings = props.artifacts.flatMap((artifact) => artifact.findings.map((finding) => ({ ...finding, type: artifact.type }))).slice(0, 5);
   const suggestions = props.artifacts.flatMap((artifact) => artifact.suggestions.map((suggestion) => ({ ...suggestion, type: artifact.type }))).slice(0, 4);
   return (
-    <div className="workflow-section">
+    <div data-testid="workflow-review-list" className="workflow-section">
       <h4>检查建议</h4>
       {findings.length ? <div className="workflow-findings">{findings.map((finding, index) => <div className={`workflow-finding severity-${finding.severity}`} key={`${finding.type}-${finding.targetId ?? index}-${finding.message}`}><span>{reviewSeverityLabel(finding.severity)}</span>{finding.message}</div>)}</div> : <div className="empty">暂无检查问题。</div>}
       {suggestions.length ? <div className="workflow-suggestions">{suggestions.map((suggestion) => <div className="workflow-suggestion" key={suggestion.id}>{suggestion.summary}</div>)}</div> : null}

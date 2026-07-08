@@ -815,7 +815,7 @@ export function App() {
               <h2>任务</h2>
               <button aria-label="创建新任务" className="icon-button task-create-button" disabled={busy || !selectedWorkspaceId} title="创建新任务" onClick={openNewTaskPage}>+</button>
             </div>
-            <div className="history-list">{articleSummaries.length ? articleSummaries.map((item) => <div className={visibleArticle?.id === item.id ? 'history-row active' : 'history-row'} key={item.id}><button className="history-item" disabled={busy} onClick={() => void openArticle(item.id)}><strong>{item.title}</strong><span>{taskStatusLabel(item.taskStatus)} · {item.outlineCount}纲 · {item.blockCount}节</span><span>{new Date(item.updatedAt).toLocaleString()}</span></button><button aria-label={`删除 ${item.title}`} className="history-delete" disabled={writeBusy} title="删除任务" onClick={() => void deleteArticle(item.id)}>×</button></div>) : <div className="empty">当前工作台暂无任务。</div>}</div>
+            <div className="history-list">{articleSummaries.length ? articleSummaries.map((item) => <div data-testid="history-row" className={visibleArticle?.id === item.id ? 'history-row active' : 'history-row'} key={item.id}><button data-testid="history-item" className="history-item" disabled={busy} onClick={() => void openArticle(item.id)}><strong>{item.title}</strong><span>{taskStatusLabel(item.taskStatus)} · {item.outlineCount}纲 · {item.blockCount}节</span><span>{new Date(item.updatedAt).toLocaleString()}</span></button><button aria-label={`删除 ${item.title}`} className="history-delete" disabled={writeBusy} title="删除任务" onClick={() => void deleteArticle(item.id)}>×</button></div>) : <div className="empty">当前工作台暂无任务。</div>}</div>
           </>}
         </aside>
         {taskCardConfirmed ? <aside className={dialogContext.kind === 'task-card' ? 'panel task-card-panel selected' : 'panel task-card-panel'} onClick={() => { setTaskCardTarget('current'); setSelectedBlockId(undefined); setSelectedOutlineId(undefined); setOutlineWholeSelected(false); }}>
@@ -1073,7 +1073,7 @@ function DialogueResultView(props: { response?: DialogueResponse; proposal?: Rev
   const proposal = props.proposal;
   if (!props.response && !proposal) return null;
   return (
-    <div className={proposal ? 'dialogue-result proposal' : 'dialogue-result'}>
+    <div data-testid={proposal ? 'dialogue-proposal' : 'dialogue-result'} className={proposal ? 'dialogue-result proposal' : 'dialogue-result'}>
       {props.response?.message && !proposal ? <p>{props.response.message}</p> : null}
       {proposal ? <div className="dialogue-proposal">
         <div className="dialogue-proposal-head"><strong>{proposal.summary}</strong><span>{revisionOperationSummary(proposal.operations)}</span></div>
@@ -1081,8 +1081,8 @@ function DialogueResultView(props: { response?: DialogueResponse; proposal?: Rev
         {proposal.warnings.length ? <ul className="dialogue-warnings">{proposal.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
         <div className="dialogue-proposal-actions">
           {props.proposalDirty ? <button className="secondary-button" disabled={props.busy} onClick={() => void props.onRefresh()}>更新方案</button> : null}
-          <button disabled={props.busy} onClick={() => void props.onApply(proposal)}>应用修改</button>
-          <button className="secondary-button" disabled={props.busy} onClick={() => void props.onDismiss(proposal)}>取消</button>
+          <button data-testid="dialogue-proposal-apply" disabled={props.busy} onClick={() => void props.onApply(proposal)}>应用修改</button>
+          <button data-testid="dialogue-proposal-dismiss" className="secondary-button" disabled={props.busy} onClick={() => void props.onDismiss(proposal)}>取消</button>
         </div>
       </div> : null}
     </div>

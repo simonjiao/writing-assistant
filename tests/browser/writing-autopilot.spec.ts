@@ -1,21 +1,16 @@
 import { expect, test, type Page } from '@playwright/test';
+import { join } from 'node:path';
 
 const apiBase = process.env.WA_API_URL ?? 'http://127.0.0.1:8787';
 const webBase = process.env.WA_WEB_URL ?? 'http://127.0.0.1:5173';
+const dataDir = process.env.WA_DATA_DIR ?? process.env.DATA_DIR ?? '.data';
 
 test.beforeEach(async ({ page }) => {
   await assertLocalRuntime();
-  const userId = `browser-smoke-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  await page.addInitScript((id) => {
-    window.localStorage.setItem('writing-assistant.user-id', id);
-    window.localStorage.removeItem('writing-assistant.navigation-collapsed');
-    window.localStorage.removeItem('writing-assistant.support-column-collapsed');
-  }, userId);
 });
 
 test('creates a task, writes sections, and processes an article comment', async ({ page }) => {
-  await page.goto('/');
-  await expect(page.getByText('Writing Assistant')).toBeVisible();
+  await openAppForUser(page, uniqueUserId('browser-smoke'));
 
   await page.getByTestId('task-dialog-input').fill('写一篇关于司棋的短文，约1200字，避免现代论文腔。');
   await page.getByTestId('task-dialog-send').click();
@@ -35,6 +30,39 @@ test('creates a task, writes sections, and processes an article comment', async 
 
   await page.getByTestId('process-comments-button').click();
   await expect(page.getByTestId('comment-review-card')).toContainText(/已处理|需要追问/, { timeout: 60_000 });
+});
+
+test('shows a workflow HumanGate and resolves it from the support card', async ({ page }) => {
+  await openAppForUser(page, uniqueUserId('browser-gate'));
+
+  await page.getByTestId('task-dialog-input').fill('写一篇关于司棋的短文，先生成任务卡。');
+  await page.getByTestId('task-dialog-send').click();
+  await expect(page.getByRole('heading', { name: '任务卡草稿' })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('workflow-support-card')).toContainText('等待确认');
+  await expect(page.getByTestId('workflow-gate')).toContainText(/希望文章|篇幅|确认/);
+
+  await page.getByTestId('workflow-gate-accept').click();
+  await expect(page.getByTestId('generate-outline-button')).toBeEnabled({ timeout: 60_000 });
+  await expect(page.getByTestId('workflow-next-step')).toContainText('流程已完成');
+});
+
+test('shows a polish proposal in the browser and applies it only after confirmation', async ({ page }) => {
+  const userId = uniqueUserId('browser-polish');
+  const fixture = await createPolishFixture(userId);
+  await openAppForUser(page, userId);
+
+  await page.getByTestId('history-item').filter({ hasText: fixture.title }).click();
+  await expect(page.getByTestId('article-block-text').first()).toContainText(fixture.originalText);
+
+  await page.getByTestId('start-writing-button').click();
+  await expect(page.getByTestId('workflow-support-card')).toContainText('等待确认', { timeout: 60_000 });
+  await expect(page.getByTestId('workflow-review-list')).toContainText('需要修订');
+  await expect(page.getByTestId('dialogue-proposal')).toContainText('修订建议');
+  await expect(page.getByTestId('article-block-text').first()).not.toContainText('修改说明');
+
+  await page.getByTestId('dialogue-proposal-apply').click();
+  await expect(page.getByTestId('article-block-text').first()).toContainText('修改说明', { timeout: 60_000 });
+  await expect(page.getByTestId('workflow-next-step')).toContainText('流程已完成');
 });
 
 async function assertLocalRuntime() {
@@ -74,4 +102,100 @@ async function createCommentFromFirstBlock(page: Page) {
   });
   await page.getByTestId('comment-input').fill('这句需要更清楚，避免突兀。');
   await page.getByTestId('add-comment-button').click();
+}
+
+function uniqueUserId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function openAppForUser(page: Page, userId: string) {
+  await page.addInitScript((id) => {
+    window.localStorage.setItem('writing-assistant.user-id', id);
+    window.localStorage.removeItem('writing-assistant.navigation-collapsed');
+    window.localStorage.removeItem('writing-assistant.support-column-collapsed');
+  }, userId);
+  await page.goto('/');
+  await expect(page.getByText('Writing Assistant')).toBeVisible();
+}
+
+async function createPolishFixture(userId: string): Promise<{ title: string; originalText: string }> {
+  const session = await requestJson<{ currentWorkspaceId?: string }>('/api/sessions', { method: 'POST', body: JSON.stringify({ userId }) });
+  const workspaceId = session.currentWorkspaceId;
+  if (!workspaceId) throw new Error('Fixture session did not create a default workspace.');
+  const now = new Date().toISOString();
+  const title = '浏览器统稿测试';
+  const articleId = `art_${userId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  const originalText = '这是一段已经生成但需要统稿修订的正文。';
+  const article = {
+    id: articleId,
+    userId,
+    workspaceId,
+    revision: 1,
+    title,
+    taskCard: confirmedFixtureTaskCard(`task_${articleId}`, title, now),
+    outline: [{
+      id: `sec_${articleId}`,
+      title: '已有正文',
+      goal: '已有正文但需要统稿。',
+      order: 1,
+      expectedBlocks: 1,
+      sourceHints: [],
+      themeTags: ['统稿'],
+      status: 'written',
+    }],
+    blocks: [{
+      id: `blk_${articleId}`,
+      type: 'paragraph',
+      sectionId: `sec_${articleId}`,
+      title: '已有正文',
+      text: originalText,
+      sourceRefs: [],
+      themeTags: ['统稿'],
+      status: 'needs_revision',
+      createdAt: now,
+      updatedAt: now,
+    }],
+    citations: [],
+    themeTags: [],
+    comments: [],
+    versions: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  upsertJsonRecord('artifacts', articleId, article);
+  return { title, originalText };
+}
+
+async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(`${apiBase}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(options?.headers ?? {}) } });
+  if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
+  return response.json() as Promise<T>;
+}
+
+function upsertJsonRecord(namespace: string, id: string, record: Record<string, unknown>) {
+  const { DatabaseSync } = require('node:sqlite') as { DatabaseSync: new (path: string) => { prepare(sql: string): { run(...args: unknown[]): void }; close(): void } };
+  const db = new DatabaseSync(join(dataDir, 'writing-assistant.sqlite'));
+  try {
+    db.prepare('INSERT INTO json_records(namespace, id, json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(namespace, id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at')
+      .run(namespace, id, JSON.stringify(record), new Date().toISOString());
+  } finally {
+    db.close();
+  }
+}
+
+function confirmedFixtureTaskCard(id: string, topic: string, now: string) {
+  return {
+    id,
+    topic,
+    writingGoal: `围绕「${topic}」写一篇结构清楚的文章。`,
+    audience: '普通读者',
+    scope: { editions: [], chapters: [], characters: [], themes: [topic] },
+    structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '先提出问题，再分层展开。' },
+    style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+    constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+    interactionMode: { askBeforeWriting: true, localEditFirst: true },
+    status: 'confirmed',
+    createdAt: now,
+    updatedAt: now,
+  };
 }
