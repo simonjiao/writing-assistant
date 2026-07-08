@@ -128,6 +128,21 @@ test('isolates task lists when switching dev users', async ({ page }) => {
   await expect(page.getByTestId('history-item').filter({ hasText: fixtureA.title })).toHaveCount(0);
 });
 
+test('blocks a second writing start while an article workflow is running', async ({ page }) => {
+  const userId = uniqueUserId('browser-active-run');
+  const fixture = await createActiveWorkflowFixture(userId);
+  await openAppForUser(page, userId);
+
+  await page.getByTestId('history-item').filter({ hasText: fixture.title }).click();
+  await expect(page.getByTestId('outline-list')).toBeVisible();
+  expect(runsForArticle(fixture.articleId)).toHaveLength(1);
+
+  await page.getByTestId('start-writing-button').click();
+
+  await expect(page.getByText('当前文章已有写作流程正在执行')).toBeVisible({ timeout: 60_000 });
+  expect(runsForArticle(fixture.articleId)).toHaveLength(1);
+});
+
 test('shows a polish proposal in the browser and applies it only after confirmation', async ({ page }) => {
   const userId = uniqueUserId('browser-polish');
   const fixture = await createPolishFixture(userId);
@@ -322,6 +337,22 @@ async function createWorkflowFailureFixture(userId: string): Promise<{ articleId
   return { articleId, title };
 }
 
+async function createActiveWorkflowFixture(userId: string): Promise<{ articleId: string; title: string }> {
+  const { articleId, title } = await createWorkflowFailureFixture(userId);
+  const now = new Date().toISOString();
+  upsertJsonRecord('runs', `run_${articleId}`, {
+    id: `run_${articleId}`,
+    workflowId: 'writing-autopilot',
+    status: 'running',
+    input: { articleId, targetStage: 'article' },
+    state: {},
+    metadata: { userId, articleId },
+    createdAt: now,
+    updatedAt: now,
+  });
+  return { articleId, title };
+}
+
 async function createBasicArticleFixture(userId: string, titlePrefix: string): Promise<{ articleId: string; title: string }> {
   const session = await requestJson<{ currentWorkspaceId?: string }>('/api/sessions', { method: 'POST', body: JSON.stringify({ userId }) });
   const workspaceId = session.currentWorkspaceId;
@@ -407,6 +438,13 @@ function listJsonRecords(namespace: string): Record<string, unknown>[] {
   } finally {
     db.close();
   }
+}
+
+function runsForArticle(articleId: string): Record<string, unknown>[] {
+  return listJsonRecords('runs').filter((run) => {
+    const metadata = run.metadata as { articleId?: string } | undefined;
+    return metadata?.articleId === articleId;
+  });
 }
 
 function confirmedFixtureTaskCard(id: string, topic: string, now: string) {

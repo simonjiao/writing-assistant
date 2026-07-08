@@ -561,6 +561,8 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const workspaceId = articleAccess?.article.workspaceId ?? body.workspaceId?.trim() ?? (await ensureDefaultWorkspace(container, userId)).id;
     const workspace = await requireWorkspaceAccess(container, userId, workspaceId);
     if (!workspace) return reply.code(403).send({ error: 'Workspace access required.' });
+    const activeArticleRun = articleAccess?.article ? await findActiveArticleWorkflowRun(container, articleAccess.article.id) : undefined;
+    if (activeArticleRun) return reply.code(409).send({ error: '当前文章已有写作流程正在执行，请等待完成后再继续。', runId: activeArticleRun.id });
     const pendingGateRun = articleAccess?.article ? await findPendingWorkflowHumanGateRun(container, articleAccess.article.id, userId) : undefined;
     if (pendingGateRun) return enrichRun(container, pendingGateRun.id);
     const pendingProposalRun = articleAccess?.article ? await findPendingWorkflowProposalRun(container, articleAccess.article.id, userId) : undefined;
@@ -992,6 +994,13 @@ async function findPendingWorkflowHumanGateRun(container: AppContainer, articleI
     return run;
   }
   return undefined;
+}
+
+async function findActiveArticleWorkflowRun(container: AppContainer, articleId: string): Promise<WorkflowRun | undefined> {
+  const runs = await container.stores.stateStore.listRuns({ workflowId: WRITING_AUTOPILOT_POLICY.id });
+  return runs
+    .filter((run) => run.status === 'running' && run.metadata.articleId === articleId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
 }
 
 async function findPendingWorkflowProposalRun(container: AppContainer, articleId: string, userId: string): Promise<WorkflowRun | undefined> {

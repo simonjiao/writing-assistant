@@ -797,6 +797,54 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('rejects starting a second writing workflow while an article run is active', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = nowIso();
+    const taskCard: WritingTaskCard = {
+      id: 'task-active-run',
+      topic: '并发写作保护',
+      writingGoal: '验证同一文章不能并发写作。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: [], themes: ['并发'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'active-run-owner', name: '共享写作', memberUserIds: ['active-run-member'] });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'active-run-owner', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    article.outline = [{ id: 'sec-active-run', title: '待写章节', goal: '用于验证 active run guard。', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'draft' }];
+    const prepared = await saveArticleFixture(container, article);
+    const activeRun: WorkflowRun = {
+      id: 'run-active-article',
+      workflowId: 'writing-autopilot',
+      status: 'running',
+      input: { articleId: prepared.id, targetStage: 'article' },
+      state: {},
+      metadata: { userId: 'active-run-owner', articleId: prepared.id, workspaceId: workspace.id },
+      createdAt: now,
+      updatedAt: now,
+    };
+    await container.stores.stateStore.saveRun(activeRun);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/workflows/writing/start',
+      payload: { userId: 'active-run-member', articleId: prepared.id, targetStage: 'article', message: '开始写作' },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toContain('当前文章已有写作流程正在执行');
+    const articleRuns = (await container.stores.stateStore.listRuns({ workflowId: 'writing-autopilot' })).filter((run) => run.metadata.articleId === prepared.id);
+    expect(articleRuns).toHaveLength(1);
+    await app.close();
+  });
+
   it('uses sqlite as the persistent store', async () => {
     const config = testConfig();
     const container = createContainer(config);
