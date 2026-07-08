@@ -1090,6 +1090,50 @@ describe('api app', () => {
     await app.close();
   });
 
+  it('returns conflict instead of server error when applying a stale revision proposal', async () => {
+    const config = testConfig();
+    const container = createContainer(config);
+    const app = createApp(config, container);
+    const now = new Date().toISOString();
+    const taskCard: WritingTaskCard = {
+      id: 'task-stale-proposal',
+      topic: '过期方案',
+      writingGoal: '测试过期修改方案。',
+      audience: '普通读者',
+      scope: { editions: [], chapters: [], characters: [], themes: ['过期方案'] },
+      structure: { articleType: 'analysis', expectedLength: '1200字', outlinePreference: '分层展开。' },
+      style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+      constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '按任务卡写作。' },
+      interactionMode: { askBeforeWriting: true, localEditFirst: true },
+      status: 'confirmed',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const workspace = await container.stores.workspaceStore.createWorkspace({ userId: 'stale-proposal-user', name: '过期方案工作台' });
+    const article = await container.stores.artifactStore.createArticle({ userId: 'stale-proposal-user', workspaceId: workspace.id, title: taskCard.topic, taskCard });
+    article.outline = [{ id: 'sec-stale-proposal', title: '旧大纲', goal: '旧目标', order: 1, expectedBlocks: 1, sourceHints: [], themeTags: [], status: 'confirmed' }];
+    const prepared = await saveArticleFixture(container, article);
+    const proposal = await container.stores.revisionProposalStore.createProposal({
+      articleId: prepared.id,
+      userId: 'stale-proposal-user',
+      baseRevision: prepared.revision,
+      contextKind: 'outline',
+      summary: '修订大纲',
+      message: '应用后会更新大纲。',
+      operations: [{ type: 'revise-outline', instruction: '改成新的大纲安排。' }],
+      warnings: [],
+    });
+    prepared.outline[0].goal = '外部已经改过目标。';
+    await saveArticleFixture(container, prepared);
+
+    const response = await app.inject({ method: 'POST', url: `/api/articles/${prepared.id}/dialogue/${proposal.id}/apply`, payload: { userId: 'stale-proposal-user' } });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toContain('Revision proposal is stale');
+    expect((await container.stores.revisionProposalStore.getProposal(proposal.id))?.status).toBe('pending');
+    await app.close();
+  });
+
   it('confirms a draft task card through workflow HumanGate', async () => {
     const config = testConfig();
     const container = createContainer(config);

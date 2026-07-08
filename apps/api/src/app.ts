@@ -12,6 +12,12 @@ import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfi
 import { getWritingStandardDisplaySummary, getWritingStandardSummary, resolveWritingStandardSelection, WritingStandardSelectionRequest } from './writingStandards';
 import { resolveUserContext } from './userContext';
 
+class RevisionProposalStaleError extends Error {
+  constructor(currentRevision: number, proposalRevision: number) {
+    super(`Revision proposal is stale: article revision is ${currentRevision}, proposal was created at ${proposalRevision}.`);
+  }
+}
+
 export function createApp(config: AppConfig, container: AppContainer) {
   const app = Fastify({ logger: true });
   void app.register(cors, { origin: [config.webOrigin, 'http://localhost:5173', 'http://127.0.0.1:5173'] });
@@ -346,7 +352,13 @@ export function createApp(config: AppConfig, container: AppContainer) {
     let route = routeDialogueMessage(message, pendingProposal);
     if (pendingProposal && route === 'apply') {
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: pendingProposal.contextKind, role: 'user', content: message, proposalId: pendingProposal.id });
-      const applied = await applyRevisionProposal(container, pendingProposal.id, userId, body.sessionId);
+      let applied: Awaited<ReturnType<typeof applyRevisionProposal>>;
+      try {
+        applied = await applyRevisionProposal(container, pendingProposal.id, userId, body.sessionId);
+      } catch (error) {
+        if (error instanceof RevisionProposalStaleError) return reply.code(409).send({ error: error.message });
+        throw error;
+      }
       await appendDialogueMessage(container, { articleId: access.article.id, userId, contextKind: pendingProposal.contextKind, role: 'assistant', content: applied.message, proposalId: pendingProposal.id });
       await appendDialoguePiMessages(container, applied.article ?? access.article, userId, dialogueSessionTargetFromProposal(pendingProposal), [
         { role: 'user', content: message, proposalId: pendingProposal.id },
@@ -489,7 +501,13 @@ export function createApp(config: AppConfig, container: AppContainer) {
     if (!access.ok) return reply.code(access.statusCode).send({ error: access.error });
     const proposal = await container.stores.revisionProposalStore.getProposal(proposalId);
     if (!proposal || proposal.articleId !== articleId) return reply.code(404).send({ error: 'Revision proposal not found.' });
-    const applied = await applyRevisionProposal(container, proposal.id, userId, body.sessionId);
+    let applied: Awaited<ReturnType<typeof applyRevisionProposal>>;
+    try {
+      applied = await applyRevisionProposal(container, proposal.id, userId, body.sessionId);
+    } catch (error) {
+      if (error instanceof RevisionProposalStaleError) return reply.code(409).send({ error: error.message });
+      throw error;
+    }
     await appendDialogueMessage(container, { articleId, userId, contextKind: proposal.contextKind, role: 'assistant', content: applied.message, proposalId: proposal.id });
     await appendDialoguePiMessages(container, applied.article ?? access.article, userId, dialogueSessionTargetFromProposal(proposal), [
       { role: 'assistant', content: applied.message, proposalId: proposal.id },
@@ -545,7 +563,13 @@ export function createApp(config: AppConfig, container: AppContainer) {
       if (message) {
         await appendWorkflowUserMessage(container, pendingProposalRun, message);
         await container.stores.eventTraceStore.append({ id: newId('evt'), runId: pendingProposalRun.id, type: 'pi.session.updated', payload: { userId, reason: 'workflow-user-message' }, createdAt: nowIso() });
-        const refreshedProposalRun = await handleWorkflowPendingProposalMessage(container, pendingProposalRun, message, userId);
+        let refreshedProposalRun: (Awaited<ReturnType<typeof enrichRun>> & { messages?: DialogueMessage[] }) | undefined;
+        try {
+          refreshedProposalRun = await handleWorkflowPendingProposalMessage(container, pendingProposalRun, message, userId);
+        } catch (error) {
+          if (error instanceof RevisionProposalStaleError) return reply.code(409).send({ error: error.message });
+          throw error;
+        }
         if (refreshedProposalRun) return refreshedProposalRun;
       }
       return enrichRun(container, pendingProposalRun.id);
@@ -1121,7 +1145,7 @@ async function applyRevisionProposal(container: AppContainer, proposalId: string
   if (!access.ok) throw new Error(access.error);
   let article = access.article;
   if (typeof proposal.baseRevision === 'number' && article.revision !== proposal.baseRevision) {
-    throw new Error(`Revision proposal is stale: article revision is ${article.revision}, proposal was created at ${proposal.baseRevision}.`);
+    throw new RevisionProposalStaleError(article.revision, proposal.baseRevision);
   }
   let runPayload: Awaited<ReturnType<typeof enrichRun>> | undefined;
   for (const [operationIndex, operation] of proposal.operations.entries()) {

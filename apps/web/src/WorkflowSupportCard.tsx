@@ -17,11 +17,12 @@ export function WorkflowSupportCard(props: WorkflowSupportCardProps) {
   const pendingGates = (props.runResponse?.humanGates ?? []).filter((gate) => gate.status === 'pending');
   const operations = (props.runResponse?.operations ?? []).slice(0, 5);
   const reviewArtifacts = (props.runResponse?.reviewArtifacts ?? []).slice(0, 3);
-  const nextAction = pendingGates.length ? undefined : readAllowedActions(run.state)[0];
+  const waitingReason = typeof run.waitingFor?.reason === 'string' ? run.waitingFor.reason : undefined;
+  const nextAction = pendingGates.length || waitingReason ? undefined : readAllowedActions(run.state)[0];
   return (
     <section data-testid="workflow-support-card" className="support-card workflow-support-card">
       <div className="workflow-card-head"><h3>流程</h3><span>{workflowRunStatusLabel(run.status)}</span></div>
-      <WorkflowNextStep pendingGates={pendingGates} nextAction={nextAction} runStatus={run.status} />
+      <WorkflowNextStep pendingGates={pendingGates} nextAction={nextAction} runStatus={run.status} waitingReason={waitingReason} />
       {pendingGates.length ? <WorkflowGateList gates={pendingGates} busy={props.busy} onResolve={props.onResolveHumanGate} /> : null}
       {reviewArtifacts.length ? <WorkflowReviewList artifacts={reviewArtifacts} /> : null}
       {operations.length ? <WorkflowOperationList operations={operations} /> : null}
@@ -29,14 +30,14 @@ export function WorkflowSupportCard(props: WorkflowSupportCardProps) {
   );
 }
 
-function WorkflowNextStep(props: { pendingGates: HumanGate[]; nextAction?: AllowedActionView; runStatus: string }) {
+function WorkflowNextStep(props: { pendingGates: HumanGate[]; nextAction?: AllowedActionView; runStatus: string; waitingReason?: string }) {
   if (props.pendingGates.length) {
     return <div data-testid="workflow-next-step" className="workflow-next-step"><span>下一步</span><strong>等待确认</strong><p>{props.pendingGates[0].question}</p></div>;
   }
   if (props.nextAction) {
     return <div data-testid="workflow-next-step" className="workflow-next-step"><span>下一步</span><strong>{workflowActionLabel(props.nextAction.type)}</strong><p>{props.nextAction.reason ?? '继续推进当前写作流程。'}</p></div>;
   }
-  return <div data-testid="workflow-next-step" className="workflow-next-step"><span>下一步</span><strong>{workflowTerminalLabel(props.runStatus)}</strong></div>;
+  return <div data-testid="workflow-next-step" className="workflow-next-step"><span>下一步</span><strong>{workflowTerminalLabel(props.runStatus)}</strong>{props.waitingReason ? <p>{props.waitingReason}</p> : null}</div>;
 }
 
 function WorkflowGateList(props: { gates: HumanGate[]; busy: boolean; onResolve: (gate: HumanGate, decision: 'accept' | 'reject') => void | Promise<void> }) {

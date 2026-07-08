@@ -46,6 +46,21 @@ test('shows a workflow HumanGate and resolves it from the support card', async (
   await expect(page.getByTestId('workflow-next-step')).toContainText('流程已完成');
 });
 
+test('rejects a workflow HumanGate without confirming the task card', async ({ page }) => {
+  await openAppForUser(page, uniqueUserId('browser-gate-reject'));
+
+  await page.getByTestId('task-dialog-input').fill('写一篇关于司棋的短文，先生成任务卡。');
+  await page.getByTestId('task-dialog-send').click();
+  await expect(page.getByRole('heading', { name: '任务卡草稿' })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('workflow-support-card')).toContainText('等待确认');
+
+  await page.getByTestId('workflow-gate-reject').click();
+  await expect(page.getByTestId('workflow-next-step')).toContainText('等待确认');
+  await expect(page.getByText('用户拒绝了当前确认项，需要新的指令。')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '任务卡草稿' })).toBeVisible();
+  await expect(page.getByTestId('generate-outline-button')).toHaveCount(0);
+});
+
 test('shows a polish proposal in the browser and applies it only after confirmation', async ({ page }) => {
   const userId = uniqueUserId('browser-polish');
   const fixture = await createPolishFixture(userId);
@@ -63,6 +78,24 @@ test('shows a polish proposal in the browser and applies it only after confirmat
   await page.getByTestId('dialogue-proposal-apply').click();
   await expect(page.getByTestId('article-block-text').first()).toContainText('修改说明', { timeout: 60_000 });
   await expect(page.getByTestId('workflow-next-step')).toContainText('流程已完成');
+});
+
+test('keeps a stale polish proposal from mutating article text', async ({ page }) => {
+  const userId = uniqueUserId('browser-polish-stale');
+  const fixture = await createPolishFixture(userId);
+  await openAppForUser(page, userId);
+
+  await page.getByTestId('history-item').filter({ hasText: fixture.title }).click();
+  await expect(page.getByTestId('article-block-text').first()).toContainText(fixture.originalText);
+
+  await page.getByTestId('start-writing-button').click();
+  await expect(page.getByTestId('dialogue-proposal')).toContainText('修订建议', { timeout: 60_000 });
+  markArticleRevisionStale(fixture.articleId);
+
+  await page.getByTestId('dialogue-proposal-apply').click();
+  await expect(page.getByText(/Revision proposal is stale/)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('article-block-text').first()).toContainText(fixture.originalText);
+  await expect(page.getByTestId('article-block-text').first()).not.toContainText('修改说明');
 });
 
 async function assertLocalRuntime() {
@@ -118,7 +151,7 @@ async function openAppForUser(page: Page, userId: string) {
   await expect(page.getByText('Writing Assistant')).toBeVisible();
 }
 
-async function createPolishFixture(userId: string): Promise<{ title: string; originalText: string }> {
+async function createPolishFixture(userId: string): Promise<{ articleId: string; title: string; originalText: string }> {
   const session = await requestJson<{ currentWorkspaceId?: string }>('/api/sessions', { method: 'POST', body: JSON.stringify({ userId }) });
   const workspaceId = session.currentWorkspaceId;
   if (!workspaceId) throw new Error('Fixture session did not create a default workspace.');
@@ -163,7 +196,7 @@ async function createPolishFixture(userId: string): Promise<{ title: string; ori
     updatedAt: now,
   };
   upsertJsonRecord('artifacts', articleId, article);
-  return { title, originalText };
+  return { articleId, title, originalText };
 }
 
 async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -173,11 +206,29 @@ async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 function upsertJsonRecord(namespace: string, id: string, record: Record<string, unknown>) {
-  const { DatabaseSync } = require('node:sqlite') as { DatabaseSync: new (path: string) => { prepare(sql: string): { run(...args: unknown[]): void }; close(): void } };
+  const { DatabaseSync } = require('node:sqlite') as { DatabaseSync: new (path: string) => { prepare(sql: string): { get(...args: unknown[]): unknown; run(...args: unknown[]): void }; close(): void } };
   const db = new DatabaseSync(join(dataDir, 'writing-assistant.sqlite'));
   try {
     db.prepare('INSERT INTO json_records(namespace, id, json, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(namespace, id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at')
       .run(namespace, id, JSON.stringify(record), new Date().toISOString());
+  } finally {
+    db.close();
+  }
+}
+
+function markArticleRevisionStale(articleId: string) {
+  const article = readJsonRecord('artifacts', articleId);
+  const revision = typeof article.revision === 'number' ? article.revision : 1;
+  upsertJsonRecord('artifacts', articleId, { ...article, revision: revision + 1, updatedAt: new Date().toISOString() });
+}
+
+function readJsonRecord(namespace: string, id: string): Record<string, unknown> {
+  const { DatabaseSync } = require('node:sqlite') as { DatabaseSync: new (path: string) => { prepare(sql: string): { get(...args: unknown[]): unknown }; close(): void } };
+  const db = new DatabaseSync(join(dataDir, 'writing-assistant.sqlite'));
+  try {
+    const row = db.prepare('SELECT json FROM json_records WHERE namespace = ? AND id = ?').get(namespace, id) as { json?: string } | undefined;
+    if (!row?.json) throw new Error(`JSON record not found: ${namespace}/${id}`);
+    return JSON.parse(row.json) as Record<string, unknown>;
   } finally {
     db.close();
   }
