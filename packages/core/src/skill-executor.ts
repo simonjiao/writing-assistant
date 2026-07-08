@@ -4,16 +4,17 @@ import { SkillRegistry } from './skill';
 import { LLMProvider } from './types';
 import { newId, nowIso } from './utils';
 
-export interface InvokeSkillMeta {
+export interface ExecuteSkillMeta {
   userId: string;
   sessionId?: string;
+  agentSessionId?: string;
   runId?: string;
   workflowId?: string;
   articleId?: string;
   blockId?: string;
 }
 
-export class AgentRuntime {
+export class SkillExecutor {
   constructor(
     private readonly deps: {
       llm: LLMProvider;
@@ -27,13 +28,13 @@ export class AgentRuntime {
     return this.deps.skillRegistry;
   }
 
-  async invokeSkill<I = unknown, O = unknown>(skillId: string, input: I, meta: InvokeSkillMeta): Promise<O> {
+  async executeSkill<I = unknown, O = unknown>(skillId: string, input: I, meta: ExecuteSkillMeta): Promise<O> {
     const skill = this.deps.skillRegistry.get<I, O>(skillId);
     await this.deps.eventTraceStore?.append({
       id: newId('evt'),
       runId: meta.runId,
       type: 'skill.started',
-      payload: { skillId, workflowId: meta.workflowId },
+      payload: { skillId, workflowId: meta.workflowId, agentSessionId: meta.agentSessionId },
       createdAt: nowIso(),
     });
 
@@ -53,7 +54,7 @@ export class AgentRuntime {
       id: newId('evt'),
       runId: meta.runId,
       type: 'skill.completed',
-      payload: { skillId, workflowId: meta.workflowId },
+      payload: { skillId, workflowId: meta.workflowId, agentSessionId: meta.agentSessionId },
       createdAt: nowIso(),
     });
 

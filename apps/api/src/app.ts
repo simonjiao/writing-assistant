@@ -414,7 +414,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
     await enqueueDialogueBriefUpdate({ container, article: access.article, userId, sessionId: body.sessionId, message: userMessage, context: { kind: context.value.context.kind, title: context.value.context.title } });
     let result: DialogueCoordinatorOutput;
     try {
-      result = await container.runtime.invokeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
+      result = await container.skillExecutor.executeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
         'dialogue-coordinator',
         {
           articleId: access.article.id,
@@ -898,7 +898,7 @@ function extractKnowledgeTerms(message: string, article: ArticleArtifact): strin
 }
 
 async function refineDialogueRoute(container: AppContainer, article: ArticleArtifact, userId: string, sessionId: string | undefined, message: string, context: DialogueCoordinatorInput['context'], hasPendingProposal: boolean): Promise<DialogueRoute> {
-  const result = await container.runtime.invokeSkill<DialogueRouterInput, DialogueRouterOutput>(
+  const result = await container.skillExecutor.executeSkill<DialogueRouterInput, DialogueRouterOutput>(
     'dialogue-router',
     {
       message,
@@ -1060,7 +1060,7 @@ async function handleWorkflowPendingProposalMessage(container: AppContainer, run
   const conversationBrief = await getOrCreateDialogueBrief(container, access.article.id, userId);
   let result: DialogueCoordinatorOutput;
   try {
-    result = await container.runtime.invokeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
+    result = await container.skillExecutor.executeSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>(
       'dialogue-coordinator',
       {
         articleId: access.article.id,
@@ -1363,7 +1363,7 @@ async function syncWorkflowRunAfterProposal(container: AppContainer, proposal: R
 async function applyRevisionOperation(container: AppContainer, article: ArticleArtifact, operation: RevisionOperation, userId: string, sessionId: string | undefined, write: { baseRevision: number; operationId: string }): Promise<{ article: ArticleArtifact; runPayload?: Awaited<ReturnType<typeof enrichRun>> }> {
   if (operation.type === 'revise-task-card') {
     if (!article.taskCard) throw new Error('Article has no task card to revise.');
-    const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; currentTaskCard: WritingTaskCard; skipKnowledge: boolean }, TaskCardReviserOutput>(
+    const result = await container.skillExecutor.executeSkill<{ articleId: string; instruction: string; currentTaskCard: WritingTaskCard; skipKnowledge: boolean }, TaskCardReviserOutput>(
       'task-card-reviser',
       { articleId: article.id, instruction: operation.instruction, currentTaskCard: article.taskCard, skipKnowledge: true },
       { userId, sessionId, articleId: article.id },
@@ -1379,7 +1379,7 @@ async function applyRevisionOperation(container: AppContainer, article: ArticleA
   if (operation.type === 'revise-outline-item') {
     const existing = article.outline.find((item) => item.id === operation.outlineItemId);
     if (!existing) throw new Error(`Outline section not found: ${operation.outlineItemId}`);
-    const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; currentOutlineItem: typeof existing; taskCard?: WritingTaskCard; articleOutline: typeof article.outline }, OutlineItemReviserOutput>(
+    const result = await container.skillExecutor.executeSkill<{ articleId: string; instruction: string; currentOutlineItem: typeof existing; taskCard?: WritingTaskCard; articleOutline: typeof article.outline }, OutlineItemReviserOutput>(
       'outline-item-reviser',
       { articleId: article.id, instruction: operation.instruction, currentOutlineItem: existing, taskCard: article.taskCard, articleOutline: article.outline },
       { userId, sessionId, articleId: article.id },
@@ -1394,7 +1394,7 @@ async function applyRevisionOperation(container: AppContainer, article: ArticleA
   }
   if (operation.type === 'revise-outline') {
     const writtenSectionIds = [...new Set(article.blocks.map((block) => block.sectionId).filter((id): id is string => Boolean(id)))];
-    const result = await container.runtime.invokeSkill<{ articleId: string; instruction: string; taskCard?: WritingTaskCard; currentOutline: OutlineItem[]; writtenSectionIds: string[] }, OutlineReviserOutput>(
+    const result = await container.skillExecutor.executeSkill<{ articleId: string; instruction: string; taskCard?: WritingTaskCard; currentOutline: OutlineItem[]; writtenSectionIds: string[] }, OutlineReviserOutput>(
       'outline-reviser',
       { articleId: article.id, instruction: operation.instruction, taskCard: article.taskCard, currentOutline: article.outline, writtenSectionIds },
       { userId, sessionId, articleId: article.id },
@@ -1406,7 +1406,7 @@ async function applyRevisionOperation(container: AppContainer, article: ArticleA
     await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'outline-revised', changedFields: result.changedFields, warnings: result.warnings, invalidated: invalidation, userId, operationId: write.operationId }, createdAt: nowIso() });
     return { article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated };
   }
-  const patchResult = await container.runtime.invokeSkill<PatchEditorInput, PatchEditorOutput>(
+  const patchResult = await container.skillExecutor.executeSkill<PatchEditorInput, PatchEditorOutput>(
     'patch-editor',
     { articleId: article.id, blockId: operation.blockId, instruction: operation.instruction },
     { userId, sessionId, articleId: article.id, blockId: operation.blockId },

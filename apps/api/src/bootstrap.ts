@@ -1,5 +1,4 @@
 import {
-  AgentRuntime,
   ArtifactStore,
   DefaultContextBuilder,
   DialogueBriefStore,
@@ -21,6 +20,7 @@ import {
   ReviewArtifactStore,
   RevisionProposalStore,
   SessionStore,
+  SkillExecutor,
   SkillRegistry,
   StateStore,
   WorkspaceStore,
@@ -35,7 +35,7 @@ import { PiWorkflowActionExecutor } from './piWorkflowActionExecutor';
 
 export interface AppContainer {
   piRunner: PiWorkflowRunner;
-  runtime: AgentRuntime;
+  skillExecutor: SkillExecutor;
   stores: ExternalStores;
   skills: SkillRegistry;
   eventBus: EventBus;
@@ -71,9 +71,9 @@ export function createContainer(config: AppConfig): AppContainer {
   const llm = config.llmProvider === 'openai-compatible' ? new OpenAICompatibleProvider({ baseURL: config.openaiBaseURL, apiKey: config.openaiApiKey, model: config.openaiModel }) : new MockLLMProvider();
   const skills = registerDefaultSkills(new SkillRegistry());
   const contextBuilder = new DefaultContextBuilder({ sessionStore: stores.sessionStore, stateStore: stores.stateStore, memoryStore: stores.memoryStore, artifactStore: stores.artifactStore, knowledgeStore: stores.knowledgeStore });
-  const runtime = new AgentRuntime({ llm, skillRegistry: skills, contextBuilder, eventTraceStore });
-  const piRunner = new PiWorkflowRunner({ stores, actionExecutor: new PiWorkflowActionExecutor({ stores, runtime }), decisionProvider: new PiAgentDecisionProvider(llm), maxTurns: 20 });
-  return { piRunner, runtime, stores, skills, eventBus, async close() { await base.close?.(); await eventBus.close?.(); } };
+  const skillExecutor = new SkillExecutor({ llm, skillRegistry: skills, contextBuilder, eventTraceStore });
+  const piRunner = new PiWorkflowRunner({ stores, actionExecutor: new PiWorkflowActionExecutor({ stores, skillExecutor }), decisionProvider: new PiAgentDecisionProvider(llm), maxTurns: 20 });
+  return { piRunner, skillExecutor, stores, skills, eventBus, async close() { await base.close?.(); await eventBus.close?.(); } };
 }
 
 function createStores(config: AppConfig): StoreBundle {

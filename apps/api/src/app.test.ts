@@ -230,7 +230,7 @@ describe('api app', () => {
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
-    const executor = new PiWorkflowActionExecutor({ stores: container.stores, runtime: container.runtime });
+    const executor = new PiWorkflowActionExecutor({ stores: container.stores, skillExecutor: container.skillExecutor });
     await expect(executor.execute({ policy: { id: 'writing-autopilot', goal: '', allowedActionPolicy: '', humanGatePolicy: '', completionPolicy: '' }, run, action: forgedAction })).rejects.toThrow('Unauthorized workflow action');
     expect(await container.stores.workflowOperationStore.listOperations({ runId: run.id })).toEqual([]);
     await container.close();
@@ -359,11 +359,11 @@ describe('api app', () => {
   it('keeps the original workflow proposal when proposal refresh fails', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
-    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
+    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
       if (skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator did not return valid JSON: {"mode":"proposal"');
       return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.runtime.invokeSkill;
+    }) as typeof container.skillExecutor.executeSkill;
     const app = createApp(config, container);
     const now = nowIso();
     const taskCard: WritingTaskCard = {
@@ -1341,12 +1341,12 @@ describe('api app', () => {
   it('answers dialogue questions without mutating article artifacts', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
+    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
     const invokedSkills: string[] = [];
-    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
       invokedSkills.push(skillId);
       return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.runtime.invokeSkill;
+    }) as typeof container.skillExecutor.executeSkill;
     const app = createApp(config, container);
     const now = new Date().toISOString();
     const taskCard: WritingTaskCard = {
@@ -1399,12 +1399,12 @@ describe('api app', () => {
   it('explains task card citation rules from current structured fields', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
+    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
     const invokedSkills: string[] = [];
-    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
       invokedSkills.push(skillId);
       return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.runtime.invokeSkill;
+    }) as typeof container.skillExecutor.executeSkill;
     const app = createApp(config, container);
     const now = new Date().toISOString();
     const taskCard: WritingTaskCard = {
@@ -1544,11 +1544,11 @@ describe('api app', () => {
   it('returns a readable dialogue response when proposal JSON is truncated', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
-    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
+    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
       if (skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator did not return valid JSON: {"mode":"proposal","operations":[{"type":"revise-outline"');
       return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.runtime.invokeSkill;
+    }) as typeof container.skillExecutor.executeSkill;
     const app = createApp(config, container);
     const now = new Date().toISOString();
     const taskCard: WritingTaskCard = {
@@ -1586,11 +1586,11 @@ describe('api app', () => {
   it('returns a readable dialogue response when coordinator output violates the context contract', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
-    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
+    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
       if (skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator returned empty operation.blockId.');
       return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.runtime.invokeSkill;
+    }) as typeof container.skillExecutor.executeSkill;
     const app = createApp(config, container);
     const now = new Date().toISOString();
     const taskCard: WritingTaskCard = {
@@ -1632,15 +1632,15 @@ describe('api app', () => {
   it('sends compact dialogue brief to the coordinator instead of full assistant history', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
+    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
     const coordinatorInputs: Array<{ conversation?: Array<{ role: string; content: string }>; conversationBrief?: DialogueBrief }> = [];
-    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
       if (skillId === 'dialogue-coordinator') {
         coordinatorInputs.push(input as { conversation?: Array<{ role: string; content: string }>; conversationBrief?: DialogueBrief });
         return { mode: 'proposal', message: '准备更新大纲。', summary: '修订大纲', operations: [{ type: 'revise-outline', instruction: '补充大闹厨房等关键情节。' }], warnings: [] };
       }
       return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.runtime.invokeSkill;
+    }) as typeof container.skillExecutor.executeSkill;
     const app = createApp(config, container);
     const now = new Date().toISOString();
     const taskCard: WritingTaskCard = {
@@ -1693,12 +1693,12 @@ describe('api app', () => {
   it('fails closed when dialogue brief updates fail instead of extracting requirements locally', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
-    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
+    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
       if (skillId === 'dialogue-brief-updater') throw new Error('brief updater unavailable');
       if (skillId === 'dialogue-coordinator') return { mode: 'proposal', message: '准备修改。', summary: '修订任务', operations: [{ type: 'revise-outline', instruction: '补充大闹厨房。' }], warnings: [] };
       return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.runtime.invokeSkill;
+    }) as typeof container.skillExecutor.executeSkill;
     const app = createApp(config, container);
     const now = new Date().toISOString();
     const taskCard: WritingTaskCard = {
@@ -1744,8 +1744,8 @@ describe('api app', () => {
     const config = testConfig();
     const container = createContainer(config);
     const coordinatorInputs: Array<{ conversationBrief?: DialogueBrief }> = [];
-    const originalInvokeSkill = container.runtime.invokeSkill.bind(container.runtime);
-    container.runtime.invokeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
+    const originalInvokeSkill = container.skillExecutor.executeSkill.bind(container.skillExecutor);
+    container.skillExecutor.executeSkill = (async (skillId: string, input: unknown, meta: unknown) => {
       if (skillId === 'dialogue-brief-updater') {
         const message = (input as { message: string }).message;
         return { activeRequirements: [{ kind: 'requirement', text: message }], evidenceNotes: [], recentUserIntents: [message], supersededRequirements: [], conflicts: [] };
@@ -1755,7 +1755,7 @@ describe('api app', () => {
         return { mode: 'proposal', message: '准备修改。', summary: '修订任务', operations: [{ type: 'revise-outline', instruction: '补充收束段。' }], warnings: [] };
       }
       return originalInvokeSkill(skillId as never, input as never, meta as never);
-    }) as typeof container.runtime.invokeSkill;
+    }) as typeof container.skillExecutor.executeSkill;
     const app = createApp(config, container);
     const taskCard: WritingTaskCard = {
       id: 'task-dialogue-brief-stale',

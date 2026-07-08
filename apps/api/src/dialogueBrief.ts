@@ -126,7 +126,7 @@ async function processDialogueBriefUpdateJob(container: AppContainer, jobId: str
   });
   try {
     const currentBrief = await getOrCreateDialogueBrief(container, running.articleId, running.userId);
-    const patch = await container.runtime.invokeSkill<DialogueBriefUpdaterInput, DialogueBriefUpdaterOutput>(
+    const patch = await container.skillExecutor.executeSkill<DialogueBriefUpdaterInput, DialogueBriefUpdaterOutput>(
       'dialogue-brief-updater',
       {
         message: running.messageContent,

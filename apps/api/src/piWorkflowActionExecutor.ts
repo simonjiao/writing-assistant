@@ -1,5 +1,4 @@
 import {
-  AgentRuntime,
   AllowedAction,
   AllowedActionType,
   ArticleArtifact,
@@ -13,6 +12,7 @@ import {
   ReviewFinding,
   ReviewArtifact,
   RevisionOperation,
+  SkillExecutor,
   WorkflowActionExecutionInput,
   WorkflowActionExecutionResult,
   WorkflowActionExecutor,
@@ -37,7 +37,7 @@ type WorkflowToolRegistry = Readonly<Record<AllowedActionType, WorkflowActionHan
 export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
   private readonly tools: WorkflowToolRegistry;
 
-  constructor(private readonly deps: { stores: ExternalStores; runtime: AgentRuntime }) {
+  constructor(private readonly deps: { stores: ExternalStores; skillExecutor: SkillExecutor }) {
     this.tools = {
       create_task_card_draft: this.createTaskCardDraft.bind(this),
       ask_followup: this.requestTaskCardGate.bind(this),
@@ -84,7 +84,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     const rawRequirement = this.readRunMessage(run);
     const workspaceId = this.requireString(run.metadata.workspaceId, 'workspaceId');
     await this.requireWorkspaceAccess(run, workspaceId);
-    const result = await this.deps.runtime.invokeSkill<TaskCardBuilderInput, TaskCardBuilderOutput>(
+    const result = await this.deps.skillExecutor.executeSkill<TaskCardBuilderInput, TaskCardBuilderOutput>(
       'task-card-builder',
       { rawRequirement, userId: run.metadata.userId, sessionId: run.metadata.sessionId, domainContext: (run.input as { domainContext?: TaskCardBuilderInput['domainContext'] }).domainContext, writingStandard: (run.input as { writingStandard?: TaskCardBuilderInput['writingStandard'] }).writingStandard },
       this.skillMeta(run),
@@ -118,7 +118,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     const article = await this.requireArticle(action.articleId);
     const taskCard = this.requireTaskCard(article);
     this.requireBaseRevision(action, article);
-    const result = await this.deps.runtime.invokeSkill<OutlinePlannerInput, OutlinePlannerOutput>(
+    const result = await this.deps.skillExecutor.executeSkill<OutlinePlannerInput, OutlinePlannerOutput>(
       'outline-planner',
       { articleId: article.id, taskCard },
       this.skillMeta(run, article.id),
@@ -263,7 +263,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     const section = article.outline.find((item) => item.id === sectionId);
     if (!section) throw new Error(`Outline section not found: ${sectionId}`);
     if (section.status === 'draft') throw new Error('Outline section is still draft.');
-    const result = await this.deps.runtime.invokeSkill<SectionWriterInput, SectionWriterOutput>(
+    const result = await this.deps.skillExecutor.executeSkill<SectionWriterInput, SectionWriterOutput>(
       'section-writer',
       { articleId: article.id, section, taskCard },
       this.skillMeta(run, article.id),

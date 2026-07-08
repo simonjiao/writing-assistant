@@ -24,7 +24,7 @@ writing-assistant/
 │  ├─ api/                 # Fastify API、stores、pi action executor、RAG client
 │  └─ web/                 # React/Vite 写作工作台
 ├─ packages/
-│  ├─ core/                # Pi workflow runner、AgentRuntime、Skill、Store、EventBus
+│  ├─ core/                # Pi workflow runner、SkillExecutor、Skill、Store、EventBus
 │  └─ skills/              # 默认写作 skills
 ├─ docs/                   # 产品、架构、模块、部署测试文档
 ├─ scripts/smoke.sh        # API smoke test

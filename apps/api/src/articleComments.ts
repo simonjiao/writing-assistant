@@ -1,4 +1,4 @@
-import { AgentRuntime, ArticleArtifact, ArticleBlock, ArticleComment, ExternalStores, newId, nowIso } from '@wa/core';
+import { ArticleArtifact, ArticleBlock, ArticleComment, ExternalStores, newId, nowIso, SkillExecutor } from '@wa/core';
 import type { ArticleCommentResolverInput, ArticleCommentResolverOutput } from '@wa/skills';
 
 export type ArticleCommentProcessResult = {
@@ -11,7 +11,7 @@ export type ArticleCommentProcessResult = {
 };
 
 export async function processArticleComments(
-  deps: { stores: ExternalStores; runtime: AgentRuntime },
+  deps: { stores: ExternalStores; skillExecutor: SkillExecutor },
   article: ArticleArtifact,
   userId: string,
   options: { sessionId?: string; commentIds?: string[]; runId?: string; baseRevision?: number; operationId?: string } = {},
@@ -30,7 +30,7 @@ export async function processArticleComments(
       continue;
     }
     try {
-      const output = await deps.runtime.invokeSkill<ArticleCommentResolverInput, ArticleCommentResolverOutput>(
+      const output = await deps.skillExecutor.executeSkill<ArticleCommentResolverInput, ArticleCommentResolverOutput>(
         'article-comment-resolver',
         {
           articleId: article.id,
