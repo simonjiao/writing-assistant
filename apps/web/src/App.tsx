@@ -69,6 +69,7 @@ export function App() {
   const taskDialogInputRef = useRef<HTMLTextAreaElement>(null);
   const historyBrowseIndex = useRef<number | undefined>(undefined);
   const historyDraft = useRef('');
+  const lastDomainRecommendationText = useRef('');
   const taskCardDialogTarget: TaskCardTarget = article?.taskCard && taskCardTarget === 'current' ? 'current' : 'new';
   const visibleArticle = taskCardDialogTarget === 'new' ? undefined : article;
   const activeTaskCardMessage = taskCardDialogTarget === 'new' ? newTaskMessage : currentTaskMessage;
@@ -171,14 +172,21 @@ export function App() {
   useEffect(() => {
     if (!domainProfiles.length || !domainRecommendationText.trim()) {
       setDomainProfileRecommendations([]);
+      lastDomainRecommendationText.current = '';
       return;
     }
+    if (busy) return;
     const rawRequirement = domainRecommendationText.trim();
+    if (lastDomainRecommendationText.current === rawRequirement) return;
     const timer = window.setTimeout(() => {
-      void api.recommendDomainProfiles(rawRequirement).then(setDomainProfileRecommendations).catch(() => setDomainProfileRecommendations([]));
+      lastDomainRecommendationText.current = rawRequirement;
+      void api.recommendDomainProfiles(rawRequirement).then(setDomainProfileRecommendations).catch(() => {
+        lastDomainRecommendationText.current = '';
+        setDomainProfileRecommendations([]);
+      });
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [domainProfiles.length, domainRecommendationText]);
+  }, [busy, domainProfiles.length, domainRecommendationText]);
   useEffect(() => {
     setCollapsedOutlineIds([]);
     setCollapsedBlockIds([]);
@@ -674,7 +682,7 @@ export function App() {
   }
   function chooseTaskCardPromptOption(prompt: TaskCardFollowUpPrompt, option: string) {
     setClearedTaskCardPromptIds((current) => current.filter((id) => id !== prompt.id));
-    setCurrentTaskMessage((current) => setPromptAnswer(current, prompt.question, option));
+    setCurrentTaskMessage((current) => promptSelectionMode(prompt) === 'multi' ? togglePromptAnswerOption(current, prompt.question, option) : setPromptAnswer(current, prompt.question, option));
   }
   function clearTaskCardPromptAnswer(prompt: TaskCardFollowUpPrompt) {
     setClearedTaskCardPromptIds((current) => current.includes(prompt.id) ? current : [...current, prompt.id]);
@@ -1037,14 +1045,18 @@ function commentResolutionLabel(kind?: ArticleComment['resolutionKind']): string
 function TaskCardGuidance(props: { prompts: TaskCardFollowUpPrompt[]; taskCard: WritingTaskCard; message: string; clearedPromptIds: string[]; onChooseOption: (prompt: TaskCardFollowUpPrompt, option: string) => void; onClearAnswer: (prompt: TaskCardFollowUpPrompt) => void }) {
   const selectedAnswers = promptSelectedAnswers(props.prompts, props.message, props.taskCard, props.clearedPromptIds);
   const selectedPromptIds = new Set(selectedAnswers.map((item) => item.prompt.id));
-  const pendingPrompts = props.prompts.filter((prompt) => !selectedPromptIds.has(prompt.id));
+  const pendingPrompts = props.prompts.filter((prompt) => promptSelectionMode(prompt) === 'multi' || !selectedPromptIds.has(prompt.id));
+  const selectedOptionsByPromptId = new Map(selectedAnswers.map((item) => [item.prompt.id, splitPromptAnswerOptions(item.answer)]));
   return (
     <div className="task-guidance">
       <div className="task-guidance-head"><strong>待确认项</strong><span>{pendingPrompts.length ? `${pendingPrompts.length} 项待选` : '已选择'}</span></div>
       {selectedAnswers.length ? <SelectedGuidanceRow items={selectedAnswers.map((item) => selectedGuidanceItemFromPromptAnswer(item, () => props.onClearAnswer(item.prompt)))} /> : null}
       {pendingPrompts.length ? <div className="pending-guidance-list">{pendingPrompts.map((prompt) => <div className="task-guidance-item" key={prompt.id}>
         <div className="task-guidance-question">{prompt.question}</div>
-        {prompt.options.length ? <div className="task-guidance-options">{prompt.options.map((option) => <button type="button" className="task-guidance-option" key={option} onClick={() => props.onChooseOption(prompt, option)}>{option}</button>)}</div> : null}
+        {prompt.options.length ? <div className="task-guidance-options">{prompt.options.map((option) => {
+          const selected = selectedOptionsByPromptId.get(prompt.id)?.includes(option) ?? false;
+          return <button type="button" className={selected ? 'task-guidance-option selected' : 'task-guidance-option'} aria-pressed={selected} key={option} onClick={() => props.onChooseOption(prompt, option)}>{option}</button>;
+        })}</div> : null}
       </div>)}</div> : null}
     </div>
   );
@@ -1716,6 +1728,16 @@ function setPromptAnswer(current: string, question: string, answer: string): str
   return [...lines, `${prefix}${answer}`].join('\n');
 }
 
+function togglePromptAnswerOption(current: string, question: string, option: string): string {
+  const prefix = promptAnswerPrefix(question);
+  const lines = current.split('\n').map((item) => item.trim()).filter(Boolean);
+  const answerLine = lines.find((item) => item.startsWith(prefix));
+  const existing = answerLine ? splitPromptAnswerOptions(answerLine.slice(prefix.length).trim()) : [];
+  const next = existing.includes(option) ? existing.filter((item) => item !== option) : [...existing, option];
+  const rest = lines.filter((item) => !item.startsWith(prefix));
+  return next.length ? [...rest, `${prefix}${next.join('、')}`].join('\n') : rest.join('\n');
+}
+
 function removePromptAnswer(current: string, question: string): string {
   const prefix = promptAnswerPrefix(question);
   return current.split('\n').map((item) => item.trim()).filter((item) => item && !item.startsWith(prefix)).join('\n');
@@ -1723,6 +1745,15 @@ function removePromptAnswer(current: string, question: string): string {
 
 function promptAnswerPrefix(question: string): string {
   return `${question}：`;
+}
+
+function splitPromptAnswerOptions(answer: string): string[] {
+  return answer.split(/[、,，;；]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function promptSelectionMode(prompt: TaskCardFollowUpPrompt): 'single' | 'multi' {
+  if (prompt.selectionMode === 'single' || prompt.selectionMode === 'multi') return prompt.selectionMode;
+  return /多选|多个|哪些|哪几|场景|情节|事件|材料|重点|要点|方面|关系|线索/.test(prompt.question) ? 'multi' : 'single';
 }
 
 function inferPromptAnswerFromTaskCard(prompt: TaskCardFollowUpPrompt, taskCard: WritingTaskCard): string | undefined {

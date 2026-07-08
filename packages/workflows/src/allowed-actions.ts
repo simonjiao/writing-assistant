@@ -1,4 +1,5 @@
 import { AllowedAction, ArticleArtifact, OutlineItem, WorkflowRun, hashOperationArgs } from '@wa/core';
+import { actionSkillBinding } from './product-skill';
 
 export interface AllowedActionPlannerInput {
   run: WorkflowRun;
@@ -13,10 +14,10 @@ export class AllowedActionPlanner {
     const targetStage = readTargetStage(input.run.input);
     const article = input.article;
     if (!article) {
-      return [this.action(input.run, 'create_task_card_draft', { reason: '当前运行还没有文章草稿，需要先创建任务卡草稿。' })];
+      return [this.action(input.run, 'create_task_intake', { reason: '当前运行还没有任务容器，需要立即保存用户输入。' })];
     }
     if (!article.taskCard) {
-      return [this.action(input.run, 'create_task_card_draft', { article, reason: '当前文章缺少任务卡，需要补建任务卡草稿。' })];
+      return [this.action(input.run, 'refine_task_card', { article, reason: '当前任务已保存，但还缺少任务卡草稿，需要整理任务卡。' })];
     }
     if (article.taskCard.status !== 'confirmed') {
       return [this.action(input.run, 'ask_followup', { article, reason: '任务卡尚未确认，需要继续补充或等待用户确认。' })];
@@ -88,11 +89,14 @@ export class AllowedActionPlanner {
   private action(run: WorkflowRun, type: AllowedAction['type'], input: { article?: ArticleArtifact; section?: OutlineItem; reason: string; requiresHumanGate?: boolean; reviewArtifactId?: string; suggestionId?: string; targetKind?: string; targetId?: string }): AllowedAction {
     const baseRevision = input.article?.revision;
     const sectionId = input.section?.id;
+    const skillBinding = actionSkillBinding(type);
     const operationId = stableActionId('op', { runId: run.id, workflowId: run.workflowId, type, articleId: input.article?.id, sectionId, reviewArtifactId: input.reviewArtifactId, suggestionId: input.suggestionId, targetKind: input.targetKind, targetId: input.targetId, baseRevision });
     return {
       id: stableActionId('act', { runId: run.id, type, articleId: input.article?.id, sectionId, reviewArtifactId: input.reviewArtifactId, suggestionId: input.suggestionId, targetKind: input.targetKind, targetId: input.targetId, baseRevision }),
       operationId,
       type,
+      skillId: skillBinding.skillId,
+      toolName: skillBinding.toolName,
       articleId: input.article?.id,
       sectionId,
       reviewArtifactId: input.reviewArtifactId,
@@ -101,7 +105,7 @@ export class AllowedActionPlanner {
       targetId: input.targetId,
       baseRevision,
       requiresHumanGate: input.requiresHumanGate ?? false,
-      reason: input.reason,
+      reason: `${skillBinding.hint} ${input.reason}`,
     };
   }
 }

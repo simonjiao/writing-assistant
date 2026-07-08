@@ -24,7 +24,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
   const revisionProposalService = createRevisionProposalService({
     container,
     requireArticleAccess: (userId, articleId) => requireArticleAccess(container, userId, articleId),
-    executeArticleAgentSkill,
+    executeArticleProgramTool,
     enrichRun: (runId) => enrichRun(container, runId),
     withWritingStandardSummary,
     clearDownstreamForTaskCardChange,
@@ -357,7 +357,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
     localDialogueReply,
     answerWithKnowledge,
     proposalForDialogue,
-    executeArticleAgentSkill,
+    executeArticleProgramTool,
     isDialogueCoordinatorRecoverableFailure,
     dialogueBriefBarrierError,
     applyRevisionProposal: (_container, proposalId, userId, sessionId) => revisionProposalService.applyRevisionProposal(proposalId, userId, sessionId),
@@ -384,6 +384,8 @@ export function createApp(config: AppConfig, container: AppContainer) {
     const userId = readRequestUserId(request, body.userId);
     if (!userId) return reply.code(400).send({ error: 'userId is required.' });
     const articleId = body.articleId?.trim();
+    const targetStage = normalizeWorkflowTargetStage(body.targetStage);
+    const startsNewTask = !articleId;
     const articleAccess = articleId ? await requireArticleAccess(container, userId, articleId) : undefined;
     if (articleAccess && !articleAccess.ok) return reply.code(articleAccess.statusCode).send({ error: articleAccess.error });
     const workspaceId = articleAccess?.article.workspaceId ?? body.workspaceId?.trim() ?? (await ensureDefaultWorkspace(container, userId)).id;
@@ -423,7 +425,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
       id: newId('run'),
       workflowId: WRITING_AUTOPILOT_POLICY.id,
       status: 'running',
-      input: { message: body.message?.trim() || undefined, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined, targetStage: normalizeWorkflowTargetStage(body.targetStage), replaceExisting: body.replaceExisting === true, commentIds: normalizeCommentIds(body.commentIds), domainContext, writingStandard },
+      input: { message: body.message?.trim() || undefined, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined, targetStage, replaceExisting: body.replaceExisting === true, commentIds: normalizeCommentIds(body.commentIds), domainContext, writingStandard },
       state: {},
       metadata: { userId, sessionId: body.sessionId, articleId, workspaceId, sectionId: body.sectionId?.trim() || undefined },
       createdAt: now,
@@ -432,8 +434,11 @@ export function createApp(config: AppConfig, container: AppContainer) {
     await container.stores.stateStore.saveRun(run);
     await container.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'workflow.started', payload: { workflowId: run.workflowId, metadata: run.metadata, userId, executionMode: 'pi-agent' }, createdAt: nowIso() });
     if (body.sessionId) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: articleId, currentWorkspaceId: workspaceId, currentRunId: run.id });
-    await container.piRunner.runUntilBlocked(run.id);
-    return enrichRun(container, run.id);
+    const firstPass = await container.piRunner.runUntilBlocked(run.id, startsNewTask ? { maxTurns: 1, returnRunningWhenTurnBudgetExhausted: true } : undefined);
+    const payload = await enrichRun(container, run.id);
+    if (body.sessionId && payload.article) await container.stores.sessionStore.updateSession(body.sessionId, { currentArticleId: payload.article.id, currentWorkspaceId: payload.article.workspaceId, currentRunId: run.id });
+    if (startsNewTask && firstPass.status === 'running') queueWorkflowContinuation(container, run.id);
+    return payload;
   });
 
   app.get('/api/workflows/:runId', async (request, reply) => {
@@ -726,13 +731,13 @@ function extractKnowledgeTerms(message: string, article: ArticleArtifact): strin
 }
 
 async function refineDialogueRoute(container: AppContainer, article: ArticleArtifact, userId: string, sessionId: string | undefined, message: string, context: DialogueCoordinatorInput['context'], hasPendingProposal: boolean): Promise<DialogueRoute> {
-  const skillInput: DialogueRouterInput = {
+  const programInput: DialogueRouterInput = {
     message,
     skipKnowledge: true,
     hasPendingProposal,
     context: { kind: context.kind, title: context.title },
   };
-  const result = await executeArticleAgentSkill<DialogueRouterInput, DialogueRouterOutput>({
+  const result = await executeArticleProgramTool<DialogueRouterInput, DialogueRouterOutput>({
     container,
     article,
     userId,
@@ -740,7 +745,7 @@ async function refineDialogueRoute(container: AppContainer, article: ArticleArti
     target: dialogueSessionTargetFromContext(context),
     allowedTools: ['route_dialogue'],
     toolName: 'route_dialogue',
-    skillInput,
+    programInput,
     operationPrefix: 'dialogue_router',
   });
   return result.route;
@@ -770,7 +775,7 @@ async function getDialoguePiSession(container: AppContainer, article: ArticleArt
   return (await getOrCreateAgentSession(container.stores, sessionTarget)).session;
 }
 
-async function executeArticleAgentSkill<I = unknown, O = unknown>(input: {
+async function executeArticleProgramTool<I = unknown, O = unknown>(input: {
   container: AppContainer;
   article: ArticleArtifact;
   userId: string;
@@ -778,7 +783,7 @@ async function executeArticleAgentSkill<I = unknown, O = unknown>(input: {
   target: DialoguePiSessionTarget;
   allowedTools: readonly string[];
   toolName: string;
-  skillInput: I;
+  programInput: I;
   operationPrefix: string;
   operationId?: string;
   operationPayload?: unknown;
@@ -798,8 +803,8 @@ async function executeArticleAgentSkill<I = unknown, O = unknown>(input: {
     agentSession,
     allowedTools: input.allowedTools,
     toolName: input.toolName,
-    input: input.skillInput,
-    operationId: input.operationId ?? agentOperationId(input.operationPrefix, operationTarget, input.operationPayload ?? input.skillInput),
+    input: input.programInput,
+    operationId: input.operationId ?? agentOperationId(input.operationPrefix, operationTarget, input.operationPayload ?? input.programInput),
     sessionId: input.sessionId,
     runId: input.runId,
     workflowId: input.workflowId,
@@ -870,6 +875,20 @@ async function findActiveArticleWorkflowRun(container: AppContainer, articleId: 
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
 }
 
+function queueWorkflowContinuation(container: AppContainer, runId: string): void {
+  setTimeout(() => {
+    void container.piRunner.runUntilBlocked(runId).catch((error) => failQueuedWorkflow(container, runId, error));
+  }, 0);
+}
+
+async function failQueuedWorkflow(container: AppContainer, runId: string, error: unknown): Promise<void> {
+  const run = await container.stores.stateStore.getRun(runId);
+  if (!run || run.status !== 'running') return;
+  const message = error instanceof Error ? error.message : String(error);
+  await container.stores.stateStore.updateRun(runId, { status: 'failed', error: message, updatedAt: nowIso() });
+  await container.stores.eventTraceStore.append({ id: newId('evt'), runId, type: 'workflow.failed', payload: { workflowId: run.workflowId, error: message, userId: run.metadata.userId, runMetadata: run.metadata, background: true }, createdAt: nowIso() });
+}
+
 async function findPendingWorkflowProposalRun(container: AppContainer, articleId: string, userId: string): Promise<WorkflowRun | undefined> {
   const proposals = (await container.stores.revisionProposalStore.listPendingProposals(articleId, userId))
     .filter((proposal) => proposal.runId)
@@ -927,7 +946,7 @@ async function handleWorkflowPendingProposalMessage(container: AppContainer, rev
   const conversationBrief = await getOrCreateDialogueBrief(container, access.article.id, userId);
   let result: DialogueCoordinatorOutput;
   try {
-    const skillInput: DialogueCoordinatorInput = {
+    const programInput: DialogueCoordinatorInput = {
       articleId: access.article.id,
       message,
       skipKnowledge: true,
@@ -940,7 +959,7 @@ async function handleWorkflowPendingProposalMessage(container: AppContainer, rev
       selectedOutlineItem: context.value.selectedOutlineItem,
       selectedBlock: context.value.selectedBlock,
     };
-    result = await executeArticleAgentSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>({
+    result = await executeArticleProgramTool<DialogueCoordinatorInput, DialogueCoordinatorOutput>({
       container,
       article: access.article,
       userId,
@@ -948,7 +967,7 @@ async function handleWorkflowPendingProposalMessage(container: AppContainer, rev
       target: dialogueSessionTargetFromContext(context.value.context),
       allowedTools: ['create_revision_proposal', 'ask_clarifying_question', 'answer'],
       toolName: 'create_revision_proposal',
-      skillInput,
+      programInput,
       operationPrefix: 'workflow_dialogue_coordinator',
     });
   } catch (error) {

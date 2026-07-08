@@ -168,6 +168,26 @@ describe('TaskCardReviserProgram', () => {
     });
     expect(output.taskCard.interactionMode.followUpQuestions).toEqual(['篇幅希望多长？']);
     expect(output.taskCard.interactionMode.followUpPrompts?.[0].options).toEqual(['800字', '1500字', '3000字']);
+    expect(output.taskCard.interactionMode.followUpPrompts?.[0].selectionMode).toBe('single');
+  });
+
+  it('keeps scene follow-up prompts selectable as multi-choice', async () => {
+    const program = new TaskCardReviserProgram();
+    const output = await program.invoke({
+      input: { articleId: 'art_1', instruction: '补充几个重要场景让用户选择。', currentTaskCard },
+      context: { memory: {} } as never,
+      llm: llmReturning({
+        taskCard: {
+          ...currentTaskCard,
+          interactionMode: { askBeforeWriting: true, localEditFirst: true },
+        },
+        summary: '已增加场景选择。',
+        missingQuestions: ['希望选择哪些重要场景？'],
+        followUpPrompts: [{ question: '希望选择哪些重要场景？', options: ['场景一', '场景二', '场景三'], allowCustom: true }],
+        changedFields: ['interactionMode.followUpPrompts'],
+      }),
+    });
+    expect(output.taskCard.interactionMode.followUpPrompts?.[0]).toMatchObject({ question: '希望选择哪些重要场景？', selectionMode: 'multi' });
   });
 
   it('rejects incomplete revised task cards', async () => {

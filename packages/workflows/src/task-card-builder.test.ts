@@ -162,7 +162,32 @@ describe('TaskCardBuilderProgram', () => {
       }),
     });
     expect(output.taskCard.interactionMode.followUpQuestions).toEqual(['希望文章更偏赏析还是论证？']);
-    expect(output.taskCard.interactionMode.followUpPrompts?.[0]).toMatchObject({ question: '希望文章更偏赏析还是论证？', options: ['赏析', '论证'], allowCustom: true });
+    expect(output.taskCard.interactionMode.followUpPrompts?.[0]).toMatchObject({ question: '希望文章更偏赏析还是论证？', options: ['赏析', '论证'], allowCustom: true, selectionMode: 'single' });
+  });
+
+  it('infers multi-select follow-up prompts for scene choices', async () => {
+    const program = new TaskCardBuilderProgram();
+    const output = await program.invoke({
+      input: { rawRequirement: '写一篇关于司棋的文章，围绕几个重要场景展开。', userId: 'u1' },
+      context: { memory: {} } as never,
+      llm: llmReturning({
+        taskCard: {
+          topic: '司棋人物文章',
+          writingGoal: '围绕重要场景介绍司棋。',
+          audience: '普通中文读者',
+          scope: { editions: [], chapters: [], characters: ['司棋'], themes: [] },
+          structure: { articleType: 'analysis', expectedLength: '1500字', outlinePreference: '按场景分层展开。' },
+          style: { register: '清晰自然的中文', tone: '稳健、可读', classicalFlavor: false },
+          constraints: { mustInclude: [], mustAvoid: [], citationRequired: false, sourcePolicy: '以前八十回为依据。' },
+          interactionMode: { askBeforeWriting: true, localEditFirst: true },
+        },
+        missingQuestions: ['希望选择哪些重要场景？'],
+        followUpPrompts: [{ question: '希望选择哪些重要场景？', options: ['大观园查检', '与潘又安', '被逐出园'], allowCustom: true }],
+        summary: '已生成任务卡。',
+        confidence: 0.7,
+      }),
+    });
+    expect(output.taskCard.interactionMode.followUpPrompts?.[0]).toMatchObject({ question: '希望选择哪些重要场景？', selectionMode: 'multi' });
   });
 
   it('merges selected writing standards as top rules', async () => {

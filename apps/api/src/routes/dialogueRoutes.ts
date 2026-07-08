@@ -46,7 +46,7 @@ export interface DialogueRoutesDependencies {
   localDialogueReply(route: DialogueRoute, context: DialogueCoordinatorInput['context'], article: ArticleArtifact, message: string, pendingProposal?: RevisionProposal): string;
   answerWithKnowledge(container: AppContainer, article: ArticleArtifact, context: DialogueCoordinatorInput['context'], message: string): Promise<{ message: string; query: string; items: KnowledgeItem[] }>;
   proposalForDialogue(proposal: RevisionProposal): DialogueCoordinatorInput['pendingProposal'];
-  executeArticleAgentSkill<I = unknown, O = unknown>(input: {
+  executeArticleProgramTool<I = unknown, O = unknown>(input: {
     container: AppContainer;
     article: ArticleArtifact;
     userId: string;
@@ -54,7 +54,7 @@ export interface DialogueRoutesDependencies {
     target: { contextKind: DialogueCoordinatorInput['context']['kind']; targetId?: string };
     allowedTools: readonly string[];
     toolName: string;
-    skillInput: I;
+    programInput: I;
     operationPrefix: string;
   }): Promise<O>;
   isDialogueCoordinatorRecoverableFailure(error: unknown): boolean;
@@ -146,7 +146,7 @@ export function registerDialogueRoutes(app: FastifyInstance, deps: DialogueRoute
     await enqueueDialogueBriefUpdate({ container, article: access.article, userId, sessionId: body.sessionId, message: userMessage, context: { kind: context.value.context.kind, title: context.value.context.title } });
     let result: DialogueCoordinatorOutput;
     try {
-      const skillInput: DialogueCoordinatorInput = {
+      const programInput: DialogueCoordinatorInput = {
         articleId: access.article.id,
         message,
         skipKnowledge: true,
@@ -159,7 +159,7 @@ export function registerDialogueRoutes(app: FastifyInstance, deps: DialogueRoute
         selectedOutlineItem: context.value.selectedOutlineItem,
         selectedBlock: context.value.selectedBlock,
       };
-      result = await deps.executeArticleAgentSkill<DialogueCoordinatorInput, DialogueCoordinatorOutput>({
+      result = await deps.executeArticleProgramTool<DialogueCoordinatorInput, DialogueCoordinatorOutput>({
         container,
         article: access.article,
         userId,
@@ -167,7 +167,7 @@ export function registerDialogueRoutes(app: FastifyInstance, deps: DialogueRoute
         target: deps.dialogueSessionTargetFromContext(context.value.context),
         allowedTools: ['create_revision_proposal', 'ask_clarifying_question', 'answer'],
         toolName: 'create_revision_proposal',
-        skillInput,
+        programInput,
         operationPrefix: 'dialogue_coordinator',
       });
     } catch (error) {

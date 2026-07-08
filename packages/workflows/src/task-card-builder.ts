@@ -4,9 +4,11 @@ import { normalizeTaskCardPolicies } from './task-card-policy';
 import { extractConfiguredAvoidanceRules, extractExplicitAvoidances } from './writing-constraints';
 
 export interface TaskCardBuilderInput {
+  articleId?: string;
   rawRequirement: string;
   userId: string;
   sessionId?: string;
+  skipKnowledge?: boolean;
   domainContext?: TaskCardDomainContext;
   writingStandard?: TaskCardWritingStandardContext;
 }
@@ -61,7 +63,8 @@ export class TaskCardBuilderProgram implements PromptProgram<TaskCardBuilderInpu
       '任务卡要适合后续大纲、章节写作、局部修改和引用检查。',
       '所有面向用户展示的字段必须是自然语言；可以包含自然英文术语，但不要把内部英文枚举、空字符串或技术状态词当展示文案。',
       '不要省略任何必填键，不要输出空字符串；无法确定的信息放入 missingQuestions，但能从 rawRequirement 直接确定的字段必须填写。',
-      '第一轮创建任务卡时，即使能生成草稿，也要把用户未明确选择的重要项做成 followUpPrompts，最多 3 项；常见项包括篇幅、结构、重点、资料边界、语气。每项包含 question、2 到 4 个可选 options，并允许用户自定义输入。',
+      '第一轮创建任务卡时，即使能生成草稿，也要把用户未明确选择的重要项做成 followUpPrompts，最多 3 项；常见项包括篇幅、结构、重点、资料边界、语气。每项包含 question、2 到 4 个可选 options、allowCustom，以及 selectionMode。',
+      'selectionMode 只能是 single 或 multi；篇幅、语气、资料边界通常是 single；场景、重点、论述方面、人物关系、可并列材料通常是 multi。',
       'missingQuestions 用于确实缺少的关键信息；followUpPrompts 用于引导用户选择或补充，两者可以相同，也可以只有 followUpPrompts。',
       'taskCard.writingGoal 必须概括用户要完成的写作目标，不能留空。',
       'style.register 和 style.tone 必须是具体的中文写作风格描述，不能留空。',
@@ -115,7 +118,7 @@ export class TaskCardBuilderProgram implements PromptProgram<TaskCardBuilderInpu
           },
         },
         missingQuestions: 'string[]; 没有问题时输出 []',
-        followUpPrompts: 'Array<{ question: string; options: string[]; allowCustom: boolean }>; 和 missingQuestions 对应，没有问题时输出 []',
+        followUpPrompts: 'Array<{ question: string; options: string[]; allowCustom: boolean; selectionMode?: "single" | "multi" }>; 和 missingQuestions 对应，没有问题时输出 []',
         summary: 'string; 必须非空',
         confidence: 'number; 0 到 1',
       },
@@ -209,15 +212,26 @@ function requireFollowUpPrompts(value: unknown, missingQuestions: string[], fiel
 
 function normalizeFollowUpPrompt(value: unknown, index: number): TaskCardFollowUpPrompt | undefined {
   if (!value || typeof value !== 'object') return undefined;
-  const raw = value as { id?: unknown; question?: unknown; options?: unknown; allowCustom?: unknown };
+  const raw = value as { id?: unknown; question?: unknown; options?: unknown; allowCustom?: unknown; selectionMode?: unknown };
   if (typeof raw.question !== 'string' || !raw.question.trim()) return undefined;
   const options = Array.isArray(raw.options) ? raw.options.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim()).slice(0, 4) : [];
+  const question = raw.question.trim();
   return {
     id: typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `prompt-${index + 1}`,
-    question: raw.question.trim(),
+    question,
     options: [...new Set(options)],
     allowCustom: typeof raw.allowCustom === 'boolean' ? raw.allowCustom : true,
+    selectionMode: normalizePromptSelectionMode(raw.selectionMode, question),
   };
+}
+
+function normalizePromptSelectionMode(value: unknown, question: string): TaskCardFollowUpPrompt['selectionMode'] {
+  if (value === 'single' || value === 'multi') return value;
+  return shouldUseMultiSelection(question) ? 'multi' : 'single';
+}
+
+function shouldUseMultiSelection(question: string): boolean {
+  return /多选|多个|哪些|哪几|场景|情节|事件|材料|重点|要点|方面|关系|线索/.test(question);
 }
 
 function requireInputRequirement(value: string): string {

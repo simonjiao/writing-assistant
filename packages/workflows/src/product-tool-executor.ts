@@ -50,11 +50,12 @@ export class AgentToolExecutor {
       ? await this.deps.stores.agentOperationStore.updateOperation({ ...existing, ...operationInput, status: 'running', error: undefined })
       : await this.deps.stores.agentOperationStore.startOperation(operationInput);
     await appendAgentSessionToolTrace(this.deps.stores, input.agentSession.id, { toolName: input.toolName, operationId: input.operationId, status: 'started' });
-    await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: input.runId, type: 'tool.started', payload: { toolName: input.toolName, operationId: input.operationId, agentSessionId: input.agentSession.id }, createdAt: nowIso() });
+    await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: input.runId, type: 'tool.started', payload: { toolName: input.toolName, skillId: tool.skill.id, operationId: input.operationId, agentSessionId: input.agentSession.id }, createdAt: nowIso() });
     try {
       const output = await tool.execute({
         input: parsedInput,
         userId: input.agentSession.userId,
+        operationId: input.operationId,
         sessionId: input.sessionId,
         agentSessionId: input.agentSession.id,
         runId: input.runId,
@@ -70,13 +71,13 @@ export class AgentToolExecutor {
       const parsedOutput = tool.outputSchema.parse(output);
       await this.deps.stores.agentOperationStore.updateOperation({ ...running, status: 'completed', resultPayload: toJsonValue(parsedOutput), resultRef: input.resultRef, error: undefined });
       await appendAgentSessionToolTrace(this.deps.stores, input.agentSession.id, { toolName: input.toolName, operationId: input.operationId, status: 'completed' });
-      await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: input.runId, type: 'tool.completed', payload: { toolName: input.toolName, operationId: input.operationId, agentSessionId: input.agentSession.id }, createdAt: nowIso() });
+      await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: input.runId, type: 'tool.completed', payload: { toolName: input.toolName, skillId: tool.skill.id, operationId: input.operationId, agentSessionId: input.agentSession.id }, createdAt: nowIso() });
       return parsedOutput;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.deps.stores.agentOperationStore.updateOperation({ ...running, status: 'failed', error: message });
       await appendAgentSessionToolTrace(this.deps.stores, input.agentSession.id, { toolName: input.toolName, operationId: input.operationId, status: 'failed', error: message });
-      await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: input.runId, type: 'tool.failed', payload: { toolName: input.toolName, operationId: input.operationId, agentSessionId: input.agentSession.id, error: message }, createdAt: nowIso() });
+      await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: input.runId, type: 'tool.failed', payload: { toolName: input.toolName, skillId: tool.skill.id, operationId: input.operationId, agentSessionId: input.agentSession.id, error: message }, createdAt: nowIso() });
       throw error;
     }
   }

@@ -128,7 +128,7 @@ async function processDialogueBriefUpdateJob(container: AppContainer, jobId: str
     const currentBrief = await getOrCreateDialogueBrief(container, running.articleId, running.userId);
     const target: AgentSessionTarget = { userId: running.userId, articleId: running.articleId, contextKind: 'dialogue-brief', targetId: running.messageId };
     const { session } = await getOrCreateAgentSession(container.stores, target);
-    const skillInput: DialogueBriefUpdaterInput = {
+    const programInput: DialogueBriefUpdaterInput = {
       message: running.messageContent,
       context: { kind: running.contextKind, title: running.contextTitle },
       currentBrief: compactDialogueBriefForPrompt(currentBrief),
@@ -138,7 +138,7 @@ async function processDialogueBriefUpdateJob(container: AppContainer, jobId: str
       agentSession: session,
       allowedTools: ['update_dialogue_brief'],
       toolName: 'update_dialogue_brief',
-      input: skillInput,
+      input: programInput,
       operationId: agentOperationId('dialogue_brief_update', target, { messageId: running.messageId, messageContent: running.messageContent, contextKind: running.contextKind }),
       sessionId,
       articleId: running.articleId,

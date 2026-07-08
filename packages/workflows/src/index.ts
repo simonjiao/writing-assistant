@@ -14,6 +14,7 @@ export * from './quality-evaluator';
 export * from './task-card-policy';
 export * from './prompt-program';
 export * from './product-tool';
+export * from './product-skill';
 export * from './tool-schemas';
 export * from './tool-catalog';
 export * from './product-tool-executor';

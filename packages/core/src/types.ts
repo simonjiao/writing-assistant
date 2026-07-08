@@ -38,6 +38,7 @@ export interface TaskCardFollowUpPrompt {
   question: string;
   options: string[];
   allowCustom: boolean;
+  selectionMode?: 'single' | 'multi';
 }
 
 export interface WritingTaskCard {
@@ -400,7 +401,8 @@ export interface ReviewArtifact {
 }
 
 export type AllowedActionType =
-  | 'create_task_card_draft'
+  | 'create_task_intake'
+  | 'refine_task_card'
   | 'ask_followup'
   | 'plan_outline'
   | 'confirm_outline_for_writing'
@@ -416,6 +418,8 @@ export interface AllowedAction {
   id: string;
   operationId: string;
   type: AllowedActionType;
+  skillId: string;
+  toolName?: string;
   articleId?: string;
   sectionId?: string;
   reviewArtifactId?: string;

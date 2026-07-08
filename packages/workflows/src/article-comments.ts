@@ -35,7 +35,7 @@ export async function processArticleComments(
     try {
       const target: AgentSessionTarget = { userId, workspaceId: article.workspaceId, articleId: article.id, contextKind: 'article-comment', targetId: comment.id };
       const { session } = await getOrCreateAgentSession(deps.stores, target);
-      const skillInput: ArticleCommentResolverInput = {
+      const programInput: ArticleCommentResolverInput = {
         articleId: article.id,
         comment,
         block,
@@ -46,7 +46,7 @@ export async function processArticleComments(
         agentSession: session,
         allowedTools: ['resolve_article_comment'],
         toolName: 'resolve_article_comment',
-        input: skillInput,
+        input: programInput,
         operationId: agentOperationId('article_comment_resolve', target, {
           commentId: comment.id,
           selectedText: comment.selectedText,

@@ -8,6 +8,7 @@ const followUpPromptSchema = z.object({
   question: z.string(),
   options: stringArraySchema,
   allowCustom: z.boolean(),
+  selectionMode: z.enum(['single', 'multi']).optional(),
 }).passthrough();
 
 export const writingTaskCardSchema = z.object({
@@ -152,14 +153,32 @@ const writingStandardSchema = z.object({
 }).passthrough();
 
 export const productToolSchemas = {
-  buildTaskCardDraftInput: z.object({
+  createTaskIntakeInput: z.object({
+    articleId: z.string().min(1),
     rawRequirement: z.string().min(1),
     userId: z.string().min(1),
+    workspaceId: z.string().min(1),
     sessionId: z.string().optional(),
     domainContext: taskCardDomainContextSchema.optional(),
     writingStandard: writingStandardSchema.optional(),
   }).passthrough(),
-  buildTaskCardDraftOutput: z.object({
+  createTaskIntakeOutput: z.object({
+    articleId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    title: z.string().min(1),
+    summary: z.string().min(1),
+  }).passthrough(),
+
+  refineTaskCardInput: z.object({
+    rawRequirement: z.string().min(1),
+    userId: z.string().min(1),
+    articleId: z.string().min(1),
+    sessionId: z.string().optional(),
+    skipKnowledge: z.boolean().optional(),
+    domainContext: taskCardDomainContextSchema.optional(),
+    writingStandard: writingStandardSchema.optional(),
+  }).passthrough(),
+  refineTaskCardOutput: z.object({
     taskCard: writingTaskCardSchema,
     missingQuestions: stringArraySchema,
     followUpPrompts: z.array(followUpPromptSchema).optional(),

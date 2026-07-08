@@ -540,6 +540,11 @@ pre { white-space: pre-wrap; font-family: inherit; margin: 0; }
 .task-guidance-option:hover {
   background: #ede7dc;
 }
+.task-guidance-option.selected {
+  border-color: #2b3a4d;
+  background: #263244;
+  color: #fff;
+}
 .selected-guidance-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

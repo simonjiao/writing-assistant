@@ -70,11 +70,32 @@ function stores(initialRun = run(), initialArticle = article()): ExternalStores 
 }
 
 describe('PiWorkflowRunner', () => {
-  it('fails instead of selecting the first action when no decision provider is configured', async () => {
+  it('executes a singleton allowed action without an LLM decision provider', async () => {
     let executed = false;
     const testStores = stores();
     const runner = new PiWorkflowRunner({
       stores: testStores,
+      actionExecutor: { async execute() { executed = true; return { summary: 'executed' }; } } as WorkflowActionExecutor,
+    });
+    const result = await runner.runUntilBlocked('run_1');
+    expect(result.status).toBe('waiting');
+    expect(result.waitingFor?.reason).toContain('已达到本轮自动执行步数上限');
+    expect(executed).toBe(true);
+  });
+
+  it('requires an LLM decision provider when there is a real action choice', async () => {
+    let executed = false;
+    const testStores = stores();
+    const runner = new PiWorkflowRunner({
+      stores: testStores,
+      planner: {
+        plan() {
+          return [
+            { id: 'act_1', operationId: 'op_1', type: 'plan_outline', articleId: 'art_1', baseRevision: 3, requiresHumanGate: false, reason: '生成大纲。' },
+            { id: 'act_2', operationId: 'op_2', type: 'request_human_gate', articleId: 'art_1', baseRevision: 3, requiresHumanGate: true, reason: '询问用户。' },
+          ];
+        },
+      } as never,
       actionExecutor: { async execute() { executed = true; return { summary: 'executed' }; } } as WorkflowActionExecutor,
     });
     const result = await runner.runUntilBlocked('run_1');
@@ -88,6 +109,14 @@ describe('PiWorkflowRunner', () => {
     const testStores = stores();
     const runner = new PiWorkflowRunner({
       stores: testStores,
+      planner: {
+        plan() {
+          return [
+            { id: 'act_1', operationId: 'op_1', type: 'plan_outline', articleId: 'art_1', baseRevision: 3, requiresHumanGate: false, reason: '生成大纲。' },
+            { id: 'act_2', operationId: 'op_2', type: 'request_human_gate', articleId: 'art_1', baseRevision: 3, requiresHumanGate: true, reason: '询问用户。' },
+          ];
+        },
+      } as never,
       decisionProvider: {
         async decide() {
           return { decision: { intent: 'wait', rationale: '没有选择动作。', requiresHumanGate: false, stopReason: 'waiting' }, messages: [] };

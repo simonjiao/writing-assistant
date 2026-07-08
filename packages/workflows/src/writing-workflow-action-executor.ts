@@ -35,7 +35,8 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
 
   constructor(private readonly deps: { stores: ExternalStores; agentToolExecutor: AgentToolExecutor }) {
     this.tools = {
-      create_task_card_draft: this.createTaskCardDraft.bind(this),
+      create_task_intake: this.createTaskIntake.bind(this),
+      refine_task_card: this.refineTaskCard.bind(this),
       ask_followup: this.requestTaskCardGate.bind(this),
       plan_outline: this.planOutline.bind(this),
       confirm_outline_for_writing: this.confirmOutlineForWriting.bind(this),
@@ -76,24 +77,56 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     return this.tools[action.type](run, action);
   }
 
-  private async createTaskCardDraft(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
+  private async createTaskIntake(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
     const rawRequirement = this.readRunMessage(run);
     const workspaceId = this.requireString(run.metadata.workspaceId, 'workspaceId');
     await this.requireWorkspaceAccess(run, workspaceId);
-    const skillInput: TaskCardBuilderInput = { rawRequirement, userId: run.metadata.userId, sessionId: run.metadata.sessionId, domainContext: (run.input as { domainContext?: TaskCardBuilderInput['domainContext'] }).domainContext, writingStandard: (run.input as { writingStandard?: TaskCardBuilderInput['writingStandard'] }).writingStandard };
-    const result = await this.executeWorkflowTool<TaskCardBuilderInput, TaskCardBuilderOutput>(run, action, {
-      toolName: 'build_task_card_draft',
-      skillInput,
+    const articleId = action.articleId ?? stableArticleId(action.operationId);
+    const result = await this.executeWorkflowTool<{ articleId: string; rawRequirement: string; userId: string; workspaceId: string; sessionId?: string; domainContext?: TaskCardBuilderInput['domainContext']; writingStandard?: TaskCardBuilderInput['writingStandard'] }, { articleId: string; workspaceId: string; title: string; summary: string }>(run, action, {
+      toolName: 'create_task_intake',
+      programInput: {
+        articleId,
+        rawRequirement,
+        userId: run.metadata.userId,
+        workspaceId,
+        sessionId: typeof run.metadata.sessionId === 'string' ? run.metadata.sessionId : undefined,
+        domainContext: (run.input as { domainContext?: TaskCardBuilderInput['domainContext'] }).domainContext,
+        writingStandard: (run.input as { writingStandard?: TaskCardBuilderInput['writingStandard'] }).writingStandard,
+      },
     });
-    const taskCard = normalizeTaskCardPolicies(result.taskCard, rawRequirement).taskCard;
-    const article = await this.deps.stores.artifactStore.createArticle({ userId: run.metadata.userId, workspaceId, title: taskCard.topic, taskCard });
+    const article = await this.requireArticle(result.articleId);
     await this.deps.stores.stateStore.updateRun(run.id, {
       metadata: { ...run.metadata, articleId: article.id, workspaceId },
-      state: { ...run.state, taskCardResult: result, draftArticle: { articleId: article.id, workspaceId } },
+      state: { ...run.state, taskIntake: { articleId: article.id, workspaceId, rawRequirement }, draftArticle: { articleId: article.id, workspaceId } },
       updatedAt: nowIso(),
     });
-    await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'artifact.updated', payload: { articleId: article.id, workspaceId, reason: 'pi-task-card-draft-created', userId: run.metadata.userId }, createdAt: nowIso() });
     return { article, summary: result.summary };
+  }
+
+  private async refineTaskCard(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
+    const rawRequirement = this.readRunMessage(run);
+    const article = await this.requireArticle(action.articleId);
+    this.requireBaseRevision(action, article);
+    const programInput: TaskCardBuilderInput = { rawRequirement, articleId: article.id, userId: run.metadata.userId, sessionId: run.metadata.sessionId, skipKnowledge: true, domainContext: (run.input as { domainContext?: TaskCardBuilderInput['domainContext'] }).domainContext, writingStandard: (run.input as { writingStandard?: TaskCardBuilderInput['writingStandard'] }).writingStandard };
+    const result = await this.executeWorkflowTool<TaskCardBuilderInput, TaskCardBuilderOutput>(run, action, {
+      article,
+      toolName: 'refine_task_card',
+      programInput,
+    });
+    const taskCard = normalizeTaskCardPolicies(result.taskCard, rawRequirement).taskCard;
+    const updated = await this.deps.stores.artifactStore.updateArticleWithRevision({
+      article: { ...article, title: taskCard.topic, taskCard },
+      baseRevision: action.baseRevision as number,
+      operationId: action.operationId,
+    });
+    await this.deps.stores.artifactStore.commitVersion(article.id, `pi 整理任务卡：${result.summary.slice(0, 80)}`, 'agent');
+    await this.deps.stores.stateStore.updateRun(run.id, {
+      metadata: { ...run.metadata, articleId: updated.id, workspaceId: updated.workspaceId },
+      state: { ...run.state, taskCardResult: result, draftArticle: { articleId: updated.id, workspaceId: updated.workspaceId } },
+      updatedAt: nowIso(),
+    });
+    await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type: 'artifact.updated', payload: { articleId: updated.id, workspaceId: updated.workspaceId, reason: 'pi-task-card-draft-created', userId: run.metadata.userId }, createdAt: nowIso() });
+    return { article: updated, summary: result.summary };
   }
 
   private async requestTaskCardGate(run: WorkflowRun, action: AllowedAction): Promise<WorkflowActionExecutionResult> {
@@ -114,11 +147,11 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     const article = await this.requireArticle(action.articleId);
     const taskCard = this.requireTaskCard(article);
     this.requireBaseRevision(action, article);
-    const skillInput: OutlinePlannerInput = { articleId: article.id, taskCard };
+    const programInput: OutlinePlannerInput = { articleId: article.id, taskCard };
     const result = await this.executeWorkflowTool<OutlinePlannerInput, OutlinePlannerOutput>(run, action, {
       article,
       toolName: 'plan_outline',
-      skillInput,
+      programInput,
     });
     const updated = await this.deps.stores.artifactStore.updateArticleWithRevision({
       article: { ...article, outline: result.outline, blocks: [], citations: [], themeTags: [] },
@@ -260,11 +293,11 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     const section = article.outline.find((item) => item.id === sectionId);
     if (!section) throw new Error(`Outline section not found: ${sectionId}`);
     if (section.status === 'draft') throw new Error('Outline section is still draft.');
-    const skillInput: SectionWriterInput = { articleId: article.id, section, taskCard };
+    const programInput: SectionWriterInput = { articleId: article.id, section, taskCard };
     const result = await this.executeWorkflowTool<SectionWriterInput, SectionWriterOutput>(run, action, {
       article,
       toolName: 'write_section',
-      skillInput,
+      programInput,
     });
     const blocks = result.blocks?.length ? result.blocks : result.block ? [result.block] : [];
     if (!blocks.length) throw new Error('Section writer returned no blocks.');
@@ -377,7 +410,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
   private async executeWorkflowTool<I = unknown, O = unknown>(run: WorkflowRun, action: AllowedAction, input: {
     article?: ArticleArtifact;
     toolName: string;
-    skillInput: I;
+    programInput: I;
     blockId?: string;
   }): Promise<O> {
     const sessionTarget = this.workflowAgentSessionTarget(run, input.article);
@@ -386,7 +419,7 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
       agentSession: session,
       allowedTools: [input.toolName],
       toolName: input.toolName,
-      input: input.skillInput,
+      input: input.programInput,
       operationId: `${action.operationId}_tool`,
       sessionId: typeof run.metadata.sessionId === 'string' ? run.metadata.sessionId : undefined,
       runId: run.id,
@@ -441,6 +474,8 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     if (!authorized) throw new Error(`Unauthorized workflow action: ${action.id}`);
     if (authorized.operationId !== action.operationId) throw new Error(`Unauthorized operationId for action ${action.id}.`);
     if (authorized.type !== action.type) throw new Error(`Unauthorized action type for action ${action.id}.`);
+    if (authorized.skillId !== action.skillId) throw new Error(`Unauthorized skillId for action ${action.id}.`);
+    if (authorized.toolName !== action.toolName) throw new Error(`Unauthorized toolName for action ${action.id}.`);
     if (authorized.articleId !== action.articleId) throw new Error(`Unauthorized articleId for action ${action.id}.`);
     if (authorized.sectionId !== action.sectionId) throw new Error(`Unauthorized sectionId for action ${action.id}.`);
     if (authorized.reviewArtifactId !== action.reviewArtifactId) throw new Error(`Unauthorized reviewArtifactId for action ${action.id}.`);
@@ -490,6 +525,7 @@ function isAllowedAction(value: unknown): value is AllowedAction {
   return typeof action.id === 'string'
     && typeof action.operationId === 'string'
     && typeof action.type === 'string'
+    && typeof action.skillId === 'string'
     && typeof action.requiresHumanGate === 'boolean'
     && typeof action.reason === 'string';
 }
@@ -578,4 +614,8 @@ function revisionProposalContextKind(reviewArtifact: ReviewArtifact): 'task-card
   if (targetKinds.size === 1 && targetKinds.has('outline-item')) return 'outline-item';
   if (targetKinds.size === 1 && targetKinds.has('block')) return 'block';
   return 'outline';
+}
+
+function stableArticleId(operationId: string): string {
+  return `art_${hashOperationArgs({ operationId }).slice(0, 24)}`;
 }

@@ -1,4 +1,5 @@
 import { AgentContext, LLMProvider } from '@wa/core';
+import { ProductSkillPromptContext } from './product-skill';
 
 export interface PromptProgram<I, O> {
   manifest: {
@@ -8,7 +9,7 @@ export interface PromptProgram<I, O> {
     description: string;
     policies?: Record<string, unknown>;
   };
-  invoke(input: { input: I; context: AgentContext; llm: LLMProvider }): Promise<O>;
+  invoke(input: { input: I; context: AgentContext; llm: LLMProvider; productSkill?: ProductSkillPromptContext }): Promise<O>;
 }
 
 export class PromptProgramRegistry {

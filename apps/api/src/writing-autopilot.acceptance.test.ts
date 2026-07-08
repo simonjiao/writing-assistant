@@ -15,6 +15,20 @@ function createContainer(config: AppConfig) {
   return createAppContainer(config, { llm: new TestLLMProvider() });
 }
 
+async function waitForWorkflowPayload(
+  app: ReturnType<typeof createApp>,
+  runId: string,
+  predicate: (payload: { run: { status: string }; article?: ArticleArtifact; humanGates: Array<{ id: string; status: string; targetKind?: string }> }) => boolean,
+) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const response = await app.inject({ method: 'GET', url: `/api/workflows/${runId}` });
+    const payload = response.json();
+    if (predicate(payload)) return payload;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for workflow ${runId}.`);
+}
+
 afterEach(async () => {
   if (dataDir) await rm(dataDir, { recursive: true, force: true });
   dataDir = undefined;
@@ -83,11 +97,12 @@ describe('writing-autopilot acceptance', () => {
     expect(created.statusCode).toBe(200);
     const createdBody = created.json();
     expect(createdBody.run.workflowId).toBe('writing-autopilot');
-    expect(createdBody.run.status).toBe('waiting');
-    expect(createdBody.article.taskCard.status).toBe('draft');
-    expect(createdBody.humanGates).toEqual(expect.arrayContaining([expect.objectContaining({ targetKind: 'task-card', status: 'pending' })]));
+    expect(createdBody.run.status).toBe('running');
+    const taskReady = await waitForWorkflowPayload(app, createdBody.run.id, (payload) => payload.run.status === 'waiting' && payload.article?.taskCard?.status === 'draft');
+    expect(taskReady.article.taskCard.status).toBe('draft');
+    expect(taskReady.humanGates).toEqual(expect.arrayContaining([expect.objectContaining({ targetKind: 'task-card', status: 'pending' })]));
 
-    const gate = createdBody.humanGates.find((item: { status: string; targetKind: string }) => item.status === 'pending' && item.targetKind === 'task-card');
+    const gate = taskReady.humanGates.find((item: { status: string; targetKind: string }) => item.status === 'pending' && item.targetKind === 'task-card');
     const confirmed = await app.inject({
       method: 'POST',
       url: `/api/workflows/${createdBody.run.id}/human-gates/${gate.id}/resolve`,

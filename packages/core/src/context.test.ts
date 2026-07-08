@@ -127,4 +127,33 @@ describe('DefaultContextBuilder', () => {
     expect(calls[0].options?.themeTags).toEqual(['性格', '刚烈', '司棋']);
     expect(calls[0].options?.keywordQueries).toEqual(['司棋 第61回司棋索要鸡蛋']);
   });
+
+  it('skips knowledge retrieval when a prompt program input opts out', async () => {
+    let searchCount = 0;
+    const builder = new DefaultContextBuilder({
+      sessionStore: { async getSession() { return undefined; } } as never,
+      stateStore: { async getRun() { return undefined; } } as never,
+      memoryStore: { async getUserProfile() { return memory; } } as never,
+      artifactStore: { async getArticle() { return undefined; } } as never,
+      knowledgeStore: {
+        async search() {
+          searchCount += 1;
+          return [];
+        },
+        async listByRefs() { return []; },
+      },
+    });
+
+    const context = await builder.build({
+      userId: 'u1',
+      promptProgramId: 'task-card-builder',
+      input: {
+        rawRequirement: '整体介绍司棋，只使用前80回和脂批。',
+        skipKnowledge: true,
+      },
+    });
+
+    expect(searchCount).toBe(0);
+    expect(context.knowledge).toEqual([]);
+  });
 });

@@ -15,7 +15,7 @@ type ArticleAccessResult =
 
 type ArticleAgentTarget = { contextKind: 'task-card' | 'outline' | 'outline-item' | 'block'; targetId?: string };
 
-type ExecuteArticleAgentSkill = <I = unknown, O = unknown>(input: {
+type ExecuteArticleProgramTool = <I = unknown, O = unknown>(input: {
   container: AppContainer;
   article: ArticleArtifact;
   userId: string;
@@ -23,7 +23,7 @@ type ExecuteArticleAgentSkill = <I = unknown, O = unknown>(input: {
   target: ArticleAgentTarget;
   allowedTools: readonly string[];
   toolName: string;
-  skillInput: I;
+  programInput: I;
   operationPrefix: string;
   operationId?: string;
   operationPayload?: unknown;
@@ -45,7 +45,7 @@ export interface RevisionProposalService {
 export function createRevisionProposalService(deps: {
   container: AppContainer;
   requireArticleAccess(userId: string, articleId: string): Promise<ArticleAccessResult>;
-  executeArticleAgentSkill: ExecuteArticleAgentSkill;
+  executeArticleProgramTool: ExecuteArticleProgramTool;
   enrichRun(runId: string): Promise<Record<string, unknown>>;
   withWritingStandardSummary(article: ArticleArtifact): ArticleArtifact;
   clearDownstreamForTaskCardChange(article: ArticleArtifact): { outlineCount: number; blockCount: number; citationCount: number; themeTagCount: number };
@@ -181,8 +181,8 @@ export function createRevisionProposalService(deps: {
   async function applyRevisionOperation(article: ArticleArtifact, operation: RevisionOperation, userId: string, sessionId: string | undefined, write: { baseRevision: number; operationId: string }): Promise<{ article: ArticleArtifact; runPayload?: Record<string, unknown> }> {
     if (operation.type === 'revise-task-card') {
       if (!article.taskCard) throw new Error('Article has no task card to revise.');
-      const skillInput = { articleId: article.id, instruction: operation.instruction, currentTaskCard: article.taskCard, skipKnowledge: true };
-      const result = await deps.executeArticleAgentSkill<typeof skillInput, TaskCardReviserOutput>({
+      const programInput = { articleId: article.id, instruction: operation.instruction, currentTaskCard: article.taskCard, skipKnowledge: true };
+      const result = await deps.executeArticleProgramTool<typeof programInput, TaskCardReviserOutput>({
         container,
         article,
         userId,
@@ -190,10 +190,10 @@ export function createRevisionProposalService(deps: {
         target: { contextKind: 'task-card' },
         allowedTools: ['revise_task_card'],
         toolName: 'revise_task_card',
-        skillInput,
+        programInput,
         operationPrefix: 'revision_apply_task_card',
         operationId: `${write.operationId}_skill`,
-        operationPayload: { writeOperationId: write.operationId, operation, skillInput },
+        operationPayload: { writeOperationId: write.operationId, operation, programInput },
       });
       const invalidation = deps.clearDownstreamForTaskCardChange(article);
       article.taskCard = normalizeTaskCardPolicies(result.taskCard as WritingTaskCard, operation.instruction).taskCard;
@@ -206,8 +206,8 @@ export function createRevisionProposalService(deps: {
     if (operation.type === 'revise-outline-item') {
       const existing = article.outline.find((item) => item.id === operation.outlineItemId);
       if (!existing) throw new Error(`Outline section not found: ${operation.outlineItemId}`);
-      const skillInput = { articleId: article.id, instruction: operation.instruction, currentOutlineItem: existing, taskCard: article.taskCard, articleOutline: article.outline };
-      const result = await deps.executeArticleAgentSkill<typeof skillInput, OutlineItemReviserOutput>({
+      const programInput = { articleId: article.id, instruction: operation.instruction, currentOutlineItem: existing, taskCard: article.taskCard, articleOutline: article.outline };
+      const result = await deps.executeArticleProgramTool<typeof programInput, OutlineItemReviserOutput>({
         container,
         article,
         userId,
@@ -215,10 +215,10 @@ export function createRevisionProposalService(deps: {
         target: { contextKind: 'outline-item', targetId: operation.outlineItemId },
         allowedTools: ['revise_outline_item'],
         toolName: 'revise_outline_item',
-        skillInput,
+        programInput,
         operationPrefix: 'revision_apply_outline_item',
         operationId: `${write.operationId}_skill`,
-        operationPayload: { writeOperationId: write.operationId, operation, skillInput },
+        operationPayload: { writeOperationId: write.operationId, operation, programInput },
       });
       const invalidation = deps.clearBlocksForOutlineSections(article, [operation.outlineItemId]);
       const revisedItem = { ...result.outlineItem, status: result.outlineItem.status === 'written' ? 'confirmed' as const : result.outlineItem.status };
@@ -230,8 +230,8 @@ export function createRevisionProposalService(deps: {
     }
     if (operation.type === 'revise-outline') {
       const writtenSectionIds = [...new Set(article.blocks.map((block) => block.sectionId).filter((id): id is string => Boolean(id)))];
-      const skillInput = { articleId: article.id, instruction: operation.instruction, taskCard: article.taskCard, currentOutline: article.outline, writtenSectionIds };
-      const result = await deps.executeArticleAgentSkill<typeof skillInput, OutlineReviserOutput>({
+      const programInput = { articleId: article.id, instruction: operation.instruction, taskCard: article.taskCard, currentOutline: article.outline, writtenSectionIds };
+      const result = await deps.executeArticleProgramTool<typeof programInput, OutlineReviserOutput>({
         container,
         article,
         userId,
@@ -239,10 +239,10 @@ export function createRevisionProposalService(deps: {
         target: { contextKind: 'outline' },
         allowedTools: ['revise_outline'],
         toolName: 'revise_outline',
-        skillInput,
+        programInput,
         operationPrefix: 'revision_apply_outline',
         operationId: `${write.operationId}_skill`,
-        operationPayload: { writeOperationId: write.operationId, operation, skillInput },
+        operationPayload: { writeOperationId: write.operationId, operation, programInput },
       });
       const invalidation = deps.clearAllBlocks(article);
       article.outline = result.outline.map((item) => ({ ...item, status: item.status === 'written' ? 'confirmed' as const : item.status }));
@@ -251,8 +251,8 @@ export function createRevisionProposalService(deps: {
       await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'artifact.updated', payload: { articleId: article.id, reason: 'outline-revised', changedFields: result.changedFields, warnings: result.warnings, invalidated: invalidation, userId, operationId: write.operationId }, createdAt: nowIso() });
       return { article: (await container.stores.artifactStore.getArticle(updated.id)) ?? updated };
     }
-    const skillInput: PatchEditorInput = { articleId: article.id, blockId: operation.blockId, instruction: operation.instruction };
-    const patchResult = await deps.executeArticleAgentSkill<PatchEditorInput, PatchEditorOutput>({
+    const programInput: PatchEditorInput = { articleId: article.id, blockId: operation.blockId, instruction: operation.instruction };
+    const patchResult = await deps.executeArticleProgramTool<PatchEditorInput, PatchEditorOutput>({
       container,
       article,
       userId,
@@ -260,10 +260,10 @@ export function createRevisionProposalService(deps: {
       target: { contextKind: 'block', targetId: operation.blockId },
       allowedTools: ['patch_block'],
       toolName: 'patch_block',
-      skillInput,
+      programInput,
       operationPrefix: 'revision_apply_patch_block',
       operationId: `${write.operationId}_skill`,
-      operationPayload: { writeOperationId: write.operationId, operation, skillInput },
+      operationPayload: { writeOperationId: write.operationId, operation, programInput },
       blockId: operation.blockId,
     });
     article.blocks = article.blocks.map((block) => block.id === patchResult.patch.blockId ? { ...block, text: patchResult.patch.after, updatedAt: nowIso(), status: 'draft' } : block);

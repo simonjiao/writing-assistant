@@ -93,7 +93,8 @@ function readAllowedActions(state: Record<string, unknown>): AllowedActionView[]
 
 function workflowActionLabel(type?: string): string {
   const labels: Record<string, string> = {
-    create_task_card_draft: '创建任务卡草稿',
+    create_task_intake: '保存新任务',
+    refine_task_card: '整理任务卡',
     ask_followup: '确认任务卡',
     plan_outline: '生成大纲',
     confirm_outline_for_writing: '确认大纲',

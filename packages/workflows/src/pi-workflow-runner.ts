@@ -18,6 +18,11 @@ export interface PiWorkflowRunnerDeps {
   maxTurns?: number;
 }
 
+export interface PiWorkflowRunOptions {
+  maxTurns?: number;
+  returnRunningWhenTurnBudgetExhausted?: boolean;
+}
+
 export class PiWorkflowRunner {
   private readonly planner: AllowedActionPlanner;
 
@@ -25,10 +30,10 @@ export class PiWorkflowRunner {
     this.planner = deps.planner ?? new AllowedActionPlanner();
   }
 
-  async runUntilBlocked(runId: string): Promise<WorkflowRun> {
+  async runUntilBlocked(runId: string, options: PiWorkflowRunOptions = {}): Promise<WorkflowRun> {
     let run = await this.requireRun(runId);
     if (run.workflowId !== this.policy.id) throw new Error(`PiWorkflowRunner only supports ${this.policy.id}; got ${run.workflowId}.`);
-    const maxTurns = this.deps.maxTurns ?? 1;
+    const maxTurns = options.maxTurns ?? this.deps.maxTurns ?? 1;
     for (let turn = 0; turn < maxTurns && run.status === 'running'; turn += 1) {
       const article = await this.loadArticle(run);
       const pendingGate = await this.pendingHumanGate(run);
@@ -65,7 +70,8 @@ export class PiWorkflowRunner {
       run = await this.requireRun(run.id);
       if (run.status === 'waiting' || run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled') return run;
     }
-    return run.status === 'running' ? this.wait(run, '已达到本轮自动执行步数上限。') : run;
+    if (run.status !== 'running') return run;
+    return options.returnRunningWhenTurnBudgetExhausted ? run : this.wait(run, '已达到本轮自动执行步数上限。');
   }
 
   private async loadArticle(run: WorkflowRun): Promise<ArticleArtifact | undefined> {
@@ -120,6 +126,9 @@ export class PiWorkflowRunner {
     if (pendingGate || !allowedActions.length) {
       return { decision: this.buildInternalDecision(allowedActions, pendingGate), messages: session.messages };
     }
+    if (allowedActions.length === 1) {
+      return { decision: this.buildInternalDecision(allowedActions), messages: session.messages };
+    }
     if (!this.deps.decisionProvider) throw new Error('PiWorkflowRunner requires a decisionProvider when actions are available.');
     return this.deps.decisionProvider.decide({ policy: this.policy, run, article, session, allowedActions });
   }
@@ -129,7 +138,11 @@ export class PiWorkflowRunner {
       return { intent: 'wait_for_human_gate', rationale: pendingGate.question, requiresHumanGate: true, stopReason: 'waiting' };
     }
     if (!allowedActions.length) return { intent: 'complete', rationale: '没有可继续执行的动作。', requiresHumanGate: false, stopReason: 'completed' };
-    throw new Error('Internal decision can only wait for HumanGate or complete with no allowed actions.');
+    if (allowedActions.length === 1) {
+      const action = allowedActions[0];
+      return { intent: action.type, selectedActionId: action.id, rationale: `唯一可执行动作：${action.reason}`, requiresHumanGate: action.requiresHumanGate };
+    }
+    throw new Error('Internal decision can only select a singleton action, wait for HumanGate, or complete with no allowed actions.');
   }
 
   private async persistDecisionState(run: WorkflowRun, session: PiAgentSession, decision: AgentDecision, allowedActions: ReturnType<AllowedActionPlanner['plan']>): Promise<WorkflowRun> {

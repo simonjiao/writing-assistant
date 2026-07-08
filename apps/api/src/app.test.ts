@@ -37,6 +37,20 @@ function mockAgentToolExecutor(
   container.agentToolExecutor.executeTool = (async (input: AgentToolExecutionInput<unknown>) => handler(input, original)) as typeof container.agentToolExecutor.executeTool;
 }
 
+async function waitForWorkflowPayload(
+  app: ReturnType<typeof createApp>,
+  runId: string,
+  predicate: (payload: { run: WorkflowRun; article?: ArticleArtifact; humanGates: Array<{ id: string; status: string; targetKind?: string }> }) => boolean,
+) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const response = await app.inject({ method: 'GET', url: `/api/workflows/${runId}` });
+    const payload = response.json();
+    if (predicate(payload)) return payload;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for workflow ${runId}.`);
+}
+
 function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   dataDir = join(tmpdir(), `wa-api-test-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   return { host: '127.0.0.1', port: 0, dataDir, webOrigin: 'http://localhost:5173', llmProvider: 'openai-compatible', openaiBaseURL: 'https://api.openai.com/v1', openaiApiKey: 'test-key', openaiModel: 'test-model', ragProvider: 'local', ragBaseURL: '', ragApiKey: '', ragSearchPath: '/search', ragRefsPath: '/refs', ragTimeoutMs: 1000, ...overrides };
@@ -131,8 +145,10 @@ describe('api app', () => {
     const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { userId: 'test-user', message: '写一篇关于宝黛关系的长文，半文半白', targetStage: 'task-card' } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body.run.status).toBe('waiting');
-    expect(body.article.taskCard.topic).toContain('宝黛');
+    expect(body.run.status).toBe('running');
+    expect(body.article.taskCard).toBeUndefined();
+    const ready = await waitForWorkflowPayload(app, body.run.id, (payload) => payload.run.status === 'waiting' && Boolean(payload.article?.taskCard));
+    expect(ready.article.taskCard.topic).toContain('宝黛');
     expect(body.article.workspaceId).toBe('wsp_default_test-user');
     await app.close();
   });
@@ -145,18 +161,21 @@ describe('api app', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.run.workflowId).toBe('writing-autopilot');
-    expect(body.run.status).toBe('waiting');
-    expect(body.article.taskCard.status).toBe('draft');
+    expect(body.run.status).toBe('running');
+    const ready = await waitForWorkflowPayload(app, body.run.id, (payload) => payload.run.status === 'waiting' && payload.article?.taskCard?.status === 'draft');
+    expect(ready.article.taskCard.status).toBe('draft');
 
     const sessions = await container.stores.piAgentSessionStore.listSessions({ runId: body.run.id });
     expect(sessions).toHaveLength(1);
     expect(sessions[0].articleId).toBe(body.article.id);
-    expect(sessions[0].messages.length).toBeGreaterThan(0);
 
     const operations = await container.stores.agentOperationStore.listOperations({ runId: body.run.id });
-    expect(operations.map((operation) => operation.toolName).sort()).toEqual(['ask_followup', 'build_task_card_draft', 'create_task_card_draft']);
+    expect(operations.map((operation) => operation.toolName).sort()).toEqual(['ask_followup', 'create_task_intake', 'create_task_intake', 'refine_task_card', 'refine_task_card']);
     expect(operations.every((operation) => operation.status === 'completed')).toBe(true);
-    expect(operations.find((operation) => operation.toolName === 'build_task_card_draft')?.agentSessionId).toBe(sessions[0].id);
+    expect(operations.find((operation) => operation.toolName === 'refine_task_card' && operation.agentSessionId)?.agentSessionId).toBe(sessions[0].id);
+
+    const events = await container.stores.eventTraceStore.listByRun(body.run.id);
+    expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'agent.decision', payload: expect.objectContaining({ decision: expect.objectContaining({ selectedActionId: expect.any(String) }) }) })]));
 
     const gates = await container.stores.humanGateStore.listGates({ runId: body.run.id, statuses: ['pending'] });
     expect(gates).toHaveLength(1);
@@ -180,7 +199,8 @@ describe('api app', () => {
     const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { userId: 'message-user', message: '写一篇关于司棋的文章。', targetStage: 'task-card' } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    const gateId = body.humanGates[0].id;
+    const ready = await waitForWorkflowPayload(app, body.run.id, (payload) => payload.run.status === 'waiting' && payload.humanGates.some((gate) => gate.status === 'pending'));
+    const gateId = ready.humanGates[0].id;
 
     const blocked = await app.inject({ method: 'POST', url: `/api/workflows/${body.run.id}/message`, payload: { userId: 'message-user', message: '补充：不要引用后四十回。' } });
     expect(blocked.statusCode).toBe(409);
@@ -203,8 +223,9 @@ describe('api app', () => {
     const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { userId: 'cancel-user', message: '写一篇关于司棋的文章。', targetStage: 'task-card' } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
+    const ready = await waitForWorkflowPayload(app, body.run.id, (payload) => payload.run.status === 'waiting' && payload.humanGates.some((gate) => gate.status === 'pending'));
     const runId = body.run.id;
-    const gateId = body.humanGates[0].id;
+    const gateId = ready.humanGates[0].id;
 
     const missingUser = await app.inject({ method: 'POST', url: `/api/workflows/${runId}/cancel`, payload: {} });
     expect(missingUser.statusCode).toBe(400);
@@ -229,7 +250,9 @@ describe('api app', () => {
     const allowedAction: AllowedAction = {
       id: 'act_allowed',
       operationId: 'op_allowed',
-      type: 'create_task_card_draft',
+      type: 'create_task_intake',
+      skillId: 'create-task-card',
+      toolName: 'create_task_intake',
       requiresHumanGate: false,
       reason: 'allowed',
     };
@@ -807,6 +830,7 @@ describe('api app', () => {
     const response = await app.inject({ method: 'POST', url: '/api/workflows/writing/start', payload: { userId: 'test-user', message: '写一篇关于宝黛关系的长文，半文半白', targetStage: 'task-card' } });
     const body = response.json();
     expect(body.run.workflowId).toBe('writing-autopilot');
+    const ready = await waitForWorkflowPayload(app, body.run.id, (payload) => payload.run.status === 'waiting' && payload.article?.taskCard?.status === 'draft');
     const run = await container.stores.stateStore.getRun(body.run.id);
     expect(run?.status).toBe('waiting');
     const runResponse = await app.inject({ method: 'GET', url: `/api/workflows/${body.run.id}` });
@@ -815,6 +839,7 @@ describe('api app', () => {
     const listResponse = await app.inject({ method: 'GET', url: '/api/articles?userId=test-user&workspaceId=wsp_default_test-user&view=summary' });
     expect(listResponse.statusCode).toBe(200);
     expect(listResponse.json()).toMatchObject([{ taskStatus: 'draft', outlineCount: 0, blockCount: 0 }]);
+    expect(ready.article.id).toBe(body.article.id);
     await app.close();
   });
 
@@ -1026,10 +1051,11 @@ describe('api app', () => {
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body.article.taskCard.scope.editions).toContain('脂评本');
-    expect(body.article.taskCard.scope.themes).toContain('仕途经济边界');
-    expect(body.article.taskCard.constraints.mustInclude.join('\n')).toContain('有规劝');
-    expect(body.article.taskCard.constraints.mustAvoid).toContain('黛玉从不要求宝玉');
+    const ready = await waitForWorkflowPayload(app, body.run.id, (payload) => payload.run.status === 'waiting' && Boolean(payload.article?.taskCard));
+    expect(ready.article.taskCard.scope.editions).toContain('脂评本');
+    expect(ready.article.taskCard.scope.themes).toContain('仕途经济边界');
+    expect(ready.article.taskCard.constraints.mustInclude.join('\n')).toContain('有规劝');
+    expect(ready.article.taskCard.constraints.mustAvoid).toContain('黛玉从不要求宝玉');
     await app.close();
   });
 
@@ -1049,12 +1075,13 @@ describe('api app', () => {
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body.article.taskCard.topRules.languageEra).toBe('自然传统');
-    expect(body.article.taskCard.topRules.summary).toBe('自然、有传统中文文章气息，避免突兀的现代抽象词和学术评论腔。');
-    expect(body.article.taskCard.topRules.writingStandards.join('\n')).toContain('语言时代感选择“自然传统”');
-    expect(body.article.taskCard.topRules.replacementHints[0]).toMatchObject({ avoid: '价值观' });
-    expect(body.article.taskCard.constraints.mustAvoid.join('\n')).toContain('价值观');
-    expect(body.article.taskCard.constraints.mustAvoid).toContain('俗套词');
+    const ready = await waitForWorkflowPayload(app, body.run.id, (payload) => payload.run.status === 'waiting' && Boolean(payload.article?.taskCard));
+    expect(ready.article.taskCard.topRules.languageEra).toBe('自然传统');
+    expect(ready.article.taskCard.topRules.summary).toBe('自然、有传统中文文章气息，避免突兀的现代抽象词和学术评论腔。');
+    expect(ready.article.taskCard.topRules.writingStandards.join('\n')).toContain('语言时代感选择“自然传统”');
+    expect(ready.article.taskCard.topRules.replacementHints[0]).toMatchObject({ avoid: '价值观' });
+    expect(ready.article.taskCard.constraints.mustAvoid.join('\n')).toContain('价值观');
+    expect(ready.article.taskCard.constraints.mustAvoid).toContain('俗套词');
     await app.close();
   });
 
