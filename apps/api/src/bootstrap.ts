@@ -78,7 +78,7 @@ export function createContainer(config: AppConfig): AppContainer {
   const skillExecutor = new SkillExecutor({ llm, skillRegistry: skills, contextBuilder, eventTraceStore });
   const agentToolExecutor = new AgentToolExecutor({ stores, skillExecutor });
   const nonWorkflowPiAgentRunner = new NonWorkflowPiAgentRunner({ stores, llm });
-  const piRunner = new PiWorkflowRunner({ stores, actionExecutor: new PiWorkflowActionExecutor({ stores, skillExecutor, agentToolExecutor }), decisionProvider: new PiAgentDecisionProvider(llm), maxTurns: 20 });
+  const piRunner = new PiWorkflowRunner({ stores, actionExecutor: new PiWorkflowActionExecutor({ stores, agentToolExecutor }), decisionProvider: new PiAgentDecisionProvider(llm), maxTurns: 20 });
   return { piRunner, skillExecutor, agentToolExecutor, nonWorkflowPiAgentRunner, stores, skills, eventBus, async close() { await base.close?.(); await eventBus.close?.(); } };
 }
 

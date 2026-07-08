@@ -94,6 +94,7 @@ export class PiWorkflowRunner {
         ...existing,
         workspaceId: existing.workspaceId ?? (typeof run.metadata.workspaceId === 'string' ? run.metadata.workspaceId : article?.workspaceId),
         articleId: existing.articleId ?? article?.id,
+        targetId: existing.targetId ?? run.id,
         pendingHumanGateId: pendingGate?.id,
         baseArticleRevision: article?.revision ?? existing.baseArticleRevision,
       });
@@ -106,6 +107,7 @@ export class PiWorkflowRunner {
       workspaceId: typeof run.metadata.workspaceId === 'string' ? run.metadata.workspaceId : article?.workspaceId,
       articleId: article?.id,
       contextKind: 'workflow',
+      targetId: run.id,
       messages: [],
       pendingHumanGateId: pendingGate?.id,
       baseArticleRevision: article?.revision,

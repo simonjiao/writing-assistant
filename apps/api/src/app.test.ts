@@ -137,8 +137,9 @@ describe('api app', () => {
     expect(sessions[0].messages.length).toBeGreaterThan(0);
 
     const operations = await container.stores.workflowOperationStore.listOperations({ runId: body.run.id });
-    expect(operations.map((operation) => operation.toolName)).toEqual(['ask_followup', 'create_task_card_draft']);
+    expect(operations.map((operation) => operation.toolName).sort()).toEqual(['ask_followup', 'build_task_card_draft', 'create_task_card_draft']);
     expect(operations.every((operation) => operation.status === 'completed')).toBe(true);
+    expect(operations.find((operation) => operation.toolName === 'build_task_card_draft')?.agentSessionId).toBe(sessions[0].id);
 
     const gates = await container.stores.humanGateStore.listGates({ runId: body.run.id, statuses: ['pending'] });
     expect(gates).toHaveLength(1);
@@ -230,7 +231,7 @@ describe('api app', () => {
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
-    const executor = new PiWorkflowActionExecutor({ stores: container.stores, skillExecutor: container.skillExecutor, agentToolExecutor: container.agentToolExecutor });
+    const executor = new PiWorkflowActionExecutor({ stores: container.stores, agentToolExecutor: container.agentToolExecutor });
     await expect(executor.execute({ policy: { id: 'writing-autopilot', goal: '', allowedActionPolicy: '', humanGatePolicy: '', completionPolicy: '' }, run, action: forgedAction })).rejects.toThrow('Unauthorized workflow action');
     expect(await container.stores.workflowOperationStore.listOperations({ runId: run.id })).toEqual([]);
     await container.close();

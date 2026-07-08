@@ -112,8 +112,11 @@ describe('writing-autopilot acceptance', () => {
     expect(writtenBody.revisionProposals).toHaveLength(0);
     expect(writtenBody.article.outline.every((item: { status: string }) => item.status === 'written')).toBe(true);
     expect(writtenBody.article.blocks).toHaveLength(writtenBody.article.outline.length);
-    const chronologicalTools = [...writtenBody.operations].reverse().map((operation: { toolName: string }) => operation.toolName);
-    expect(chronologicalTools).toEqual([
+    const chronologicalWorkflowTools = [...writtenBody.operations]
+      .reverse()
+      .filter((operation: { agentSessionId?: string }) => !operation.agentSessionId)
+      .map((operation: { toolName: string }) => operation.toolName);
+    expect(chronologicalWorkflowTools).toEqual([
       'confirm_outline_for_writing',
       'review_task_card_outline_consistency',
       'write_next_section',
@@ -122,6 +125,8 @@ describe('writing-autopilot acceptance', () => {
       'write_next_section',
       'generate_polish_report',
     ]);
+    const skillTools = writtenBody.operations.filter((operation: { agentSessionId?: string }) => operation.agentSessionId).map((operation: { toolName: string }) => operation.toolName);
+    expect(skillTools.sort()).toEqual(['write_section', 'write_section', 'write_section', 'write_section']);
     expect(writtenBody.reviewArtifacts.map((artifact: { type: string }) => artifact.type)).toEqual(expect.arrayContaining(['consistency-review', 'polish-report']));
     await app.close();
   });
@@ -174,7 +179,8 @@ describe('writing-autopilot acceptance', () => {
     expect(processedBody.run.state.commentProcessResult).toMatchObject({ processedCount: 1, revised: 1 });
     expect(processedBody.article.comments[0]).toMatchObject({ status: 'resolved', resolutionKind: 'revision' });
     expect(processedBody.article.blocks[0].text).not.toContain('触柱而亡');
-    expect(processedBody.operations.map((operation: { toolName: string }) => operation.toolName)).toEqual(['process_article_comments']);
+    expect(processedBody.operations.map((operation: { toolName: string }) => operation.toolName).sort()).toEqual(['process_article_comments', 'resolve_article_comment']);
+    expect(processedBody.operations.find((operation: { toolName: string }) => operation.toolName === 'resolve_article_comment')?.agentSessionId).toBeTruthy();
     await app.close();
   });
 

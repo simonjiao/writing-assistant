@@ -1,6 +1,9 @@
 import { DialogueContextKind } from '@wa/core';
 
 export type NonWorkflowToolName =
+  | 'build_task_card_draft'
+  | 'plan_outline'
+  | 'write_section'
   | 'answer'
   | 'ask_clarifying_question'
   | 'route_dialogue'

@@ -12,7 +12,6 @@ import {
   ReviewFinding,
   ReviewArtifact,
   RevisionOperation,
-  SkillExecutor,
   WorkflowActionExecutionInput,
   WorkflowActionExecutionResult,
   WorkflowActionExecutor,
@@ -30,6 +29,7 @@ import {
   TaskCardBuilderOutput,
 } from '@wa/skills';
 import { AgentToolExecutor } from './agent/agentToolExecutor';
+import { AgentSessionTarget, getOrCreateAgentSession } from './agent/agentSessionTarget';
 import { processArticleComments } from './articleComments';
 
 type WorkflowActionHandler = (run: WorkflowRun, action: AllowedAction) => Promise<WorkflowActionExecutionResult>;
@@ -38,7 +38,7 @@ type WorkflowToolRegistry = Readonly<Record<AllowedActionType, WorkflowActionHan
 export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
   private readonly tools: WorkflowToolRegistry;
 
-  constructor(private readonly deps: { stores: ExternalStores; skillExecutor: SkillExecutor; agentToolExecutor: AgentToolExecutor }) {
+  constructor(private readonly deps: { stores: ExternalStores; agentToolExecutor: AgentToolExecutor }) {
     this.tools = {
       create_task_card_draft: this.createTaskCardDraft.bind(this),
       ask_followup: this.requestTaskCardGate.bind(this),
@@ -85,11 +85,12 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     const rawRequirement = this.readRunMessage(run);
     const workspaceId = this.requireString(run.metadata.workspaceId, 'workspaceId');
     await this.requireWorkspaceAccess(run, workspaceId);
-    const result = await this.deps.skillExecutor.executeSkill<TaskCardBuilderInput, TaskCardBuilderOutput>(
-      'task-card-builder',
-      { rawRequirement, userId: run.metadata.userId, sessionId: run.metadata.sessionId, domainContext: (run.input as { domainContext?: TaskCardBuilderInput['domainContext'] }).domainContext, writingStandard: (run.input as { writingStandard?: TaskCardBuilderInput['writingStandard'] }).writingStandard },
-      this.skillMeta(run),
-    );
+    const skillInput: TaskCardBuilderInput = { rawRequirement, userId: run.metadata.userId, sessionId: run.metadata.sessionId, domainContext: (run.input as { domainContext?: TaskCardBuilderInput['domainContext'] }).domainContext, writingStandard: (run.input as { writingStandard?: TaskCardBuilderInput['writingStandard'] }).writingStandard };
+    const result = await this.executeWorkflowSkill<TaskCardBuilderInput, TaskCardBuilderOutput>(run, action, {
+      toolName: 'build_task_card_draft',
+      skillId: 'task-card-builder',
+      skillInput,
+    });
     const taskCard = normalizeTaskCardPolicies(result.taskCard, rawRequirement).taskCard;
     const article = await this.deps.stores.artifactStore.createArticle({ userId: run.metadata.userId, workspaceId, title: taskCard.topic, taskCard });
     await this.deps.stores.stateStore.updateRun(run.id, {
@@ -119,11 +120,13 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     const article = await this.requireArticle(action.articleId);
     const taskCard = this.requireTaskCard(article);
     this.requireBaseRevision(action, article);
-    const result = await this.deps.skillExecutor.executeSkill<OutlinePlannerInput, OutlinePlannerOutput>(
-      'outline-planner',
-      { articleId: article.id, taskCard },
-      this.skillMeta(run, article.id),
-    );
+    const skillInput: OutlinePlannerInput = { articleId: article.id, taskCard };
+    const result = await this.executeWorkflowSkill<OutlinePlannerInput, OutlinePlannerOutput>(run, action, {
+      article,
+      toolName: 'plan_outline',
+      skillId: 'outline-planner',
+      skillInput,
+    });
     const updated = await this.deps.stores.artifactStore.updateArticleWithRevision({
       article: { ...article, outline: result.outline, blocks: [], citations: [], themeTags: [] },
       baseRevision: action.baseRevision as number,
@@ -264,11 +267,13 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     const section = article.outline.find((item) => item.id === sectionId);
     if (!section) throw new Error(`Outline section not found: ${sectionId}`);
     if (section.status === 'draft') throw new Error('Outline section is still draft.');
-    const result = await this.deps.skillExecutor.executeSkill<SectionWriterInput, SectionWriterOutput>(
-      'section-writer',
-      { articleId: article.id, section, taskCard },
-      this.skillMeta(run, article.id),
-    );
+    const skillInput: SectionWriterInput = { articleId: article.id, section, taskCard };
+    const result = await this.executeWorkflowSkill<SectionWriterInput, SectionWriterOutput>(run, action, {
+      article,
+      toolName: 'write_section',
+      skillId: 'section-writer',
+      skillInput,
+    });
     const blocks = result.blocks?.length ? result.blocks : result.block ? [result.block] : [];
     if (!blocks.length) throw new Error('Section writer returned no blocks.');
     const updated = await this.deps.stores.artifactStore.updateArticleWithRevision({
@@ -354,7 +359,10 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
       operationId: action.operationId,
       runId: run.id,
       userId: run.metadata.userId,
+      workspaceId: typeof run.metadata.workspaceId === 'string' ? run.metadata.workspaceId : undefined,
       articleId: action.articleId,
+      contextKind: 'workflow',
+      targetId: run.id,
       toolName: action.type,
       allowedActionId: action.id,
       argsHash: hashOperationArgs({ action, input: run.input }),
@@ -374,6 +382,43 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     await this.deps.stores.eventTraceStore.append({ id: newId('evt'), runId: run.id, type, payload: { ...payload, userId: run.metadata.userId, operationId: action.operationId, allowedActionId: action.id, actionType: action.type, articleId: action.articleId, sectionId: action.sectionId }, createdAt: nowIso() });
   }
 
+  private async executeWorkflowSkill<I = unknown, O = unknown>(run: WorkflowRun, action: AllowedAction, input: {
+    article?: ArticleArtifact;
+    toolName: string;
+    skillId: string;
+    skillInput: I;
+    blockId?: string;
+  }): Promise<O> {
+    const sessionTarget = this.workflowAgentSessionTarget(run, input.article);
+    const { session } = await getOrCreateAgentSession(this.deps.stores, sessionTarget);
+    return this.deps.agentToolExecutor.executeSkillTool<I, O>({
+      agentSession: session,
+      allowedTools: [input.toolName],
+      toolName: input.toolName,
+      skillId: input.skillId,
+      input: input.skillInput,
+      operationId: `${action.operationId}_skill`,
+      sessionId: typeof run.metadata.sessionId === 'string' ? run.metadata.sessionId : undefined,
+      runId: run.id,
+      workflowId: run.workflowId,
+      articleId: input.article?.id,
+      blockId: input.blockId,
+    });
+  }
+
+  private workflowAgentSessionTarget(run: WorkflowRun, article?: ArticleArtifact): AgentSessionTarget {
+    const workspaceId = article?.workspaceId ?? (typeof run.metadata.workspaceId === 'string' ? run.metadata.workspaceId : undefined);
+    if (!workspaceId) throw new Error('workspaceId is required for workflow agent session.');
+    return {
+      userId: run.metadata.userId,
+      runId: run.id,
+      workspaceId,
+      articleId: article?.id ?? (typeof run.metadata.articleId === 'string' ? run.metadata.articleId : undefined),
+      contextKind: 'workflow',
+      targetId: run.id,
+    };
+  }
+
   private async createGate(run: WorkflowRun, action: AllowedAction, input: Omit<HumanGate, 'id' | 'runId' | 'userId' | 'articleId' | 'actionType' | 'status' | 'createdAt' | 'updatedAt'> & { articleId?: string }): Promise<HumanGate> {
     const gate = await this.deps.stores.humanGateStore.createGate({
       runId: run.id,
@@ -391,10 +436,6 @@ export class PiWorkflowActionExecutor implements WorkflowActionExecutor {
     const message = typeof input.message === 'string' ? input.message.trim() : typeof input.rawRequirement === 'string' ? input.rawRequirement.trim() : '';
     if (!message) throw new Error('writing-autopilot requires input.message to create a task card draft.');
     return message;
-  }
-
-  private skillMeta(run: WorkflowRun, articleId?: string) {
-    return { userId: run.metadata.userId, sessionId: run.metadata.sessionId, runId: run.id, workflowId: run.workflowId, articleId };
   }
 
   private async requireArticle(articleId: string | undefined): Promise<ArticleArtifact> {

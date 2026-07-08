@@ -1,19 +1,20 @@
-import { ArticleArtifact, DialogueContextKind, ExternalStores, PiAgentSession, PiAgentSessionContextKind, newId, nowIso } from '@wa/core';
+import { ArticleArtifact, ExternalStores, PiAgentSession, PiAgentSessionContextKind, newId, nowIso } from '@wa/core';
 
-export type NonWorkflowContextKind = DialogueContextKind | 'article-comment' | 'dialogue-brief';
+export type AgentSessionContextKind = PiAgentSessionContextKind;
 
 export interface AgentSessionTarget {
   userId: string;
+  runId?: string;
   workspaceId?: string;
   articleId?: string;
-  contextKind: NonWorkflowContextKind;
+  contextKind: AgentSessionContextKind;
   targetId?: string;
 }
 
 export function articleSessionTarget(input: {
   article: ArticleArtifact;
   userId: string;
-  contextKind: NonWorkflowContextKind;
+  contextKind: AgentSessionContextKind;
   targetId?: string;
 }): AgentSessionTarget {
   return {
@@ -28,14 +29,16 @@ export function articleSessionTarget(input: {
 export async function getOrCreateAgentSession(stores: ExternalStores, target: AgentSessionTarget): Promise<{ session: PiAgentSession; created: boolean }> {
   const existing = await stores.piAgentSessionStore.findSession({
     userId: target.userId,
-    articleId: target.articleId,
+    articleId: target.runId ? undefined : target.articleId,
     contextKind: target.contextKind as PiAgentSessionContextKind,
     targetId: target.targetId,
+    runId: target.runId,
   });
   if (existing) {
     return {
       session: await stores.piAgentSessionStore.saveSession({
         ...existing,
+        runId: existing.runId ?? target.runId,
         workspaceId: existing.workspaceId ?? target.workspaceId,
         articleId: existing.articleId ?? target.articleId,
         targetId: existing.targetId ?? target.targetId,
@@ -46,6 +49,7 @@ export async function getOrCreateAgentSession(stores: ExternalStores, target: Ag
   const now = nowIso();
   const session: PiAgentSession = {
     id: newId('pi_ses'),
+    runId: target.runId,
     userId: target.userId,
     workspaceId: target.workspaceId,
     articleId: target.articleId,
@@ -60,7 +64,7 @@ export async function getOrCreateAgentSession(stores: ExternalStores, target: Ag
   await stores.eventTraceStore.append({
     id: newId('evt'),
     type: 'pi.session.created',
-    payload: { userId: target.userId, sessionId: session.id, articleId: target.articleId, contextKind: target.contextKind, targetId: target.targetId },
+    payload: { userId: target.userId, sessionId: session.id, runId: target.runId, articleId: target.articleId, contextKind: target.contextKind, targetId: target.targetId },
     createdAt: now,
   });
   return { session, created: true };
