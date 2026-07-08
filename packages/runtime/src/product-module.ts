@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { WorkflowPolicy } from '@wa/core';
-import { ProductSkillSpec } from './product-skill';
+import type { ProductSkillSpec } from './product-skill';
 
 export interface ProductActionBinding {
   type: string;
@@ -14,6 +14,7 @@ export interface ProductActionBinding {
 export interface ProductSkillModule {
   id: string;
   skillPath: string;
+  promptPaths?: string[];
   tools: string[];
   actions: Record<string, { toolName?: string; hint?: string; requiresHumanGate?: boolean }>;
 }
@@ -84,6 +85,10 @@ export function defineProductModule(module: ProductModule): ProductModule {
     if (skillIds.has(skill.id)) throw new Error(`Duplicate product skill module id: ${skill.id}`);
     skillIds.add(skill.id);
     if (!existsSync(skill.skillPath)) throw new Error(`Product skill module ${skill.id} is missing skill.md: ${skill.skillPath}`);
+    for (const promptPath of skill.promptPaths ?? []) {
+      if (!existsSync(promptPath)) throw new Error(`Product skill module ${skill.id} is missing prompt template: ${promptPath}`);
+      if (!readFileSync(promptPath, 'utf8').trim()) throw new Error(`Product skill module ${skill.id} has empty prompt template: ${promptPath}`);
+    }
   }
   const workflowIds = new Set<string>();
   for (const workflow of module.workflows) {

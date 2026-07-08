@@ -55,7 +55,7 @@ npm run local:restart -- web
 
 - `packages/core` 放跨端共享的领域类型、LLM adapter、pi-agent loader、store 接口、event 抽象和框架无关工具。
 - `packages/runtime` 放通用 ToolRegistry、PromptProgramRegistry、ProductSkill parser、ActionCatalog、AgentToolExecutor、PiWorkflowRunner、agent session helper 和 operation 幂等执行。
-- `packages/writing-assistant` 放写作助手产品 workflow、allowed action planner、工具 schema、prompt programs、skill.md/module.ts、写作产品 domain 规则；一个复杂 prompt program 应拆成 prompt 组装、预算/策略计算、输出归一化、质量校验和测试夹具。
+- `packages/writing-assistant` 放写作助手产品 workflow、allowed action planner、工具 schema、prompt programs、skill.md/module.ts、prompts、写作产品 domain 规则；自然语言 prompt 文本是产品资产，必须放在对应 skill 的 `prompts/*.md`，program 只负责加载 prompt、组装动态 payload、调用 LLM、输出归一化和质量校验。
 - `apps/api` 放 HTTP 路由、container/bootstrap、store adapter、RAG client 和运行配置；不要把产品 workflow/action 逻辑长期放在 API 层。
 - `apps/web` 放页面编排、组件、hooks、API client、展示类型和样式；页面组件只做组合和状态协调，复杂展示组件应独立。
 - 跨层共享类型优先放 `packages/core`；仅 API 入参/出参使用的 DTO 留在 `apps/api`；仅 UI 展示需要的 view model 留在 `apps/web`。
@@ -82,7 +82,7 @@ npm run local:restart -- web
 
 - `packages/core`：只放框架无关的类型、接口、pi-agent loader、LLM adapter、event/store 抽象和通用实现。
 - `packages/runtime`：只放产品无关的 agent/tool/workflow/skill 基础设施，不出现任务卡、大纲、正文等产品概念。
-- `packages/writing-assistant`：一个 product skill 一个目录，`skill.md`、`module.ts`、`programs/`、`tools/` 和测试放在一起；workflow planner/executor 放在 `workflows/<workflow-id>/`。
+- `packages/writing-assistant`：一个 product skill 一个目录，`skill.md`、`module.ts`、`programs/`、`prompts/`、`tools/` 和测试放在一起；LLM system prompt、retry prompt、repair prompt 等自然语言模板放 `prompts/*.md`，并在 `module.ts` 的 `promptPaths` 中声明；workflow planner/executor 放在 `workflows/<workflow-id>/`。
 - `apps/api`：路由、container 组装、store adapter、RAG client 分开维护。
 - `apps/web`：页面编排、组件、hooks、API client、类型、样式分开维护；`App.tsx` 应偏向页面组合，不承载全部 UI 细节。
 
@@ -91,7 +91,7 @@ npm run local:restart -- web
 - `apps/web/src/App.tsx` 继续变大时，优先拆出任务导航、任务卡工作区、大纲工作区、辅助列、对话输入区、运行进度和选择态 hooks。
 - `apps/api/src/app.ts` 继续变大时，按 sessions、workspaces、articles、workflows、dialogue、knowledge 拆路由注册文件。
 - `apps/api/src/bootstrap.ts` 继续变大时，拆出 store/container factory、runtime provider factory、workflow runner factory。
-- `packages/writing-assistant/src/skills/write-section/programs/section-writer.ts` 继续变大时，拆出 writing budget、continuity context、source policy validation、length/quote validation、prompt builder。
+- `packages/writing-assistant/src/skills/write-section/programs/section-writer.ts` 继续变大时，拆出 writing budget、continuity context、source policy validation、length/quote validation 和动态 payload builder；不要把自然语言 prompt 文本重新内联进 TS。
 
 拆分步骤应保守：
 

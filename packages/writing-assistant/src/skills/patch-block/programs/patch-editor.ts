@@ -1,5 +1,8 @@
+import { resolve } from 'node:path';
 import { newId, nowIso, safeJsonParse, TextPatch } from '@wa/core';
-import { PromptProgram } from '@wa/runtime';
+import { loadPromptTemplate, PromptProgram } from '@wa/runtime';
+
+const systemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/patch-editor.system.md'));
 
 export interface PatchEditorInput {
   articleId: string;
@@ -38,7 +41,7 @@ export class PatchEditorProgram implements PromptProgram<PatchEditorInput, Patch
       jsonMode: true,
       temperature: 0.35,
       messages: [
-        { role: 'system', content: '你是局部编辑器。只改选中 block，除非明确说明必须扩大范围。只输出 JSON：patch、evaluation。patch.after 必须是修改后的完整选中段落，patch.changeSummary 必须说明修改点，evaluation 必须包含 preservesMeaning、needsUserApprovalForScopeExpansion、notes。' },
+        { role: 'system', content: systemPrompt },
         {
           role: 'user',
           content: JSON.stringify({

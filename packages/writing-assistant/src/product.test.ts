@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PromptProgramRegistry, ToolRegistry } from '@wa/runtime';
+import { loadPromptTemplate, PromptProgramRegistry, ToolRegistry } from '@wa/runtime';
 import { createWritingAssistantActionCatalog, loadWritingAssistantProductSkills, registerWritingAssistantProductSkills, writingAssistantProduct } from './product';
 import { registerWritingAssistantPromptPrograms } from './register';
 import { registerWritingAssistantTools } from './tool-catalog';
@@ -39,6 +39,14 @@ describe('writing assistant product module', () => {
     const skillIds = new Set(writingAssistantProduct.skills.map((skill) => skill.id));
     for (const workflow of writingAssistantProduct.workflows) {
       for (const skillId of workflow.skillIds) expect(skillIds.has(skillId)).toBe(true);
+    }
+  });
+
+  it('declares non-empty prompt assets on product skill modules', () => {
+    const promptPaths = writingAssistantProduct.skills.flatMap((skill) => skill.promptPaths ?? []);
+    expect(promptPaths).toHaveLength(14);
+    for (const promptPath of promptPaths) {
+      expect(loadPromptTemplate(promptPath).length).toBeGreaterThan(20);
     }
   });
 });

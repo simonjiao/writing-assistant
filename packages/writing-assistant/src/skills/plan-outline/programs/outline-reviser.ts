@@ -1,5 +1,8 @@
+import { resolve } from 'node:path';
 import { newId, OutlineItem, OutlineRhetoricalRole, safeJsonParse, WritingTaskCard } from '@wa/core';
-import { PromptProgram } from '@wa/runtime';
+import { loadPromptTemplate, PromptProgram } from '@wa/runtime';
+
+const systemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/outline-reviser.system.md'));
 
 export interface OutlineReviserInput {
   articleId: string;
@@ -38,17 +41,7 @@ export class OutlineReviserProgram implements PromptProgram<OutlineReviserInput,
       messages: [
         {
           role: 'system',
-          content: [
-            '你是写作助手的大纲整体修订器。',
-            '用户已经确认要修改整篇大纲，你可以更新、添加、删除或重排大纲项。',
-            '不要修改任务卡，不要生成正文，不要返回 Markdown，只返回 json object。',
-            '只返回合法 JSON object，字段为 outline、summary、changedFields、warnings。',
-            'outline 必须是完整 OutlineItem[]。保留仍然对应原章节的 id；新增条目可以不带 id，由系统补齐。',
-            '如果要删除或大幅移动已有正文的章节，必须在 warnings 中说明。',
-            '修订后仍要服从 taskCard 的主题、目标、约束和写作标准。',
-            '修订后必须保留清楚的起承转合：第一项 rhetoricalRole=opening，最后一项 rhetoricalRole=conclusion，中间用 development 或 turn。',
-            '至少一个中间项必须 keySection=true，并用 specialHandling 写清为什么关键、如何处理材料、如何避免复述。',
-          ].join('\n'),
+          content: systemPrompt,
         },
         {
           role: 'user',

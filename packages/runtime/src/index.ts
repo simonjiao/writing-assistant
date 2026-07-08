@@ -7,3 +7,4 @@ export * from './product-skill';
 export * from './product-tool';
 export * from './product-tool-executor';
 export * from './prompt-program';
+export * from './prompt-template';
