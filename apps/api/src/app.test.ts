@@ -1687,6 +1687,10 @@ describe('api app', () => {
     expect(coordinatorInputs).toHaveLength(2);
     expect(coordinatorInputs[1].conversationBrief?.recentUserIntents.at(-1)?.text).toContain('大闹厨房');
     expect(coordinatorInputs[1].conversationBrief?.activeRequirements.at(-1)?.text).toContain('大闹厨房');
+    const briefSessions = await container.stores.piAgentSessionStore.listSessions({ userId: 'dialogue-brief-user', articleId: article.id, contextKind: 'dialogue-brief' });
+    expect(briefSessions.length).toBeGreaterThan(0);
+    const briefOperations = await container.stores.workflowOperationStore.listOperations({ agentSessionId: briefSessions[0].id });
+    expect(briefOperations.map((operation) => operation.toolName)).toContain('update_dialogue_brief');
     await app.close();
   });
 

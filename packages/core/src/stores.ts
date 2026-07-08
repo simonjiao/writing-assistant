@@ -1,5 +1,6 @@
 import {
   AgentEvent,
+  AgentOperationStatus,
   ArticleArtifact,
   ArticleRevisionWrite,
   ArticleVersion,
@@ -18,7 +19,6 @@ import {
   UserWritingProfile,
   WritingWorkspace,
   WorkflowOperation,
-  WorkflowOperationStatus,
   WorkflowRun,
 } from './types';
 
@@ -68,7 +68,7 @@ export interface HumanGateStore {
 export interface WorkflowOperationStore {
   startOperation(input: Omit<WorkflowOperation, 'status' | 'createdAt' | 'updatedAt'>): Promise<WorkflowOperation>;
   getOperation(operationId: string): Promise<WorkflowOperation | undefined>;
-  listOperations(filter?: { runId?: string; articleId?: string; userId?: string; statuses?: WorkflowOperationStatus[] }): Promise<WorkflowOperation[]>;
+  listOperations(filter?: { runId?: string; agentSessionId?: string; articleId?: string; userId?: string; statuses?: AgentOperationStatus[] }): Promise<WorkflowOperation[]>;
   updateOperation(operation: WorkflowOperation): Promise<WorkflowOperation>;
 }
 

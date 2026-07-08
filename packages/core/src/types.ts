@@ -175,7 +175,7 @@ export interface TextPatch {
 }
 
 export type DialogueContextKind = 'task-card' | 'outline' | 'outline-item' | 'block';
-export type PiAgentSessionContextKind = DialogueContextKind | 'workflow' | 'article-review';
+export type PiAgentSessionContextKind = DialogueContextKind | 'workflow' | 'article-review' | 'article-comment' | 'dialogue-brief';
 
 export type RevisionOperation =
   | { type: 'revise-task-card'; instruction: string }
@@ -344,24 +344,32 @@ export interface HumanGate {
   resolvedByUserId?: string;
 }
 
-export type WorkflowOperationStatus = 'running' | 'completed' | 'failed';
+export type AgentOperationStatus = 'running' | 'completed' | 'failed';
 
-export interface WorkflowOperation {
+export interface AgentOperation {
   operationId: string;
+  agentSessionId?: string;
   runId?: string;
   userId: string;
+  workspaceId?: string;
   articleId?: string;
+  contextKind?: PiAgentSessionContextKind;
+  targetId?: string;
   toolName: string;
-  allowedActionId: string;
+  allowedActionId?: string;
   argsHash: string;
-  status: WorkflowOperationStatus;
+  status: AgentOperationStatus;
   resultRef?: string;
+  resultPayload?: JsonValue;
   error?: string;
   articleRevisionBefore?: number;
   articleRevisionAfter?: number;
   createdAt: string;
   updatedAt: string;
 }
+
+export type WorkflowOperationStatus = AgentOperationStatus;
+export type WorkflowOperation = AgentOperation;
 
 export type ReviewArtifactType = 'consistency-review' | 'polish-report';
 export type ReviewFindingSeverity = 'info' | 'warning' | 'blocking';

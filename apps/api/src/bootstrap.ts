@@ -32,10 +32,14 @@ import { SqliteArtifactStore, SqliteDialogueBriefStore, SqliteDialogueBriefUpdat
 import { HttpRagKnowledgeStore } from './stores/httpRagKnowledgeStore';
 import { TonglingyuRetrieverKnowledgeStore } from './stores/tonglingyuRetrieverKnowledgeStore';
 import { PiWorkflowActionExecutor } from './piWorkflowActionExecutor';
+import { AgentToolExecutor } from './agent/agentToolExecutor';
+import { NonWorkflowPiAgentRunner } from './agent/nonWorkflowPiAgentRunner';
 
 export interface AppContainer {
   piRunner: PiWorkflowRunner;
   skillExecutor: SkillExecutor;
+  agentToolExecutor: AgentToolExecutor;
+  nonWorkflowPiAgentRunner: NonWorkflowPiAgentRunner;
   stores: ExternalStores;
   skills: SkillRegistry;
   eventBus: EventBus;
@@ -72,8 +76,10 @@ export function createContainer(config: AppConfig): AppContainer {
   const skills = registerDefaultSkills(new SkillRegistry());
   const contextBuilder = new DefaultContextBuilder({ sessionStore: stores.sessionStore, stateStore: stores.stateStore, memoryStore: stores.memoryStore, artifactStore: stores.artifactStore, knowledgeStore: stores.knowledgeStore });
   const skillExecutor = new SkillExecutor({ llm, skillRegistry: skills, contextBuilder, eventTraceStore });
+  const agentToolExecutor = new AgentToolExecutor({ stores, skillExecutor });
+  const nonWorkflowPiAgentRunner = new NonWorkflowPiAgentRunner({ stores, llm });
   const piRunner = new PiWorkflowRunner({ stores, actionExecutor: new PiWorkflowActionExecutor({ stores, skillExecutor }), decisionProvider: new PiAgentDecisionProvider(llm), maxTurns: 20 });
-  return { piRunner, skillExecutor, stores, skills, eventBus, async close() { await base.close?.(); await eventBus.close?.(); } };
+  return { piRunner, skillExecutor, agentToolExecutor, nonWorkflowPiAgentRunner, stores, skills, eventBus, async close() { await base.close?.(); await eventBus.close?.(); } };
 }
 
 function createStores(config: AppConfig): StoreBundle {

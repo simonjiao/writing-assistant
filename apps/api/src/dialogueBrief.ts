@@ -1,6 +1,8 @@
 import { ArticleArtifact, DialogueBrief, DialogueBriefConflict, DialogueBriefItem, DialogueBriefUpdateJob, DialogueContextKind, DialogueMessage, KnowledgeItem, newId, nowIso } from '@wa/core';
 import { DialogueBriefUpdaterInput, DialogueBriefUpdaterOutput } from '@wa/skills';
 import type { AppContainer } from './bootstrap';
+import { agentOperationId } from './agent/agentOperationIds';
+import { AgentSessionTarget, getOrCreateAgentSession } from './agent/agentSessionTarget';
 
 const maxBriefUpdateAttempts = 3;
 const maxBriefJobRunningMs = 60_000;
@@ -126,16 +128,24 @@ async function processDialogueBriefUpdateJob(container: AppContainer, jobId: str
   });
   try {
     const currentBrief = await getOrCreateDialogueBrief(container, running.articleId, running.userId);
-    const patch = await container.skillExecutor.executeSkill<DialogueBriefUpdaterInput, DialogueBriefUpdaterOutput>(
-      'dialogue-brief-updater',
-      {
-        message: running.messageContent,
-        context: { kind: running.contextKind, title: running.contextTitle },
-        currentBrief: compactDialogueBriefForPrompt(currentBrief),
-        skipKnowledge: true,
-      },
-      { userId: running.userId, sessionId, articleId: running.articleId },
-    );
+    const target: AgentSessionTarget = { userId: running.userId, articleId: running.articleId, contextKind: 'dialogue-brief', targetId: running.messageId };
+    const { session } = await getOrCreateAgentSession(container.stores, target);
+    const skillInput: DialogueBriefUpdaterInput = {
+      message: running.messageContent,
+      context: { kind: running.contextKind, title: running.contextTitle },
+      currentBrief: compactDialogueBriefForPrompt(currentBrief),
+      skipKnowledge: true,
+    };
+    const patch = await container.agentToolExecutor.executeSkillTool<DialogueBriefUpdaterInput, DialogueBriefUpdaterOutput>({
+      agentSession: session,
+      allowedTools: ['update_dialogue_brief'],
+      toolName: 'update_dialogue_brief',
+      skillId: 'dialogue-brief-updater',
+      input: skillInput,
+      operationId: agentOperationId('dialogue_brief_update', target, { messageId: running.messageId, messageContent: running.messageContent, contextKind: running.contextKind }),
+      sessionId,
+      articleId: running.articleId,
+    });
     const merged = mergeDialogueBrief(currentBrief, patch, running.contextKind, running.messageId);
     await container.stores.dialogueBriefStore.saveBrief(merged);
     await container.stores.eventTraceStore.append({ id: newId('evt'), type: 'dialogue.brief.updated', payload: { articleId: running.articleId, userId: running.userId, messageId: running.messageId, jobId: running.id }, createdAt: nowIso() });

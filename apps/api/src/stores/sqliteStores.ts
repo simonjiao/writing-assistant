@@ -34,7 +34,7 @@ import {
   StateStore,
   UserWritingProfile,
   WorkflowOperation,
-  WorkflowOperationStatus,
+  AgentOperationStatus,
   WorkflowOperationStore,
   WorkspaceStore,
   WritingWorkspace,
@@ -171,12 +171,13 @@ export class SqliteWorkflowOperationStore implements WorkflowOperationStore {
     const operation = await this.db.get(operationId);
     return operation ? fromStoredOperation(operation) : undefined;
   }
-  async listOperations(filter?: { runId?: string; articleId?: string; userId?: string; statuses?: WorkflowOperationStatus[] }) {
+  async listOperations(filter?: { runId?: string; agentSessionId?: string; articleId?: string; userId?: string; statuses?: AgentOperationStatus[] }) {
     const statuses = filter?.statuses ? new Set(filter.statuses) : undefined;
     return (await this.db.list())
       .map(fromStoredOperation)
       .filter((operation) =>
         (!filter?.runId || operation.runId === filter.runId) &&
+        (!filter?.agentSessionId || operation.agentSessionId === filter.agentSessionId) &&
         (!filter?.articleId || operation.articleId === filter.articleId) &&
         (!filter?.userId || operation.userId === filter.userId) &&
         (!statuses || statuses.has(operation.status))
