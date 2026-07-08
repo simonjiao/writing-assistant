@@ -1142,7 +1142,13 @@ describe('api app', () => {
       status: 'completed',
       articleRevisionBefore: body.article.revision - 1,
       articleRevisionAfter: body.article.revision,
+    }), expect.objectContaining({
+      toolName: 'revise_task_card',
+      status: 'completed',
     })]));
+    const taskCardAgentSessions = await container.stores.piAgentSessionStore.listSessions({ userId: 'consistency-user', articleId: article.id, contextKind: 'task-card' });
+    expect(taskCardAgentSessions).toHaveLength(1);
+    expect(operations.find((operation) => operation.toolName === 'revise_task_card')?.agentSessionId).toBe(taskCardAgentSessions[0].id);
     await app.close();
   });
 
