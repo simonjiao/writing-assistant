@@ -3,9 +3,9 @@
 ## Monorepo 边界
 
 ```text
-packages/core   纯业务内核，不依赖 Fastify/React/Redis
-packages/skills 默认 skill 实现，依赖 core 类型
-apps/api        API、SQLite store、pi workflow action executor、RAG client、container bootstrap
+packages/core       框架无关基础设施和领域类型，不依赖 Fastify/React/Redis
+packages/workflows  产品 workflow、ToolRegistry、PromptProgram、HumanGate/action 执行
+apps/api            API、SQLite store adapter、RAG client、container bootstrap
 apps/web        UI 和 API client
 ```
 
@@ -13,8 +13,8 @@ apps/web        UI 和 API client
 
 ```text
 apps/web  → HTTP API
-apps/api  → packages/core + packages/skills
-skills    → packages/core
+apps/api  → packages/core + packages/workflows
+workflows → packages/core
 core      → 无业务框架依赖
 ```
 
@@ -51,12 +51,12 @@ npm run local:restart -- web
 
 模块应围绕稳定职责划分，而不是围绕临时页面或接口堆叠。新增能力时先判断它属于哪一层，再决定文件位置。
 
-- `packages/core` 放跨端共享的领域类型、pi workflow runner、allowed action planner、runtime 抽象、store 接口、event 抽象和框架无关工具。
-- `packages/skills` 放默认 agent skill；一个复杂 skill 应拆成 prompt 组装、预算/策略计算、输出归一化、质量校验和测试夹具。
-- `apps/api` 放 HTTP 路由、container/bootstrap、pi workflow action executor、store adapter、RAG client 和运行配置；这些角色不要长期混在同一个文件。
+- `packages/core` 放跨端共享的领域类型、LLM adapter、pi-agent loader、store 接口、event 抽象和框架无关工具。
+- `packages/workflows` 放产品 workflow、allowed action planner、ToolRegistry、PromptProgram、工具 schema、HumanGate/action 执行和写作产品规则；一个复杂 prompt program 应拆成 prompt 组装、预算/策略计算、输出归一化、质量校验和测试夹具。
+- `apps/api` 放 HTTP 路由、container/bootstrap、store adapter、RAG client 和运行配置；不要把产品 workflow/action 逻辑长期放在 API 层。
 - `apps/web` 放页面编排、组件、hooks、API client、展示类型和样式；页面组件只做组合和状态协调，复杂展示组件应独立。
 - 跨层共享类型优先放 `packages/core`；仅 API 入参/出参使用的 DTO 留在 `apps/api`；仅 UI 展示需要的 view model 留在 `apps/web`。
-- 禁止为了省事让 `apps/web` 直接依赖 `packages/skills` 或 `apps/api` 内部模块；Web 只通过 HTTP API 使用后端能力。
+- 禁止为了省事让 `apps/web` 直接依赖 `packages/workflows` 或 `apps/api` 内部模块；Web 只通过 HTTP API 使用后端能力。
 - 避免用大而全的 barrel export 掩盖模块边界；如果 barrel 导出会造成循环依赖或所有模块互相可见，应改为显式导入。
 - 内部 id、run id、section id、block id 等只用于状态和 API，不直接作为 UI 文案展示。
 
@@ -77,9 +77,9 @@ npm run local:restart -- web
 
 拆分时按职责和分层边界移动代码：
 
-- `packages/core`：只放框架无关的类型、接口、pi workflow/runtime/event/store 抽象和通用实现。
-- `packages/skills`：一个 skill 一个主要文件；`register.ts` 只负责注册，不放 skill 逻辑。
-- `apps/api`：路由、container 组装、pi workflow action executor、store adapter、RAG client 分开维护。
+- `packages/core`：只放框架无关的类型、接口、pi-agent loader、LLM adapter、event/store 抽象和通用实现。
+- `packages/workflows`：一个 prompt program 一个主要文件；`register.ts` 只注册 prompt program，`tool-catalog.ts` 只注册产品工具和 schema，不放工具业务逻辑。
+- `apps/api`：路由、container 组装、store adapter、RAG client 分开维护。
 - `apps/web`：页面编排、组件、hooks、API client、类型、样式分开维护；`App.tsx` 应偏向页面组合，不承载全部 UI 细节。
 
 典型拆分方向：
@@ -87,7 +87,7 @@ npm run local:restart -- web
 - `apps/web/src/App.tsx` 继续变大时，优先拆出任务导航、任务卡工作区、大纲工作区、辅助列、对话输入区、运行进度和选择态 hooks。
 - `apps/api/src/app.ts` 继续变大时，按 sessions、workspaces、articles、workflows、dialogue、knowledge 拆路由注册文件。
 - `apps/api/src/bootstrap.ts` 继续变大时，拆出 store/container factory、runtime provider factory、workflow runner factory。
-- `packages/skills/src/section-writer.ts` 继续变大时，拆出 writing budget、continuity context、source policy validation、length/quote validation、prompt builder。
+- `packages/workflows/src/section-writer.ts` 继续变大时，拆出 writing budget、continuity context、source policy validation、length/quote validation、prompt builder。
 
 拆分步骤应保守：
 
@@ -101,15 +101,15 @@ npm run local:restart -- web
 
 - 公共对象必须定义显式类型。
 - workflow state 中的动态字段要在节点边界做类型收窄。
-- API request body 当前为轻量校验；生产版应加 Zod/JSON Schema。
+- API request body 和 product tool 边界应使用 Zod/JSON Schema 做运行时校验；不要绕过 `ToolRegistry` schema。
 - Store 接口返回值应使用 domain type，不返回数据库行。
 - I/O 边界先使用 `unknown` 或明确 DTO，再做解析和收窄；不要把外部 JSON 直接断言成 domain type 后继续传递。
 - 避免新增 `any`。只有在隔离第三方库或测试夹具时可局部使用，并且不得跨出该函数边界。
-- 公开函数、skill `invoke`、store 方法、route handler helper 必须写清返回类型或让返回类型来自已命名接口。
+- 公开函数、prompt program `invoke`、store 方法、route handler helper 必须写清返回类型或让返回类型来自已命名接口。
 - workflow/run/status 类状态优先使用判别联合或字面量联合；新增分支时要做穷尽处理。
 - 不要依赖非空断言 `!` 处理业务数据；先检查并返回 400/404 或抛出明确错误。
 - 使用 `import type` 引入纯类型，避免运行时循环依赖。
-- `Record<string, unknown>` 只能用于边界层；进入 core、skill 或 UI 前应转换为明确结构。
+- `Record<string, unknown>` 只能用于边界层；进入 core、workflow/prompt program 或 UI 前应转换为明确结构。
 - React state 类型必须表达“未加载、加载中、失败、已加载”的区别；不要用空对象或空字符串混合表示多个状态。
 - 前端展示层不得直接显示内部技术标识；需要展示时转成标题、序号、状态或用户可理解的摘要。
 
@@ -117,7 +117,7 @@ npm run local:restart -- web
 
 - `writing-autopilot` 是主流程入口；不要再新增分散的任务卡/大纲/章节旧 workflow 入口。
 - Runner 每轮必须先生成 allowed actions，agent 只能从 allowed actions 中选择。
-- LLM 调用必须通过 skill 或 pi-agent decision provider；确定性写入由 action executor 执行。
+- LLM 调用必须通过 prompt program 或 pi-agent decision provider；确定性写入由 action executor 执行。
 - 覆盖已有内容、确认任务卡、需要人工裁决的动作必须创建 HumanGate。
 - 工具必须幂等：稳定 operationId 已完成时不能重复改写 artifact。
 - 写 ArtifactStore 前必须校验 article revision。
@@ -140,6 +140,6 @@ npm run local:restart -- web
 ## 测试规范
 
 - core：测试 workflow 执行语义。
-- skills：测试默认 skill 输出结构。
+- workflows：测试 ToolRegistry、prompt program 输出结构、pi-agent runner 和产品 workflow 行为。
 - api：测试 REST、writing-autopilot、HumanGate、SQLite persistent store、HTTP RAG。
 - web：通过 `npm run build --workspace @wa/web` 做类型和打包检查。

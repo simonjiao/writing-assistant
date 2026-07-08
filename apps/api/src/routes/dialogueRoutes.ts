@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import { ArticleArtifact, ArticleBlock, DialogueMessage, KnowledgeItem, OutlineItem, RevisionProposal } from '@wa/core';
-import type { DialogueCoordinatorInput, DialogueCoordinatorOutput } from '@wa/skills';
+import type { DialogueCoordinatorInput, DialogueCoordinatorOutput } from '@wa/workflows';
 import { AppContainer } from '../bootstrap';
 import { addKnowledgeEvidenceToBrief, buildCompactDialogueConversation, compactDialogueBriefForPrompt, enqueueDialogueBriefUpdate, ensureDialogueBriefSettled, getDialogueBriefStatus, getOrCreateDialogueBrief } from '../dialogueBrief';
 
@@ -54,7 +54,6 @@ export interface DialogueRoutesDependencies {
     target: { contextKind: DialogueCoordinatorInput['context']['kind']; targetId?: string };
     allowedTools: readonly string[];
     toolName: string;
-    skillId: string;
     skillInput: I;
     operationPrefix: string;
   }): Promise<O>;
@@ -168,7 +167,6 @@ export function registerDialogueRoutes(app: FastifyInstance, deps: DialogueRoute
         target: deps.dialogueSessionTargetFromContext(context.value.context),
         allowedTools: ['create_revision_proposal', 'ask_clarifying_question', 'answer'],
         toolName: 'create_revision_proposal',
-        skillId: 'dialogue-coordinator',
         skillInput,
         operationPrefix: 'dialogue_coordinator',
       });

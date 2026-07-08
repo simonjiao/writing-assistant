@@ -5,16 +5,21 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AllowedAction, ArticleArtifact, DialogueBrief, WorkflowRun, WritingTaskCard, nowIso } from '@wa/core';
 import { createApp } from './app';
-import { createContainer } from './bootstrap';
+import { createContainer as createAppContainer } from './bootstrap';
 import { AppConfig } from './config';
 import { mergeDialogueBrief } from './dialogueBrief';
-import { PiWorkflowActionExecutor } from './piWorkflowActionExecutor';
-import type { AgentToolExecutionInput } from './agent/agentToolExecutor';
+import { PiWorkflowActionExecutor } from '@wa/workflows';
+import type { AgentToolExecutionInput } from '@wa/workflows';
+import { TestLLMProvider } from './testing/mockLlmProvider';
 
 let dataDir: string | undefined;
 afterEach(async () => { if (dataDir) await rm(dataDir, { recursive: true, force: true }); dataDir = undefined; });
 
 let fixtureWriteCounter = 0;
+
+function createContainer(config: AppConfig) {
+  return createAppContainer(config, { llm: new TestLLMProvider() });
+}
 
 async function saveArticleFixture(container: ReturnType<typeof createContainer>, article: ArticleArtifact): Promise<ArticleArtifact> {
   const operationId = `test_fixture_${article.id}_${fixtureWriteCounter += 1}`;
@@ -28,13 +33,13 @@ function mockAgentToolExecutor(
     next: (input: AgentToolExecutionInput<unknown>) => Promise<unknown>,
   ) => Promise<unknown>,
 ): void {
-  const original = container.agentToolExecutor.executeSkillTool.bind(container.agentToolExecutor) as (input: AgentToolExecutionInput<unknown>) => Promise<unknown>;
-  container.agentToolExecutor.executeSkillTool = (async (input: AgentToolExecutionInput<unknown>) => handler(input, original)) as typeof container.agentToolExecutor.executeSkillTool;
+  const original = container.agentToolExecutor.executeTool.bind(container.agentToolExecutor) as (input: AgentToolExecutionInput<unknown>) => Promise<unknown>;
+  container.agentToolExecutor.executeTool = (async (input: AgentToolExecutionInput<unknown>) => handler(input, original)) as typeof container.agentToolExecutor.executeTool;
 }
 
 function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   dataDir = join(tmpdir(), `wa-api-test-${Date.now()}-${Math.random().toString(16).slice(2)}`);
-  return { host: '127.0.0.1', port: 0, dataDir, webOrigin: 'http://localhost:5173', llmProvider: 'mock', openaiBaseURL: 'https://api.openai.com/v1', openaiApiKey: '', openaiModel: 'mock', ragProvider: 'local', ragBaseURL: '', ragApiKey: '', ragSearchPath: '/search', ragRefsPath: '/refs', ragTimeoutMs: 1000, ...overrides };
+  return { host: '127.0.0.1', port: 0, dataDir, webOrigin: 'http://localhost:5173', llmProvider: 'openai-compatible', openaiBaseURL: 'https://api.openai.com/v1', openaiApiKey: 'test-key', openaiModel: 'test-model', ragProvider: 'local', ragBaseURL: '', ragApiKey: '', ragSearchPath: '/search', ragRefsPath: '/refs', ragTimeoutMs: 1000, ...overrides };
 }
 
 async function startRagServer(): Promise<{ baseURL: string; close: () => Promise<void> }> {
@@ -373,7 +378,7 @@ describe('api app', () => {
     const config = testConfig();
     const container = createContainer(config);
     mockAgentToolExecutor(container, async (input, next) => {
-      if (input.skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator did not return valid JSON: {"mode":"proposal"');
+      if (input.toolName === 'create_revision_proposal') throw new Error('Dialogue coordinator did not return valid JSON: {"mode":"proposal"');
       return next(input);
     });
     const app = createApp(config, container);
@@ -1388,9 +1393,9 @@ describe('api app', () => {
   it('answers dialogue questions without mutating article artifacts', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const invokedSkills: string[] = [];
+    const invokedTools: string[] = [];
     mockAgentToolExecutor(container, async (input, next) => {
-      invokedSkills.push(input.skillId);
+      invokedTools.push(input.toolName);
       return next(input);
     });
     const app = createApp(config, container);
@@ -1432,7 +1437,7 @@ describe('api app', () => {
     const messagesResponse = await app.inject({ method: 'GET', url: `/api/articles/${article.id}/dialogue/messages?userId=dialogue-answer-user` });
     expect(messagesResponse.statusCode).toBe(200);
     expect(messagesResponse.json()).toHaveLength(2);
-    expect(invokedSkills).toEqual([]);
+    expect(invokedTools).toEqual([]);
     expect(await container.stores.dialogueBriefStore.getBrief(article.id, 'dialogue-answer-user')).toBeUndefined();
     const piSessions = await container.stores.piAgentSessionStore.listSessions({ userId: 'dialogue-answer-user', articleId: article.id, contextKind: 'outline-item' });
     expect(piSessions).toHaveLength(1);
@@ -1445,9 +1450,9 @@ describe('api app', () => {
   it('explains task card citation rules from current structured fields', async () => {
     const config = testConfig();
     const container = createContainer(config);
-    const invokedSkills: string[] = [];
+    const invokedTools: string[] = [];
     mockAgentToolExecutor(container, async (input, next) => {
-      invokedSkills.push(input.skillId);
+      invokedTools.push(input.toolName);
       return next(input);
     });
     const app = createApp(config, container);
@@ -1495,7 +1500,7 @@ describe('api app', () => {
     expect(typoResponse.json().message).toContain('按任务卡字段理解为「不强制引用」');
     expect(typoResponse.json().message).toContain('不是禁止引用');
     expect(typoResponse.json().proposal).toBeUndefined();
-    expect(invokedSkills).toEqual([]);
+    expect(invokedTools).toEqual([]);
     const after = await container.stores.artifactStore.getArticle(article.id);
     expect(after?.versions).toHaveLength(before?.versions.length ?? 0);
     expect(await container.stores.revisionProposalStore.listPendingProposals(article.id, 'dialogue-citation-user')).toHaveLength(0);
@@ -1590,7 +1595,7 @@ describe('api app', () => {
     const config = testConfig();
     const container = createContainer(config);
     mockAgentToolExecutor(container, async (input, next) => {
-      if (input.skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator did not return valid JSON: {"mode":"proposal","operations":[{"type":"revise-outline"');
+      if (input.toolName === 'create_revision_proposal') throw new Error('Dialogue coordinator did not return valid JSON: {"mode":"proposal","operations":[{"type":"revise-outline"');
       return next(input);
     });
     const app = createApp(config, container);
@@ -1631,7 +1636,7 @@ describe('api app', () => {
     const config = testConfig();
     const container = createContainer(config);
     mockAgentToolExecutor(container, async (input, next) => {
-      if (input.skillId === 'dialogue-coordinator') throw new Error('Dialogue coordinator returned empty operation.blockId.');
+      if (input.toolName === 'create_revision_proposal') throw new Error('Dialogue coordinator returned empty operation.blockId.');
       return next(input);
     });
     const app = createApp(config, container);
@@ -1677,7 +1682,7 @@ describe('api app', () => {
     const container = createContainer(config);
     const coordinatorInputs: Array<{ conversation?: Array<{ role: string; content: string }>; conversationBrief?: DialogueBrief }> = [];
     mockAgentToolExecutor(container, async (input, next) => {
-      if (input.skillId === 'dialogue-coordinator') {
+      if (input.toolName === 'create_revision_proposal') {
         coordinatorInputs.push(input.input as { conversation?: Array<{ role: string; content: string }>; conversationBrief?: DialogueBrief });
         return { mode: 'proposal', message: '准备更新大纲。', summary: '修订大纲', operations: [{ type: 'revise-outline', instruction: '补充大闹厨房等关键情节。' }], warnings: [] };
       }
@@ -1791,8 +1796,8 @@ describe('api app', () => {
     const config = testConfig();
     const container = createContainer(config);
     mockAgentToolExecutor(container, async (input, next) => {
-      if (input.skillId === 'dialogue-brief-updater') throw new Error('brief updater unavailable');
-      if (input.skillId === 'dialogue-coordinator') return { mode: 'proposal', message: '准备修改。', summary: '修订任务', operations: [{ type: 'revise-outline', instruction: '补充大闹厨房。' }], warnings: [] };
+      if (input.toolName === 'update_dialogue_brief') throw new Error('brief updater unavailable');
+      if (input.toolName === 'create_revision_proposal') return { mode: 'proposal', message: '准备修改。', summary: '修订任务', operations: [{ type: 'revise-outline', instruction: '补充大闹厨房。' }], warnings: [] };
       return next(input);
     });
     const app = createApp(config, container);
@@ -1841,11 +1846,11 @@ describe('api app', () => {
     const container = createContainer(config);
     const coordinatorInputs: Array<{ conversationBrief?: DialogueBrief }> = [];
     mockAgentToolExecutor(container, async (input, next) => {
-      if (input.skillId === 'dialogue-brief-updater') {
+      if (input.toolName === 'update_dialogue_brief') {
         const message = (input.input as { message: string }).message;
         return { activeRequirements: [{ kind: 'requirement', text: message }], evidenceNotes: [], recentUserIntents: [message], supersededRequirements: [], conflicts: [] };
       }
-      if (input.skillId === 'dialogue-coordinator') {
+      if (input.toolName === 'create_revision_proposal') {
         coordinatorInputs.push(input.input as { conversationBrief?: DialogueBrief });
         return { mode: 'proposal', message: '准备修改。', summary: '修订任务', operations: [{ type: 'revise-outline', instruction: '补充收束段。' }], warnings: [] };
       }

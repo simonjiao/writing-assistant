@@ -26,7 +26,7 @@ export interface AppConfig {
   port: number;
   dataDir: string;
   webOrigin: string;
-  llmProvider: 'mock' | 'openai-compatible';
+  llmProvider: 'openai-compatible';
   openaiBaseURL: string;
   openaiApiKey: string;
   openaiModel: string;
@@ -47,12 +47,13 @@ function getRagProvider(): AppConfig['ragProvider'] {
 
 export function getConfig(): AppConfig {
   const ragProvider = getRagProvider();
+  const llmProvider = getLlmProvider();
   return {
     host: process.env.HOST ?? '0.0.0.0',
     port: Number(process.env.PORT ?? 8787),
     dataDir: resolveDataDir(process.env.DATA_DIR ?? '.data'),
     webOrigin: process.env.WEB_ORIGIN ?? 'http://localhost:5173',
-    llmProvider: process.env.LLM_PROVIDER === 'openai-compatible' ? 'openai-compatible' : 'mock',
+    llmProvider,
     openaiBaseURL: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
     openaiApiKey: process.env.OPENAI_API_KEY ?? '',
     openaiModel: process.env.OPENAI_MODEL ?? 'gpt-4.1-mini',
@@ -63,4 +64,12 @@ export function getConfig(): AppConfig {
     ragRefsPath: process.env.RAG_REFS_PATH ?? process.env.RAG_BY_REFS_PATH ?? '/refs',
     ragTimeoutMs: Number(process.env.RAG_TIMEOUT_MS ?? 10000),
   };
+}
+
+function getLlmProvider(): AppConfig['llmProvider'] {
+  const provider = (process.env.LLM_PROVIDER ?? 'openai-compatible').toLowerCase();
+  if (provider !== 'openai-compatible') {
+    throw new Error(`Unsupported LLM_PROVIDER=${provider}. Use openai-compatible.`);
+  }
+  return 'openai-compatible';
 }

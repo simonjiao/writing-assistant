@@ -59,7 +59,7 @@ describe('DefaultContextBuilder', () => {
 
     const context = await builder.build({
       userId: 'u1',
-      skillId: 'section-writer',
+      promptProgramId: 'section-writer',
       articleId: article.id,
       input: {
         articleId: article.id,
@@ -109,7 +109,7 @@ describe('DefaultContextBuilder', () => {
 
     await builder.build({
       userId: 'u1',
-      skillId: 'section-writer',
+      promptProgramId: 'section-writer',
       articleId: article.id,
       input: {
         articleId: article.id,

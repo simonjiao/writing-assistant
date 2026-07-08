@@ -21,7 +21,10 @@ npm run local:status
 
 ```bash
 RAG_PROVIDER=local
-LLM_PROVIDER=mock
+LLM_PROVIDER=openai-compatible
+OPENAI_BASE_URL=<openai-compatible-base-url>
+OPENAI_API_KEY=<key>
+OPENAI_MODEL=<model>
 ```
 
 ## Workflow Runtime 检查
@@ -106,7 +109,7 @@ docker compose up --build
 默认使用：
 
 ```bash
-LLM_PROVIDER=mock
+LLM_PROVIDER=openai-compatible
 RAG_PROVIDER=local
 ```
 
@@ -119,7 +122,7 @@ npm run test:browser:local
 ./scripts/smoke.sh
 ```
 
-浏览器回归测试会通过统一本地运行入口重启服务，并固定使用 `LLM_PROVIDER=mock`、`RAG_PROVIDER=local`：
+浏览器回归测试会通过统一本地运行入口重启服务，并使用当前 `.env` 中的真实 LLM 配置与 `RAG_PROVIDER=local`：
 
 ```bash
 npm run test:browser:local
@@ -133,7 +136,7 @@ npm run test:browser
 
 ## 已验证项
 
-- TypeScript build：core / skills / api / web
-- Unit tests：core / skills / api / web workflow state
+- TypeScript build：core / workflows / api / web
+- Unit tests：core / workflows / api / web workflow state
 - API tests：health、writing-autopilot、HumanGate、SQLite persistent store、HTTP RAG
 - Browser smoke：创建任务卡、确认任务卡、生成大纲、开始写作、添加并处理正文批注、开发期用户切换后的任务列表隔离和跨用户 article 访问拒绝、同一 article 已有 running workflow 时阻止第二次开始写作、过期 running dialogue brief job 在下一轮对话前恢复并写入摘要、HumanGate waiting 确认、HumanGate 拒绝等待新指令、workflow 取消、stale HumanGate 自动 supersede、workflow failed 状态展示、统稿 proposal 应用、统稿 proposal 取消、stale proposal 阻止写入

@@ -3,7 +3,7 @@ WORKDIR /app
 COPY package*.json ./
 COPY apps/web/package.json apps/web/package.json
 COPY packages/core/package.json packages/core/package.json
-COPY packages/skills/package.json packages/skills/package.json
+COPY packages/workflows/package.json packages/workflows/package.json
 RUN npm install
 COPY . .
 ARG VITE_API_BASE=http://localhost:8787

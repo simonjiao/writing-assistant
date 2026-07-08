@@ -4,10 +4,10 @@
 
 本版已经加入：
 
-- TypeScript monorepo：`apps/api`、`apps/web`、`packages/core`、`packages/skills`
+- TypeScript monorepo：`apps/api`、`apps/web`、`packages/core`、`packages/workflows`
 - Fastify API 后端 + React/Vite 前端
-- OpenAI-compatible LLM Provider，默认 `mock` 模式可离线运行
-- Skill 机制：任务卡、大纲、章节写作、局部修改、引用/连贯性检查
+- OpenAI-compatible LLM Provider；本地/生产必须显式配置真实模型 key
+- Product Tool + Prompt Program 机制：任务卡、大纲、章节写作、局部修改、引用/连贯性检查
 - pi-agent writing autopilot：自主选择下一步，所有工具调用走统一幂等 action executor
 - HumanGate：任务卡确认、大纲覆盖等人工裁决点独立建模
 - 外部化 Session / State / Memory / Artifact / Knowledge / Event Trace
@@ -21,11 +21,11 @@
 ```text
 writing-assistant/
 ├─ apps/
-│  ├─ api/                 # Fastify API、stores、pi action executor、RAG client
+│  ├─ api/                 # Fastify API、SQLite stores、RAG client、container bootstrap
 │  └─ web/                 # React/Vite 写作工作台
 ├─ packages/
-│  ├─ core/                # Pi workflow runner、SkillExecutor、Skill、Store、EventBus
-│  └─ skills/              # 默认写作 skills
+│  ├─ core/                # 领域类型、Store/EventBus 接口、LLM adapter、pi-agent loader
+│  └─ workflows/           # 产品 workflow、ToolRegistry、PromptProgram、HumanGate/action 执行
 ├─ docs/                   # 产品、架构、模块、部署测试文档
 ├─ scripts/smoke.sh        # API smoke test
 ├─ docker-compose.yml      # API + Web
@@ -66,7 +66,7 @@ npm run dev:web
 http://localhost:5173
 ```
 
-默认配置为 `mock` LLM、SQLite 持久化存储、pi-agent workflow runtime、本地知识库。
+默认配置为 SQLite 持久化存储、pi-agent workflow runtime、本地知识库。LLM 必须在 `.env` 中配置真实 OpenAI-compatible endpoint 和 key。
 
 ## Docker 启动
 
@@ -84,8 +84,6 @@ docker compose up --build
 ### LLM Provider
 
 ```bash
-LLM_PROVIDER=mock
-# 或
 LLM_PROVIDER=openai-compatible
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_API_KEY=your-key
@@ -207,7 +205,7 @@ WS /api/events/ws?runId=<runId>&userId=<userId>
 ```text
 workflow.started / workflow.waiting / workflow.completed / workflow.failed
 workflow.operation.started / workflow.operation.completed / workflow.operation.failed
-skill.started / skill.completed
+prompt_program.started / prompt_program.completed / prompt_program.failed
 tool.started / tool.completed / tool.failed
 pi.session.created / pi.session.updated / agent.decision
 human_gate.created / human_gate.resolved
@@ -227,7 +225,7 @@ npm run test
 当前测试覆盖：
 
 - core workflow inline run
-- skills task-card builder
+- workflow prompt programs
 - API health + task-card inline workflow
 - local async queue + runner worker
 - SQLite store
@@ -260,6 +258,6 @@ npm run test
 - Workflow 控制流程，Agent 只执行节点能力。
 - Runner 执行一次 workflow run；Engine 管理 workflow 定义、状态、队列、恢复。
 - Context 由 Session / State / Memory / Artifact / Knowledge 临时组装，不把聊天历史当上下文。
-- Skill 是能力包，不只是 prompt。
+- Prompt program 是工具内部的结构化 LLM 执行单元，不直接被 API 路由调用。
 - 文章、引用、主题标签、版本都进入 ArtifactStore，不留在聊天记录里。
 - 用户选中段落时默认局部修改，只有 evaluator 发现影响范围时才扩大修改。

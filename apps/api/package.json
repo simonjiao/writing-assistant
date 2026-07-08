@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "rimraf dist && tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "test": "vitest run"
   },
@@ -13,7 +13,7 @@
     "@fastify/cors": "^10.0.2",
     "@fastify/websocket": "^11.2.0",
     "@wa/core": "0.1.0",
-    "@wa/skills": "0.1.0",
+    "@wa/workflows": "0.1.0",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1"
   },

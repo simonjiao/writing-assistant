@@ -1469,8 +1469,8 @@ function sectionGenerationStage(progress: SectionGenerationState, events: AgentE
   if (progress.status === 'failed') return { title: '生成未保存', detail: userFacingRunError(progress.error), percent: 100, tone: 'failed' };
   if (progress.status === 'completed') return { title: '已保存本节', detail: '正文已经写入当前章节。', percent: 100, tone: 'done' };
   if (hasFriendlyEvent(events, 'artifact.updated', 'section-written')) return { title: '正在保存', detail: '正文已生成，正在写入文章。', percent: 92, tone: 'active' };
-  if (hasFriendlyEvent(events, 'skill.completed', 'section-writer')) return { title: '正在整理', detail: '正文草稿已生成，正在整理结果。', percent: 76, tone: 'active' };
-  if (hasFriendlyEvent(events, 'skill.started', 'section-writer')) return { title: '正在生成', detail: '正在根据任务卡、大纲和资料写作。', percent: 48, tone: 'active' };
+  if (hasFriendlyEvent(events, 'prompt_program.completed', 'section-writer')) return { title: '正在整理', detail: '正文草稿已生成，正在整理结果。', percent: 76, tone: 'active' };
+  if (hasFriendlyEvent(events, 'prompt_program.started', 'section-writer')) return { title: '正在生成', detail: '正在根据任务卡、大纲和资料写作。', percent: 48, tone: 'active' };
   if (hasFriendlyEvent(events, 'rag.http.completed')) return { title: '正在生成', detail: '资料已准备，正在组织正文。', percent: 42, tone: 'active' };
   if (hasFriendlyEvent(events, 'rag.http.started')) return { title: '正在准备资料', detail: '正在查找可用资料。', percent: 30, tone: 'active' };
   if (hasFriendlyEvent(events, 'workflow.operation.started') || hasFriendlyEvent(events, 'tool.started')) return { title: '开始处理', detail: '正在推进写作流程。', percent: 22, tone: 'active' };
@@ -1488,15 +1488,19 @@ function friendlyProgressEvents(events: AgentEvent[], run?: WorkflowRun): Array<
 
 function friendlyEventLabel(event: AgentEvent): string | undefined {
   const reason = typeof event.payload?.reason === 'string' ? event.payload.reason : undefined;
-  const skillId = typeof event.payload?.skillId === 'string' ? event.payload.skillId : undefined;
+  const promptProgramId = typeof event.payload?.programId === 'string'
+    ? event.payload.programId
+    : typeof event.payload?.promptProgramId === 'string'
+      ? event.payload.promptProgramId
+      : undefined;
   if (event.type === 'workflow.started') return '已收到请求';
   if (event.type === 'workflow.operation.started' || event.type === 'tool.started') return '开始处理';
   if (event.type === 'agent.decision') return '已选择下一步';
   if (event.type === 'rag.http.started') return '正在查找资料';
   if (event.type === 'rag.http.completed') return '资料已准备';
   if (event.type === 'rag.http.failed') return '资料查找失败';
-  if (event.type === 'skill.started') return skillProgressLabel(skillId, 'started');
-  if (event.type === 'skill.completed') return skillProgressLabel(skillId, 'completed');
+  if (event.type === 'prompt_program.started') return promptProgramProgressLabel(promptProgramId, 'started');
+  if (event.type === 'prompt_program.completed') return promptProgramProgressLabel(promptProgramId, 'completed');
   if (event.type === 'artifact.updated') return artifactProgressLabel(reason);
   if (event.type === 'workflow.waiting' || event.type === 'human_gate.created') return waitingStatusLabel(typeof event.payload?.reason === 'string' ? event.payload.reason : undefined);
   if (event.type === 'workflow.completed') return '处理完成';
@@ -1504,7 +1508,7 @@ function friendlyEventLabel(event: AgentEvent): string | undefined {
   return undefined;
 }
 
-function skillProgressLabel(skillId: string | undefined, phase: 'started' | 'completed'): string {
+function promptProgramProgressLabel(promptProgramId: string | undefined, phase: 'started' | 'completed'): string {
   const labels: Record<string, [string, string]> = {
     'task-card-builder': ['正在整理任务卡', '任务卡草稿已生成'],
     'task-card-reviser': ['正在更新任务卡', '任务卡已更新'],
@@ -1512,7 +1516,7 @@ function skillProgressLabel(skillId: string | undefined, phase: 'started' | 'com
     'section-writer': ['正在生成正文', '正文草稿已生成'],
     'patch-editor': ['正在准备修改', '修改建议已生成'],
   };
-  const label = labels[skillId ?? ''];
+  const label = labels[promptProgramId ?? ''];
   return label ? label[phase === 'started' ? 0 : 1] : (phase === 'started' ? '正在处理' : '处理已完成');
 }
 
@@ -1540,7 +1544,7 @@ function hasFriendlyEvent(events: AgentEvent[], type: string, marker?: string): 
   return events.some((event) => {
     if (event.type !== type) return false;
     if (!marker) return true;
-    return event.payload?.reason === marker || event.payload?.skillId === marker;
+    return event.payload?.reason === marker || event.payload?.programId === marker || event.payload?.promptProgramId === marker;
   });
 }
 

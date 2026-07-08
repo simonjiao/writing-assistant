@@ -5,7 +5,7 @@ export interface ContextBuildInput {
   userId: string;
   sessionId?: string;
   runId?: string;
-  skillId: string;
+  promptProgramId: string;
   input: unknown;
   articleId?: string;
   blockId?: string;
@@ -20,7 +20,7 @@ export interface AgentContext {
   selectedBlock?: ArticleArtifact['blocks'][number];
   knowledge: KnowledgeItem[];
   scope: 'article' | 'section' | 'paragraph';
-  skillId: string;
+  promptProgramId: string;
   compactSummary: string;
 }
 
@@ -113,7 +113,7 @@ export class DefaultContextBuilder implements ContextBuilder {
       selectedBlock,
       knowledge,
       scope,
-      skillId: input.skillId,
+      promptProgramId: input.promptProgramId,
       compactSummary: this.compactSummary({ article, selectedBlock, section: sectionInput, memory, knowledge }),
     };
   }

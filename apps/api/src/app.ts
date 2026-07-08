@@ -1,19 +1,15 @@
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import Fastify, { FastifyReply, FastifyRequest } from 'fastify';
-import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, ArticleRevisionConflictError, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, hashOperationArgs, HumanGate, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, PiAgentSession, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WRITING_AUTOPILOT_POLICY, WritingTaskCard, WritingWorkspace } from '@wa/core';
-import { normalizeTaskCardPolicies } from '@wa/skills';
-import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput } from '@wa/skills';
+import { AgentEvent, ArticleArtifact, ArticleBlock, ArticleComment, ArticleRevisionConflictError, DialogueContextKind, DialogueMessage, EventSubscriptionFilter, hashOperationArgs, HumanGate, KnowledgeItem, KnowledgeSearchOptions, mergeDeep, newId, nowIso, OutlineItem, PiAgentSession, RevisionOperation, RevisionProposal, Unsubscribe, WorkflowRun, WritingTaskCard, WritingWorkspace } from '@wa/core';
+import { AgentSessionTarget, agentOperationId, appendAgentSessionMessages, appendCommentReply, canDeleteUnprocessedComment, canDeleteUnprocessedReply, getOrCreateAgentSession, normalizeTaskCardPolicies, reconcileCommentAfterReplyDeletion, updateComment, WRITING_AUTOPILOT_POLICY } from '@wa/workflows';
+import type { DialogueCoordinatorInput, DialogueCoordinatorOutput, DialogueRouterInput, DialogueRouterOutput } from '@wa/workflows';
 import { AppConfig } from './config';
 import { AppContainer } from './bootstrap';
-import { appendCommentReply, canDeleteUnprocessedComment, canDeleteUnprocessedReply, reconcileCommentAfterReplyDeletion, updateComment } from './articleComments';
 import { addKnowledgeEvidenceToBrief, buildCompactDialogueConversation, compactDialogueBriefForPrompt, enqueueDialogueBriefUpdate, ensureDialogueBriefSettled, getDialogueBriefStatus, getOrCreateDialogueBrief } from './dialogueBrief';
 import { DomainProfileSelectionRequest, getDomainProfileSummary, listDomainProfileSummaries, recommendDomainProfiles, resolveDomainProfileSelection } from './domainProfiles';
 import { getWritingStandardDisplaySummary, getWritingStandardSummary, resolveWritingStandardSelection, WritingStandardSelectionRequest } from './writingStandards';
 import { resolveUserContext } from './userContext';
-import { agentOperationId } from './agent/agentOperationIds';
-import { appendAgentSessionMessages } from './agent/agentSessionCompaction';
-import { AgentSessionTarget, getOrCreateAgentSession } from './agent/agentSessionTarget';
 import { registerDialogueRoutes } from './routes/dialogueRoutes';
 import { createRevisionProposalService, RevisionProposalStaleError, type RevisionProposalService } from './services/revisionProposalService';
 
@@ -41,7 +37,7 @@ export function createApp(config: AppConfig, container: AppContainer) {
 
   app.get('/health', async () => ({ ok: true, service: 'writing-assistant-api', store: 'sqlite', workflowRuntime: 'pi-agent', ragProvider: config.ragProvider }));
   app.get('/api/workflows', async () => [{ id: WRITING_AUTOPILOT_POLICY.id, name: '写作自动流程', description: WRITING_AUTOPILOT_POLICY.goal }]);
-  app.get('/api/skills', async () => container.skills.list());
+  app.get('/api/tools', async () => container.tools.list().map((tool) => ({ id: tool.id, workflowIds: tool.workflowIds, mutatesArtifact: tool.mutatesArtifact, requiresRevision: tool.requiresRevision, requiresHumanGate: tool.requiresHumanGate })));
 
   app.post('/api/sessions', async (request, reply) => {
     const body = request.body as { userId?: string };
@@ -744,7 +740,6 @@ async function refineDialogueRoute(container: AppContainer, article: ArticleArti
     target: dialogueSessionTargetFromContext(context),
     allowedTools: ['route_dialogue'],
     toolName: 'route_dialogue',
-    skillId: 'dialogue-router',
     skillInput,
     operationPrefix: 'dialogue_router',
   });
@@ -783,7 +778,6 @@ async function executeArticleAgentSkill<I = unknown, O = unknown>(input: {
   target: DialoguePiSessionTarget;
   allowedTools: readonly string[];
   toolName: string;
-  skillId: string;
   skillInput: I;
   operationPrefix: string;
   operationId?: string;
@@ -800,11 +794,10 @@ async function executeArticleAgentSkill<I = unknown, O = unknown>(input: {
     contextKind: input.target.contextKind,
     targetId: input.target.targetId,
   };
-  return input.container.agentToolExecutor.executeSkillTool<I, O>({
+  return input.container.agentToolExecutor.executeTool<I, O>({
     agentSession,
     allowedTools: input.allowedTools,
     toolName: input.toolName,
-    skillId: input.skillId,
     input: input.skillInput,
     operationId: input.operationId ?? agentOperationId(input.operationPrefix, operationTarget, input.operationPayload ?? input.skillInput),
     sessionId: input.sessionId,
@@ -955,7 +948,6 @@ async function handleWorkflowPendingProposalMessage(container: AppContainer, rev
       target: dialogueSessionTargetFromContext(context.value.context),
       allowedTools: ['create_revision_proposal', 'ask_clarifying_question', 'answer'],
       toolName: 'create_revision_proposal',
-      skillId: 'dialogue-coordinator',
       skillInput,
       operationPrefix: 'workflow_dialogue_coordinator',
     });

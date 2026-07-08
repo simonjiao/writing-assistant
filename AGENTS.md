@@ -7,8 +7,8 @@ This file applies to the whole repository.
 - Follow `docs/engineering-guidelines.md` before making code changes.
 - Keep the monorepo dependency direction intact:
   - `apps/web` calls `apps/api` over HTTP.
-  - `apps/api` depends on `packages/core` and `packages/skills`.
-  - `packages/skills` depends on `packages/core`.
+  - `apps/api` depends on `packages/core` and `packages/workflows`.
+  - `packages/workflows` depends on `packages/core`.
   - `packages/core` must not depend on apps or framework adapters.
 - Apply the file-splitting rules in `docs/engineering-guidelines.md` when a file becomes too heavy.
 
@@ -20,7 +20,7 @@ This file applies to the whole repository.
 - API layer: `docs/modules/api.md`
 - Frontend layer: `docs/modules/frontend.md`
 - Workflow layer: `docs/modules/workflow.md`
-- Runtime and skills context: `docs/modules/agent-runtime.md`, `docs/modules/skills-context.md`
+- Runtime and workflow context: `docs/modules/agent-runtime.md`, `docs/modules/prompt-programs-context.md`
 - Stores: `docs/modules/stores.md`
 - Deployment and testing: `docs/deployment-testing.md`
 

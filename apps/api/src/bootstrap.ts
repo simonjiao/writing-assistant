@@ -11,34 +11,30 @@ import {
   InMemoryEventBus,
   KnowledgeStore,
   MemoryStore,
-  MockLLMProvider,
+  LLMProvider,
   OpenAICompatibleProvider,
   PiAgentDecisionProvider,
-  PiWorkflowRunner,
   PublishingEventTraceStore,
   PiAgentSessionStore,
   ReviewArtifactStore,
   RevisionProposalStore,
   SessionStore,
-  SkillExecutor,
-  SkillRegistry,
   StateStore,
   WorkspaceStore,
   AgentOperationStore,
 } from '@wa/core';
-import { registerDefaultSkills } from '@wa/skills';
+import { AgentToolExecutor, PiWorkflowActionExecutor, registerDefaultPromptPrograms, registerDefaultTools, PromptProgramRegistry, ToolRegistry, PiWorkflowRunner } from '@wa/workflows';
 import { AppConfig } from './config';
 import { SqliteArtifactStore, SqliteDialogueBriefStore, SqliteDialogueBriefUpdateJobStore, SqliteDialogueMessageStore, SqliteEventTraceStore, SqliteHumanGateStore, SqliteKnowledgeStore, SqliteMemoryStore, SqlitePiAgentSessionStore, SqliteReviewArtifactStore, SqliteRevisionProposalStore, SqliteSessionStore, SqliteStateStore, SqliteAgentOperationStore, SqliteWorkspaceStore } from './stores/sqliteStores';
 import { HttpRagKnowledgeStore } from './stores/httpRagKnowledgeStore';
 import { TonglingyuRetrieverKnowledgeStore } from './stores/tonglingyuRetrieverKnowledgeStore';
-import { PiWorkflowActionExecutor } from './piWorkflowActionExecutor';
-import { AgentToolExecutor } from './agent/agentToolExecutor';
 
 export interface AppContainer {
   piRunner: PiWorkflowRunner;
   agentToolExecutor: AgentToolExecutor;
   stores: ExternalStores;
-  skills: SkillRegistry;
+  promptPrograms: PromptProgramRegistry;
+  tools: ToolRegistry;
   eventBus: EventBus;
   close(): Promise<void>;
 }
@@ -62,20 +58,30 @@ interface StoreBundle {
   close?: () => Promise<void>;
 }
 
-export function createContainer(config: AppConfig): AppContainer {
+export function createContainer(config: AppConfig, overrides: { llm?: LLMProvider } = {}): AppContainer {
   const base = createStores(config);
   const eventBus: EventBus = new InMemoryEventBus();
   const eventTraceStore = new PublishingEventTraceStore(base.eventTraceStore, eventBus) as EventTraceStore;
   const knowledgeStore = createKnowledgeStore(config, base.localKnowledgeStore, eventTraceStore);
   const stores: ExternalStores = { stateStore: base.stateStore, sessionStore: base.sessionStore, memoryStore: base.memoryStore, workspaceStore: base.workspaceStore, artifactStore: base.artifactStore, piAgentSessionStore: base.piAgentSessionStore, humanGateStore: base.humanGateStore, agentOperationStore: base.agentOperationStore, reviewArtifactStore: base.reviewArtifactStore, revisionProposalStore: base.revisionProposalStore, dialogueMessageStore: base.dialogueMessageStore, dialogueBriefStore: base.dialogueBriefStore, dialogueBriefUpdateJobStore: base.dialogueBriefUpdateJobStore, knowledgeStore, eventTraceStore };
 
-  const llm = config.llmProvider === 'openai-compatible' ? new OpenAICompatibleProvider({ baseURL: config.openaiBaseURL, apiKey: config.openaiApiKey, model: config.openaiModel }) : new MockLLMProvider();
-  const skills = registerDefaultSkills(new SkillRegistry());
+  const llm = overrides.llm ?? createLlmProvider(config);
+  const promptPrograms = registerDefaultPromptPrograms();
+  const tools = registerDefaultTools();
   const contextBuilder = new DefaultContextBuilder({ sessionStore: stores.sessionStore, stateStore: stores.stateStore, memoryStore: stores.memoryStore, artifactStore: stores.artifactStore, knowledgeStore: stores.knowledgeStore });
-  const skillExecutor = new SkillExecutor({ llm, skillRegistry: skills, contextBuilder, eventTraceStore });
-  const agentToolExecutor = new AgentToolExecutor({ stores, skillExecutor });
+  const agentToolExecutor = new AgentToolExecutor({ stores, toolRegistry: tools, promptPrograms, contextBuilder, llm });
   const piRunner = new PiWorkflowRunner({ stores, actionExecutor: new PiWorkflowActionExecutor({ stores, agentToolExecutor }), decisionProvider: new PiAgentDecisionProvider(llm), maxTurns: 20 });
-  return { piRunner, agentToolExecutor, stores, skills, eventBus, async close() { await base.close?.(); await eventBus.close?.(); } };
+  return { piRunner, agentToolExecutor, stores, promptPrograms, tools, eventBus, async close() { await base.close?.(); await eventBus.close?.(); } };
+}
+
+function createLlmProvider(config: AppConfig): LLMProvider {
+  if (!config.openaiApiKey.trim() || config.openaiApiKey.trim() === 'replace-me') {
+    throw new Error('LLM_PROVIDER=openai-compatible requires OPENAI_API_KEY.');
+  }
+  if (!config.openaiModel.trim()) {
+    throw new Error('LLM_PROVIDER=openai-compatible requires OPENAI_MODEL.');
+  }
+  return new OpenAICompatibleProvider({ baseURL: config.openaiBaseURL, apiKey: config.openaiApiKey, model: config.openaiModel });
 }
 
 function createStores(config: AppConfig): StoreBundle {

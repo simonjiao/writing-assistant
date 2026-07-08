@@ -1,8 +1,6 @@
 import { ArticleArtifact, DialogueBrief, DialogueBriefConflict, DialogueBriefItem, DialogueBriefUpdateJob, DialogueContextKind, DialogueMessage, KnowledgeItem, newId, nowIso } from '@wa/core';
-import { DialogueBriefUpdaterInput, DialogueBriefUpdaterOutput } from '@wa/skills';
+import { AgentSessionTarget, agentOperationId, DialogueBriefUpdaterInput, DialogueBriefUpdaterOutput, getOrCreateAgentSession } from '@wa/workflows';
 import type { AppContainer } from './bootstrap';
-import { agentOperationId } from './agent/agentOperationIds';
-import { AgentSessionTarget, getOrCreateAgentSession } from './agent/agentSessionTarget';
 
 const maxBriefUpdateAttempts = 3;
 const maxBriefJobRunningMs = 60_000;
@@ -136,11 +134,10 @@ async function processDialogueBriefUpdateJob(container: AppContainer, jobId: str
       currentBrief: compactDialogueBriefForPrompt(currentBrief),
       skipKnowledge: true,
     };
-    const patch = await container.agentToolExecutor.executeSkillTool<DialogueBriefUpdaterInput, DialogueBriefUpdaterOutput>({
+    const patch = await container.agentToolExecutor.executeTool<DialogueBriefUpdaterInput, DialogueBriefUpdaterOutput>({
       agentSession: session,
       allowedTools: ['update_dialogue_brief'],
       toolName: 'update_dialogue_brief',
-      skillId: 'dialogue-brief-updater',
       input: skillInput,
       operationId: agentOperationId('dialogue_brief_update', target, { messageId: running.messageId, messageContent: running.messageContent, contextKind: running.contextKind }),
       sessionId,

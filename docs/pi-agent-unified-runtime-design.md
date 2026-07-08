@@ -2,35 +2,35 @@
 
 ## 状态
 
-核心 runtime 迁移已完成。本设计承接 `docs/pi-agent-workflow-runner-design.md`：workflow runner 已迁移到 pi-agent；API、对话、对话摘要、批注处理和局部修订不再直接调用自研 `AgentRuntime.invokeSkill` 或公开的 `SkillExecutor`，而是按上下文绑定 pi-agent session，并通过 `AgentToolExecutor` 执行受限工具。dialogue route 已从 `app.ts` 拆出，proposal apply/dismiss 相关逻辑已进入 service。operation store 已泛化为 `AgentOperationStore`；非 workflow session 会压缩旧消息到 `compactSummary`，并维护 `toolTraceSummary`。继续拆分其它 API 路由属于后续结构债务。
+核心 runtime 迁移已完成。本设计承接 `docs/pi-agent-workflow-runner-design.md`：workflow runner 已迁移到 pi-agent；API、对话、对话摘要、批注处理和局部修订不再直接调用自研 runtime 或公开的 `PromptProgramRegistry`，而是按上下文绑定 pi-agent session，并通过 `AgentToolExecutor` 执行 `ToolRegistry` 中的受限产品工具。dialogue route 已从 `app.ts` 拆出，proposal apply/dismiss 相关逻辑已进入 service。operation store 已泛化为 `AgentOperationStore`；非 workflow session 会压缩旧消息到 `compactSummary`，并维护 `toolTraceSummary`。继续拆分其它 API 路由属于后续结构债务。
 
 ## 背景
 
 迁移前系统里有两类 LLM 执行路径：
 
 - Workflow 路径：`PiWorkflowRunner` 恢复 pi-agent session，计算 `allowedActions`，由 pi-agent 选择动作，再通过 workflow action executor 执行。
-- 非 workflow 路径：API 或 service 直接调用 `container.runtime.invokeSkill(...)`，例如对话路由、对话方案、对话摘要、批注处理、任务卡/大纲/正文局部修订。
+- 非 workflow 路径：API 或 service 直接调用自研 prompt 执行器，例如对话路由、对话方案、对话摘要、批注处理、任务卡/大纲/正文局部修订。
 
 这会导致几个问题：
 
 - 对话和批注没有统一的 agent session、tool trace 和 operation log。
 - 部分修改路径能绕过 pi-agent 的 allowed action/tool gating。
 - 失败恢复、上下文压缩、brief settle、RAG 触发规则分散在 API/service 里。
-- `AgentRuntime` 命名误导，它实际只是 skill 执行器，却被业务层当作 agent runtime 使用。
+- `AgentRuntime` 命名误导，它实际只是 prompt program 注册器，却被业务层当作 agent runtime 使用。
 
 ## 目标
 
 - 非 workflow LLM 调用也通过 pi-agent session 和限定工具集执行。
-- 删除或重命名 `AgentRuntime`，不再允许 API/service 直接调用 `invokeSkill`。
-- 引入 `SkillExecutor` 作为低层 skill 执行器，只能被 agent tool executor 调用。
+- 删除自研 `AgentRuntime`，不再允许 API/service 直接调用 prompt program。
+- 引入 `PromptProgramRegistry` 作为低层 prompt program 注册器，只能被产品工具执行器调用。
 - 非 workflow 路径必须显式创建/恢复 pi-agent session，并通过 `AgentToolExecutor` 负责 allowed tools、tool execution、operation 和恢复。
 - 将 dialogue、brief、comment、revision proposal 统一纳入 pi-agent tool 调用和 operation 审计。
 - 保持外部产品 API 基本稳定，不新增通用 `/agents/*` 产品入口。
-- 保留 LLM-backed skill，但它们只能作为 pi-agent tool 的实现细节。
+- 保留 LLM-backed prompt program，但它们只能作为 pi-agent tool 的实现细节。
 
 ## 非目标
 
-- 不把所有 skill 立即改成确定性函数。
+- 不要求所有 prompt program 改成确定性函数。
 - 不在第一版实现多人实时协同编辑状态。
 - 不把不同用户的 pi-agent session、dialogue brief、proposal 默认共享。
 - 不新增旧 runtime 与新 runtime 的长期双轨兼容。
@@ -49,10 +49,10 @@ flowchart TB
   Workflow --> Session
   SessionTarget --> Tools[Agent Tool Executor]
   WTools --> Tools
-  Tools --> SkillExec[SkillExecutor]
-  SkillExec --> Skills[SkillRegistry]
-  SkillExec --> Context[ContextBuilder]
-  SkillExec --> LLM[LLM Provider]
+  Tools --> ProgramExec[PromptProgramRegistry]
+  ProgramExec --> Programs[Prompt programs]
+  ProgramExec --> Context[ContextBuilder]
+  ProgramExec --> LLM[LLM Provider]
   Tools --> Ops[AgentOperationStore]
   Tools --> Artifacts[ArtifactStore]
   Tools --> Proposals[RevisionProposalStore]
@@ -64,7 +64,7 @@ flowchart TB
 
 | 当前名称 | 目标名称 | 说明 |
 |---|---|---|
-| `AgentRuntime` | 删除或改名为 `SkillExecutor` | 只执行 skill，不管理 agent session 或业务决策 |
+| `AgentRuntime` | 删除 | 不再保留自研 agent runtime |
 | `PiWorkflowRunner` | 保留 | workflow-scoped pi-agent runner |
 | 无 | `AgentToolExecutor` + session target helpers | 非 workflow 路径不保留空 runner façade，直接按上下文绑定 pi session 并执行受限工具 |
 | 旧 `WorkflowOperationStore` 概念 | `AgentOperationStore` | operation log 已泛化，workflow 和非 workflow 共用 |
@@ -73,9 +73,9 @@ flowchart TB
 约束：
 
 - `AppContainer` 不再暴露 `runtime: AgentRuntime`。
-- `bootstrap.ts` 可以创建 `skillExecutor`，但只注入到 `AgentToolExecutor`。
-- API route/service 层不得直接依赖 `SkillExecutor`。
-- 只有 agent tool executor 可以调用 `SkillExecutor.executeSkill(...)`。
+- `bootstrap.ts` 创建 `PromptProgramRegistry`、`ToolRegistry` 和 `AgentToolExecutor`。
+- API route/service 层不得直接依赖 `PromptProgramRegistry`。
+- 只有产品工具执行器可以通过 `executePromptProgram(...)` 调用 `PromptProgramRegistry`。
 
 ## Session 粒度
 
@@ -257,18 +257,18 @@ writing-autopilot process_article_comments
 - 需要改正文时生成 proposal 或批量可审阅建议，不直接改正文。
 - 单条批注失败只标记该批注 `needs_input`，批量流程继续处理其他批注。
 
-## SkillExecutor
+## PromptProgramRegistry
 
-第一阶段保留 LLM-backed skill，但它们只能由 pi-agent tool 调用。
+保留 LLM-backed prompt program，但它们只能由 pi-agent tool 调用。
 
 硬约束：
 
-- skill 只返回结构化 output。
-- skill 不直接读写 store。
-- skill 不直接做 RAG，除非该 skill 明确是 knowledge/search tool。
-- skill 不决定是否应用 proposal。
-- skill 的 LLM 调用必须由 `SkillExecutor` 记录 started/completed/failed 和 usage。
-- API route/service 不得直接调用 skill。
+- prompt program 只返回结构化 output。
+- prompt program 不直接读写 store。
+- prompt program 不直接做 RAG，除非该 program 明确是 knowledge/search tool。
+- prompt program 不决定是否应用 proposal。
+- prompt program 的 LLM 调用必须由 `PromptProgramRegistry` 记录 started/completed/failed 和 usage。
+- API route/service 不得直接调用 prompt program。
 
 ## 失败和恢复
 
@@ -333,7 +333,7 @@ DELETE /api/articles/:articleId/comments/:commentId/replies/:replyId
 | 场景 | 预算 |
 |---|---|
 | 只读解释/普通讨论 | 不触发 RAG，不生成 proposal，最多一次 pi-agent LLM 决策或本地 answer |
-| 生成/刷新 proposal | 先 settle brief，再一次 agent decision + 一次 LLM-backed skill |
+| 生成/刷新 proposal | 先 settle brief，再一次 agent decision + 一次 LLM-backed prompt program |
 | RAG 问答 | 只有明确检索意图才开放 search tool；最多一次 search + 一次 answer/proposal |
 | 批注批量处理 | 每条批注独立 operation；UI 展示逐条进度；失败不阻塞其他条 |
 
@@ -348,10 +348,10 @@ DELETE /api/articles/:articleId/comments/:commentId/replies/:replyId
 
 ### 阶段 1：抽底座
 
-- `AgentRuntime` 删除或重命名为 `SkillExecutor`。
-- `SkillExecutor` 只保留 skill registry、context builder、LLM provider、事件和 schema 校验。
+- `AgentRuntime` 删除或重命名为 `PromptProgramRegistry`。
+- `PromptProgramRegistry` 只保留 prompt program registry、context builder、LLM provider、事件和 schema 校验。
 - `AppContainer` 不再暴露 `runtime`。
-- workflow action executor 改注入 `AgentToolExecutor`，不直接持有 `SkillExecutor`。
+- workflow action executor 改注入 `AgentToolExecutor`，不直接持有 `PromptProgramRegistry`。
 
 ### 阶段 2：非 workflow agent tool boundary
 
@@ -362,7 +362,7 @@ DELETE /api/articles/:articleId/comments/:commentId/replies/:replyId
 
 ### 阶段 3：迁移 dialogue
 
-- `/api/articles/:id/dialogue` 不再直接调用 `dialogue-router`、`dialogue-coordinator`、reviser 或 patch skill。
+- `/api/articles/:id/dialogue` 不再直接调用 `dialogue-router`、`dialogue-coordinator`、reviser 或 patch program。
 - 对话修改默认产出 proposal。
 - apply/dismiss 走 agent operation + revision 校验。
 - 显式 RAG 才开放 search tool。
@@ -382,7 +382,7 @@ DELETE /api/articles/:articleId/comments/:commentId/replies/:replyId
 ### 阶段 6：删除直连面
 
 - `rg "runtime.invokeSkill|container.runtime"` 在 API/service 中应为零。
-- 测试改为 mock pi-agent/tool executor，不 monkey patch route runtime 或公开 `SkillExecutor`。
+- 测试改为 mock pi-agent/tool executor，不 monkey patch route runtime 或公开 `PromptProgramRegistry`。
 - 更新模块文档和技术架构图。
 
 ## 文件拆分要求
@@ -423,7 +423,7 @@ apps/api/src/
 
 - `AppContainer` 不再暴露 `AgentRuntime runtime`。
 - API route/service 层没有 `container.runtime.invokeSkill`。
-- 只有 `AgentToolExecutor` / `SkillExecutor` 可以调用 `skill.invoke`。
+- 只有 `AgentToolExecutor` / `PromptProgramRegistry` 可以调用 `PromptProgram.invoke`。
 - 非 workflow LLM 调用都必须有 `piAgentSessionId` 或明确的 agent session target。
 - 非 workflow tool 调用写入 `AgentOperation`。
 

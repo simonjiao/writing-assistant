@@ -12,10 +12,10 @@ flowchart TB
   Runner --> Executor[WorkflowActionExecutor]
   Executor --> ToolExec[AgentToolExecutor]
   ArticleAgent --> ToolExec
-  ToolExec --> SkillExec[SkillExecutor]
-  SkillExec --> Skills[SkillRegistry]
-  SkillExec --> Context[ContextBuilder]
-  SkillExec --> LLM[OpenAI-compatible or Mock LLM]
+  ToolExec --> Tools[ToolRegistry + Zod Schemas]
+  Tools --> Programs[PromptProgramRegistry]
+  Programs --> Context[ContextBuilder]
+  Programs --> LLM[OpenAI-compatible LLM]
   Context --> Stores[Session/State/Memory/Artifact Stores]
   Context --> Knowledge[HTTP RAG or Tonglingyu Retriever]
   Executor --> Stores
@@ -35,10 +35,10 @@ flowchart TB
 | API | Fastify | REST、SSE、WebSocket、配置、容器组装 |
 | Workflow | PiWorkflowRunner | 读取当前状态，生成 allowed actions，推进 `writing-autopilot` |
 | Agent | pi-agent-core Agent | 在 runner 给定的动作集合内选择下一步 |
-| Execution | WorkflowActionExecutor + AgentToolExecutor | 执行幂等工具，写入 task card、outline、section、review artifact；所有 skill 调用统一穿过 agent tool 边界 |
+| Execution | WorkflowActionExecutor + AgentToolExecutor | 执行幂等工具，写入 task card、outline、section、review artifact；所有 prompt program 调用统一穿过 agent tool 边界 |
 | HumanGate | HumanGateStore | 独立保存用户确认点，例如确认任务卡、覆盖当前大纲 |
 | Operation | WorkflowOperationStore | 保存幂等 operationId、工具状态和 article revision；workflow 工具绑定 run，普通对话 proposal 写入绑定 article/user |
-| Skill | SkillRegistry | 管理任务卡、大纲、章节、对话、批注处理等能力包 |
+| Product Tools | ToolRegistry + PromptProgramRegistry | 管理任务卡、大纲、章节、对话、批注处理等产品工具和 LLM prompt program |
 | Context | DefaultContextBuilder | 动态组合 Session/State/Memory/Artifact/Knowledge |
 | Store | SQLite stores | 外部化保存 Session/State/Memory/Artifact/Knowledge/EventTrace/pi session |
 | Realtime | EventBus + SSE/WS | 推送 workflow、tool、RAG、artifact、review 事件 |

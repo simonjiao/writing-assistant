@@ -4,10 +4,10 @@ COPY package*.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/core/package.json packages/core/package.json
-COPY packages/skills/package.json packages/skills/package.json
+COPY packages/workflows/package.json packages/workflows/package.json
 RUN npm install
 COPY . .
-RUN npm run build --workspace @wa/core && npm run build --workspace @wa/skills && npm run build --workspace @wa/api
+RUN npm run build --workspace @wa/core && npm run build --workspace @wa/workflows && npm run build --workspace @wa/api
 
 FROM node:22-alpine
 WORKDIR /app

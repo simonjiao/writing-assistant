@@ -4,11 +4,16 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ArticleArtifact, WritingTaskCard, nowIso } from '@wa/core';
 import { createApp } from './app';
-import { createContainer } from './bootstrap';
+import { createContainer as createAppContainer } from './bootstrap';
 import { AppConfig } from './config';
+import { TestLLMProvider } from './testing/mockLlmProvider';
 
 let dataDir: string | undefined;
 let fixtureWriteCounter = 0;
+
+function createContainer(config: AppConfig) {
+  return createAppContainer(config, { llm: new TestLLMProvider() });
+}
 
 afterEach(async () => {
   if (dataDir) await rm(dataDir, { recursive: true, force: true });
@@ -22,10 +27,10 @@ function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     port: 0,
     dataDir,
     webOrigin: 'http://localhost:5173',
-    llmProvider: 'mock',
+    llmProvider: 'openai-compatible',
     openaiBaseURL: 'https://api.openai.com/v1',
-    openaiApiKey: '',
-    openaiModel: 'mock',
+    openaiApiKey: 'test-key',
+    openaiModel: 'test-model',
     ragProvider: 'local',
     ragBaseURL: '',
     ragApiKey: '',

@@ -1,6 +1,6 @@
 import { ArticleArtifact, hashOperationArgs, newId, nowIso, RevisionOperation, RevisionProposal, WritingTaskCard } from '@wa/core';
-import { normalizeTaskCardPolicies } from '@wa/skills';
-import type { OutlineItemReviserOutput, OutlineReviserOutput, PatchEditorInput, PatchEditorOutput, TaskCardReviserOutput } from '@wa/skills';
+import { normalizeTaskCardPolicies } from '@wa/workflows';
+import type { OutlineItemReviserOutput, OutlineReviserOutput, PatchEditorInput, PatchEditorOutput, TaskCardReviserOutput } from '@wa/workflows';
 import { AppContainer } from '../bootstrap';
 
 export class RevisionProposalStaleError extends Error {
@@ -23,7 +23,6 @@ type ExecuteArticleAgentSkill = <I = unknown, O = unknown>(input: {
   target: ArticleAgentTarget;
   allowedTools: readonly string[];
   toolName: string;
-  skillId: string;
   skillInput: I;
   operationPrefix: string;
   operationId?: string;
@@ -191,7 +190,6 @@ export function createRevisionProposalService(deps: {
         target: { contextKind: 'task-card' },
         allowedTools: ['revise_task_card'],
         toolName: 'revise_task_card',
-        skillId: 'task-card-reviser',
         skillInput,
         operationPrefix: 'revision_apply_task_card',
         operationId: `${write.operationId}_skill`,
@@ -217,7 +215,6 @@ export function createRevisionProposalService(deps: {
         target: { contextKind: 'outline-item', targetId: operation.outlineItemId },
         allowedTools: ['revise_outline_item'],
         toolName: 'revise_outline_item',
-        skillId: 'outline-item-reviser',
         skillInput,
         operationPrefix: 'revision_apply_outline_item',
         operationId: `${write.operationId}_skill`,
@@ -242,7 +239,6 @@ export function createRevisionProposalService(deps: {
         target: { contextKind: 'outline' },
         allowedTools: ['revise_outline'],
         toolName: 'revise_outline',
-        skillId: 'outline-reviser',
         skillInput,
         operationPrefix: 'revision_apply_outline',
         operationId: `${write.operationId}_skill`,
@@ -264,7 +260,6 @@ export function createRevisionProposalService(deps: {
       target: { contextKind: 'block', targetId: operation.blockId },
       allowedTools: ['patch_block'],
       toolName: 'patch_block',
-      skillId: 'patch-editor',
       skillInput,
       operationPrefix: 'revision_apply_patch_block',
       operationId: `${write.operationId}_skill`,
