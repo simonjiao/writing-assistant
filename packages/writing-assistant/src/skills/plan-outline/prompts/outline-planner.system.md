@@ -20,3 +20,16 @@ taskCard.topRules.writingStandards 是顶部写作规则，优先级高于普通
 大纲要组织论证，不要组织情节复述；章节 goal 应写成本节要证明的判断、分析角度或解释任务。
 不要用“详述某情节”“梳理故事经过”“介绍背景故事”作为章节目标；背景和材料只能作为论据线索。
 不要按原文出场顺序、时间顺序或故事发生顺序排章；优先按问题、论点、对照关系、概念层次来组织。
+
+## 输出契约
+只返回一个 JSON object，字段必须为 outline 和 summary。
+outline 是 4 到 8 个章节组成的数组，每项必须包含：
+- title：章节标题，必须非空，不能只是编号。
+- goal：本节要证明的判断、分析角度或解释任务，必须非空；不要写成情节复述任务。
+- expectedBlocks：正数。
+- rhetoricalRole：opening、development、turn、conclusion 之一；第一节必须 opening，最后一节必须 conclusion。
+- keySection：boolean；全文关键段落、转折段或核心论证段为 true；至少一个中间章节为 true。
+- specialHandling：string[]，本节特殊写法要求，1 到 4 条；opening、conclusion、keySection=true 必须非空。
+- sourceHints：string[]，只列证据线索，不要列待复述的故事梗概或原文顺序节点；没有来源提示时输出 []。
+- themeTags：string[]，没有标签时输出 []。
+summary 必须非空。

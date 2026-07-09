@@ -1,9 +1,10 @@
 import { resolve } from 'node:path';
 import { newId, nowIso, OutlineItem, OutlineRhetoricalRole, safeJsonParse, WritingTaskCard } from '@wa/core';
-import { loadPromptTemplate, PromptProgram } from '@wa/runtime';
+import { PromptProgram } from '@wa/runtime';
 import { filterKnowledgeByTaskCardPolicy, normalizeTaskCardPolicies, validateGeneratedTextAgainstTaskCardPolicy } from '../../../domain/task-card-policy';
+import { loadWritingAssistantSystemPrompt } from '../../../shared/prompt-guard';
 
-const systemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/outline-planner.system.md'));
+const systemPrompt = loadWritingAssistantSystemPrompt(resolve(__dirname, '../prompts/outline-planner.system.md'));
 
 export interface OutlinePlannerInput {
   articleId: string;
@@ -40,19 +41,6 @@ export class OutlinePlannerProgram implements PromptProgram<OutlinePlannerInput,
             taskCard,
             memory: context.memory,
             knowledge,
-            requiredOutputShape: {
-              outline: [{
-                title: 'string; 章节标题，必须非空，不能只是编号',
-                goal: 'string; 本节要证明的判断、分析角度或解释任务，必须非空；不要写成情节复述任务',
-                expectedBlocks: 'number; 正数',
-                rhetoricalRole: 'opening | development | turn | conclusion; 对应起承转合，第一节必须 opening，最后一节必须 conclusion',
-                keySection: 'boolean; 全文关键段落、转折段或核心论证段为 true，否则 false；至少一个中间章节为 true',
-                specialHandling: 'string[]; 本节特殊写法要求，1-4 条；opening、conclusion、keySection=true 必须非空',
-                sourceHints: 'string[]; 只列证据线索，不要列待复述的故事梗概或原文顺序节点；没有来源提示时输出 []',
-                themeTags: 'string[]; 没有标签时输出 []',
-              }],
-              summary: 'string; 必须非空',
-            },
           }),
         },
       ],

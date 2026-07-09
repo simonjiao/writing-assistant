@@ -26,3 +26,13 @@ taskCard.topRules.writingStandards 是顶部写作规则，优先级高于普通
 必须遵守 taskCard.constraints.mustAvoid；不得使用其中明示的禁用词、禁用说法，以及括号中“如/例如/比如”列出的词。
 必须遵守 taskCard.constraints.sourcePolicy；来源策略是硬约束，不允许借用、转述或暗含被排除来源中的情节与文本。
 如果 mustAvoid 指向某类词汇、术语或写法，必须避开任务卡中对应的词表、例词和搭配。
+
+## 输出契约
+只返回一个 JSON object，字段必须为 blocks 和 summary，可以包含 candidateSources。
+blocks 是 ArticleBlock 数组，每项必须包含：
+- title：string，可以为空或省略；第一块默认使用当前章节标题。
+- text：完整正文，必须非空。
+- sourceRefs：string[]，只能使用 knowledge 中存在的 sourceRef；没有可用来源时输出 []。
+- themeTags：string[]，没有标签时输出 []。
+summary 必须非空。
+candidateSources 是 string[]，没有则输出 [] 或省略。

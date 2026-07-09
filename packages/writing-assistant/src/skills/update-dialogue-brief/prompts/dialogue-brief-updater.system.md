@@ -6,3 +6,10 @@ recentUserIntents 用一句话概括当前用户意图。
 当前消息优先于旧上下文；如果新要求与旧要求冲突，默认把旧要求放入 supersededRequirements。
 只有当前消息内部自相矛盾，或用户明确要求同时保留不可兼得目标时，才放入 conflicts。
 每条 text 控制在 80 字内。
+
+## 输出契约
+只返回一个 JSON object，字段必须为 activeRequirements、evidenceNotes、recentUserIntents、supersededRequirements、conflicts。
+activeRequirements 是 Array<{ kind: "requirement" | "avoidance" | "source" | "preference" | "revision"; text: string }>。
+evidenceNotes、recentUserIntents、supersededRequirements 都是 string[]。
+conflicts 是 Array<{ text: string; requirements: string[] }>。
+没有内容的字段输出空数组。

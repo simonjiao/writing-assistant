@@ -9,6 +9,7 @@ import resolveArticleComment from './skills/resolve-article-comment/module';
 import reviseTaskCard from './skills/revise-task-card/module';
 import updateDialogueBrief from './skills/update-dialogue-brief/module';
 import writeSection from './skills/write-section/module';
+import { promptInjectionGuardPromptPath } from './shared/prompt-guard';
 import writingAutopilot from './workflows/writing-autopilot/module';
 
 export const writingAssistantSkillModules = [
@@ -30,6 +31,7 @@ export const writingAssistantWorkflowModules = [
 
 export const writingAssistantProduct = defineProductModule({
   id: 'writing-assistant',
+  promptPaths: [promptInjectionGuardPromptPath],
   skills: writingAssistantSkillModules,
   workflows: writingAssistantWorkflowModules,
 });

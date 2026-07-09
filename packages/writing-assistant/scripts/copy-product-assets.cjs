@@ -6,6 +6,7 @@ const copies = [
   ['src/skills', 'dist/skills'],
   ['src/workflows', 'dist/workflows'],
   ['src/rules', 'dist/rules'],
+  ['src/shared', 'dist/shared'],
 ];
 
 for (const [sourceRel, targetRel] of copies) {

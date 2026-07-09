@@ -1,8 +1,9 @@
 import { resolve } from 'node:path';
 import { DialogueContextKind, safeJsonParse } from '@wa/core';
-import { loadPromptTemplate, PromptProgram } from '@wa/runtime';
+import { PromptProgram } from '@wa/runtime';
+import { loadWritingAssistantSystemPrompt } from '../../../shared/prompt-guard';
 
-const systemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/dialogue-router.system.md'));
+const systemPrompt = loadWritingAssistantSystemPrompt(resolve(__dirname, '../prompts/dialogue-router.system.md'));
 
 export type DialogueRouteDecision = 'answer' | 'clarify' | 'discuss' | 'propose' | 'needs-rag';
 
@@ -47,7 +48,6 @@ export class DialogueRouterProgram implements PromptProgram<DialogueRouterInput,
             message: input.message,
             hasPendingProposal: input.hasPendingProposal,
             context: input.context,
-            requiredOutputShape: { route: 'answer | clarify | discuss | propose | needs-rag', message: 'optional short reason' },
           }),
         },
       ],

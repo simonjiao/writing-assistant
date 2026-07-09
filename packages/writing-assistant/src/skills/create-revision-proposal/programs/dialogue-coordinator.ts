@@ -1,8 +1,9 @@
 import { resolve } from 'node:path';
 import { ArticleBlock, DialogueBrief, DialogueContextKind, OutlineItem, RevisionOperation, safeJsonParse, WritingTaskCard } from '@wa/core';
-import { loadPromptTemplate, PromptProgram } from '@wa/runtime';
+import { PromptProgram } from '@wa/runtime';
+import { loadWritingAssistantSystemPrompt } from '../../../shared/prompt-guard';
 
-const systemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/dialogue-coordinator.system.md'));
+const systemPrompt = loadWritingAssistantSystemPrompt(resolve(__dirname, '../prompts/dialogue-coordinator.system.md'));
 
 export interface DialogueCoordinatorInput {
   articleId: string;
@@ -70,14 +71,6 @@ export class DialogueCoordinatorProgram implements PromptProgram<DialogueCoordin
             selectedOutlineItem: input.selectedOutlineItem,
             selectedBlock: input.selectedBlock ? { id: input.selectedBlock.id, title: input.selectedBlock.title, text: compactText(input.selectedBlock.text, 1200), status: input.selectedBlock.status } : undefined,
             memory: context.memory,
-            requiredOutputShape: {
-              mode: 'answer | clarify | proposal',
-              message: 'string; 面向用户的一句话或短段回复',
-              summary: 'string; proposal 时概括这次拟修改',
-              expectedOperationType: expectedOperationType(input.context.kind),
-              operations: [{ type: expectedOperationType(input.context.kind), instruction: 'string; 给具体修订器的明确指令' }],
-              warnings: 'string[]; 影响范围、删除或已有正文风险',
-            },
           }),
         },
       ],

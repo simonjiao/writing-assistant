@@ -1,12 +1,13 @@
 import { resolve } from 'node:path';
 import { ArticleArtifact, ArticleBlock, KnowledgeItem, newId, nowIso, OutlineItem, safeJsonParse, WritingTaskCard } from '@wa/core';
-import { loadPromptTemplate, PromptProgram } from '@wa/runtime';
+import { PromptProgram } from '@wa/runtime';
 import { filterKnowledgeByTaskCardPolicy, normalizeTaskCardPolicies, validateGeneratedTextAgainstTaskCardPolicy } from '../../../domain/task-card-policy';
 import { findAvoidedTermsInText } from '../../../domain/writing-constraints';
+import { loadWritingAssistantSystemPrompt } from '../../../shared/prompt-guard';
 
-const systemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/section-writer.system.md'));
-const overlongRevisionSystemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/section-writer.overlong-reviser.system.md'));
-const sourceRefRevisionSystemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/section-writer.source-ref-reviser.system.md'));
+const systemPrompt = loadWritingAssistantSystemPrompt(resolve(__dirname, '../prompts/section-writer.system.md'));
+const overlongRevisionSystemPrompt = loadWritingAssistantSystemPrompt(resolve(__dirname, '../prompts/section-writer.overlong-reviser.system.md'));
+const sourceRefRevisionSystemPrompt = loadWritingAssistantSystemPrompt(resolve(__dirname, '../prompts/section-writer.source-ref-reviser.system.md'));
 
 export interface SectionWriterInput {
   articleId: string;
@@ -165,10 +166,6 @@ async function reviseOverlongSection(input: { input: SectionWriterInput; parsed:
           originalDraft: input.parsed,
           knowledge: input.knowledge,
           writingContinuity: input.writingContinuity,
-          requiredOutputShape: {
-            blocks: [{ title: 'string', text: 'string', sourceRefs: ['string'], themeTags: ['string'] }],
-            summary: 'string',
-          },
         }),
       },
     ],
@@ -195,10 +192,6 @@ async function reviseMissingSourceRefs(input: { input: SectionWriterInput; parse
           originalDraft: input.parsed,
           knowledge: input.knowledge.map((item) => ({ title: item.title, content: item.content, sourceRef: item.sourceRef, themeTags: item.themeTags })),
           writingContinuity: input.writingContinuity,
-          requiredOutputShape: {
-            blocks: [{ title: 'string', text: 'string', sourceRefs: ['string'], themeTags: ['string'] }],
-            summary: 'string',
-          },
         }),
       },
     ],

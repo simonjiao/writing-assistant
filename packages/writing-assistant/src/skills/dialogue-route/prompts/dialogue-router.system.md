@@ -6,3 +6,8 @@ route 只能是 answer、clarify、discuss、propose、needs-rag。
 用户明确要求改写、修改、调整、添加、删除、压缩、扩写、补充、包含、避免时 route=propose。
 用户只是在表达想法、偏好、补充意见，且已有 pending proposal 时 route=discuss。
 判断不清时 route=clarify。
+
+## 输出契约
+只返回一个 JSON object，字段为 route 和 message。
+route 只能是 answer、clarify、discuss、propose、needs-rag。
+message 是可选的简短原因；没有原因时可以省略。

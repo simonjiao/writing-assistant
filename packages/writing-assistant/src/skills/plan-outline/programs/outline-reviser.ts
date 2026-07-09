@@ -1,8 +1,9 @@
 import { resolve } from 'node:path';
 import { newId, OutlineItem, OutlineRhetoricalRole, safeJsonParse, WritingTaskCard } from '@wa/core';
-import { loadPromptTemplate, PromptProgram } from '@wa/runtime';
+import { PromptProgram } from '@wa/runtime';
+import { loadWritingAssistantSystemPrompt } from '../../../shared/prompt-guard';
 
-const systemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/outline-reviser.system.md'));
+const systemPrompt = loadWritingAssistantSystemPrompt(resolve(__dirname, '../prompts/outline-reviser.system.md'));
 
 export interface OutlineReviserInput {
   articleId: string;
@@ -51,24 +52,6 @@ export class OutlineReviserProgram implements PromptProgram<OutlineReviserInput,
             currentOutline: input.currentOutline,
             writtenSectionIds: input.writtenSectionIds ?? [],
             memory: context.memory,
-            requiredOutputShape: {
-              outline: [{
-                id: 'string; 原有条目尽量保留；新增条目可省略',
-                title: 'string; 非空',
-                goal: 'string; 非空；不要写成正文',
-                order: 'number; 系统会按返回顺序重排',
-                expectedBlocks: 'number; 正数',
-                rhetoricalRole: 'opening | development | turn | conclusion',
-                keySection: 'boolean',
-                specialHandling: 'string[]',
-                sourceHints: 'string[]',
-                themeTags: 'string[]',
-                status: 'draft | confirmed | written',
-              }],
-              summary: 'string; 概括整体大纲改动',
-              changedFields: 'string[]',
-              warnings: 'string[]',
-            },
           }),
         },
       ],

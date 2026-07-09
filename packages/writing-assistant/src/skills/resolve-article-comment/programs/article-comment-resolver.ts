@@ -1,9 +1,10 @@
 import { resolve } from 'node:path';
 import { ArticleBlock, ArticleComment, safeJsonParse, WritingTaskCard } from '@wa/core';
-import { loadPromptTemplate, PromptProgram } from '@wa/runtime';
+import { PromptProgram } from '@wa/runtime';
+import { loadWritingAssistantSystemPrompt } from '../../../shared/prompt-guard';
 
-const systemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/article-comment-resolver.system.md'));
-const retrySystemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/article-comment-resolver.retry.system.md'));
+const systemPrompt = loadWritingAssistantSystemPrompt(resolve(__dirname, '../prompts/article-comment-resolver.system.md'));
+const retrySystemPrompt = loadWritingAssistantSystemPrompt(resolve(__dirname, '../prompts/article-comment-resolver.retry.system.md'));
 
 export type ArticleCommentResolutionAction = 'revise' | 'explain' | 'ask';
 
@@ -105,11 +106,6 @@ function buildPayload(input: ArticleCommentResolverInput) {
       sourcePolicy: input.taskCard.constraints.sourcePolicy,
       citationRequired: input.taskCard.constraints.citationRequired,
     } : undefined,
-    requiredOutputShape: {
-      action: 'revise | explain | ask',
-      response: 'string; 面向用户的简短处理说明',
-      replacementText: 'string; action=revise 时必填；仅替换 selectedText 的正文片段',
-    },
   };
 }
 

@@ -1,8 +1,9 @@
 import { resolve } from 'node:path';
 import { OutlineItem, OutlineRhetoricalRole, safeJsonParse, WritingTaskCard } from '@wa/core';
-import { loadPromptTemplate, PromptProgram } from '@wa/runtime';
+import { PromptProgram } from '@wa/runtime';
+import { loadWritingAssistantSystemPrompt } from '../../../shared/prompt-guard';
 
-const systemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/outline-item-reviser.system.md'));
+const systemPrompt = loadWritingAssistantSystemPrompt(resolve(__dirname, '../prompts/outline-item-reviser.system.md'));
 
 export interface OutlineItemReviserInput {
   articleId: string;
@@ -50,23 +51,6 @@ export class OutlineItemReviserProgram implements PromptProgram<OutlineItemRevis
             taskCard: input.taskCard,
             siblingOutline: input.articleOutline?.map((item) => ({ id: item.id, title: item.title, order: item.order })),
             memory: context.memory,
-            requiredOutputShape: {
-              outlineItem: {
-                id: input.currentOutlineItem.id,
-                title: 'string; 修订后的大纲标题，非空',
-                goal: 'string; 修订后的本节写作目标，非空；不要写成正文',
-                order: input.currentOutlineItem.order,
-                expectedBlocks: 'number; 正数；未要求修改时保持原值',
-                rhetoricalRole: 'opening | development | turn | conclusion; 起承转合位置；未要求修改时保持原值',
-                keySection: 'boolean; 是否全文关键段落；未要求修改时保持原值',
-                specialHandling: 'string[]; 本节特殊写法要求；opening、conclusion、keySection=true 时必须说明处理方式',
-                sourceHints: 'string[]; 未要求修改时保持原值',
-                themeTags: 'string[]; 未要求修改时保持原值',
-                status: input.currentOutlineItem.status,
-              },
-              summary: 'string; 概括本次大纲项改动，必须非空',
-              changedFields: 'string[]; 修改过的字段路径，没有则输出 []',
-            },
           }),
         },
       ],

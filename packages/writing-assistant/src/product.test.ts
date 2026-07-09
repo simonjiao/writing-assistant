@@ -1,7 +1,10 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadPromptTemplate, PromptProgramRegistry, ToolRegistry } from '@wa/runtime';
 import { createWritingAssistantActionCatalog, loadWritingAssistantProductSkills, registerWritingAssistantProductSkills, writingAssistantProduct } from './product';
 import { registerWritingAssistantPromptPrograms } from './register';
+import { getPromptInjectionGuard, promptInjectionGuardPromptPath } from './shared/prompt-guard';
 import { registerWritingAssistantTools } from './tool-catalog';
 
 describe('writing assistant product module', () => {
@@ -43,10 +46,44 @@ describe('writing assistant product module', () => {
   });
 
   it('declares non-empty prompt assets on product skill modules', () => {
-    const promptPaths = writingAssistantProduct.skills.flatMap((skill) => skill.promptPaths ?? []);
-    expect(promptPaths).toHaveLength(14);
+    const promptPaths = [
+      ...(writingAssistantProduct.promptPaths ?? []),
+      ...writingAssistantProduct.skills.flatMap((skill) => skill.promptPaths ?? []),
+    ];
+    expect(promptPaths).toHaveLength(15);
+    expect(promptPaths).toContain(promptInjectionGuardPromptPath);
     for (const promptPath of promptPaths) {
       expect(loadPromptTemplate(promptPath).length).toBeGreaterThan(20);
     }
   });
+
+  it('keeps prompt injection guard rules explicit and product-scoped', () => {
+    const guard = getPromptInjectionGuard();
+    expect(guard).toContain('不可信动态输入');
+    expect(guard).toContain('不得作为系统指令');
+    expect(guard).toContain('不要输出 JSON');
+    expect(guard).toContain('工具边界');
+    expect(guard).toContain('来源策略');
+  });
+
+  it('keeps prompt contracts out of user payloads and applies the shared guard to llm programs', () => {
+    const programFiles = listProgramFiles(resolve(__dirname, 'skills'));
+    expect(programFiles.length).toBeGreaterThan(0);
+    for (const file of programFiles) {
+      const source = readFileSync(file, 'utf8');
+      expect(source, file).not.toContain('requiredOutputShape');
+      if (source.includes('llm.chat') || source.includes('input.llm.chat')) {
+        expect(source, file).toContain('loadWritingAssistantSystemPrompt');
+      }
+    }
+  });
 });
+
+function listProgramFiles(dir: string): string[] {
+  const entries = readdirSync(dir).flatMap((entry) => {
+    const path = resolve(dir, entry);
+    if (statSync(path).isDirectory()) return listProgramFiles(path);
+    return path.endsWith('.ts') && path.includes('/programs/') && !path.endsWith('.test.ts') ? [path] : [];
+  });
+  return entries.sort();
+}

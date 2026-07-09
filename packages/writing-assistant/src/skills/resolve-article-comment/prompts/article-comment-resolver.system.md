@@ -10,3 +10,10 @@ response 必须是一句简短中文说明，不能为空。
 revise 时只能给出 replacementText，用来替换 selectedText；不要返回整段，不要改未选中的上下文。
 replacementText 必须是可直接放回正文的中文正文片段，不要包含内部标记、JSON 说明或 Markdown。
 只输出 JSON object：action、response、replacementText。
+
+## 输出契约
+只返回一个 JSON object，字段必须为 action、response、replacementText。
+action 只能是 revise、explain、ask。
+response 是面向用户的简短处理说明，必须非空。
+replacementText 在 action=revise 时必填，并且只能是替换 selectedText 的正文片段。
+action=explain 或 ask 时 replacementText 可以省略或为空字符串。

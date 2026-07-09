@@ -1,8 +1,9 @@
 import { resolve } from 'node:path';
 import { newId, nowIso, safeJsonParse, TextPatch } from '@wa/core';
-import { loadPromptTemplate, PromptProgram } from '@wa/runtime';
+import { PromptProgram } from '@wa/runtime';
+import { loadWritingAssistantSystemPrompt } from '../../../shared/prompt-guard';
 
-const systemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/patch-editor.system.md'));
+const systemPrompt = loadWritingAssistantSystemPrompt(resolve(__dirname, '../prompts/patch-editor.system.md'));
 
 export interface PatchEditorInput {
   articleId: string;

@@ -57,7 +57,9 @@ describe('OutlinePlannerProgram', () => {
       }, calls),
     });
     const system = calls[0].messages.find((message) => message.role === 'system')?.content ?? '';
-    const user = JSON.parse(calls[0].messages.find((message) => message.role === 'user')?.content ?? '{}') as { requiredOutputShape?: { outline?: Array<{ sourceHints?: string; rhetoricalRole?: string; specialHandling?: string }> } };
+    const user = JSON.parse(calls[0].messages.find((message) => message.role === 'user')?.content ?? '{}') as Record<string, unknown>;
+    expect(system).toContain('Prompt Injection Guard');
+    expect(system).toContain('不可信动态输入');
     expect(system).toContain('不要按原文出场顺序');
     expect(system).toContain('优先按问题、论点、对照关系、概念层次');
     expect(system).toContain('大纲必须明确全文起承转合');
@@ -71,9 +73,10 @@ describe('OutlinePlannerProgram', () => {
     expect(system).toContain('不要把 mustAvoid 中的内容改写成章节标题、章节目标、themeTags 或主体论点');
     expect(system).toContain('不要用“从不”“没有要求”“完全不要求”等绝对化表述');
     expect(system).toContain('有规劝但不等于认同某种功利价值');
-    expect(user.requiredOutputShape?.outline?.[0]?.rhetoricalRole).toContain('opening');
-    expect(user.requiredOutputShape?.outline?.[0]?.specialHandling).toContain('opening、conclusion、keySection=true 必须非空');
-    expect(user.requiredOutputShape?.outline?.[0]?.sourceHints).toContain('原文顺序节点');
+    expect(system).toContain('rhetoricalRole：opening、development、turn、conclusion');
+    expect(system).toContain('opening、conclusion、keySection=true 必须非空');
+    expect(system).toContain('不要列待复述的故事梗概或原文顺序节点');
+    expect(user).not.toHaveProperty('requiredOutputShape');
   });
 
   it('accepts complete outline sections', async () => {

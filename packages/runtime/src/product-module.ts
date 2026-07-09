@@ -28,6 +28,7 @@ export interface ProductWorkflowModule {
 
 export interface ProductModule {
   id: string;
+  promptPaths?: string[];
   skills: ProductSkillModule[];
   workflows: ProductWorkflowModule[];
 }
@@ -80,6 +81,10 @@ export function buildActionCatalog(skillModules: ProductSkillModule[], skills: P
 }
 
 export function defineProductModule(module: ProductModule): ProductModule {
+  for (const promptPath of module.promptPaths ?? []) {
+    if (!existsSync(promptPath)) throw new Error(`Product module ${module.id} is missing prompt template: ${promptPath}`);
+    if (!readFileSync(promptPath, 'utf8').trim()) throw new Error(`Product module ${module.id} has empty prompt template: ${promptPath}`);
+  }
   const skillIds = new Set<string>();
   for (const skill of module.skills) {
     if (skillIds.has(skill.id)) throw new Error(`Duplicate product skill module id: ${skill.id}`);

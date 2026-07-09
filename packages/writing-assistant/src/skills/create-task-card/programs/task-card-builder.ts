@@ -1,10 +1,11 @@
 import { resolve } from 'node:path';
 import { newId, nowIso, safeJsonParse, TaskCardFollowUpPrompt, WritingTaskCard } from '@wa/core';
-import { loadPromptTemplate, PromptProgram } from '@wa/runtime';
+import { PromptProgram } from '@wa/runtime';
 import { normalizeTaskCardPolicies } from '../../../domain/task-card-policy';
 import { extractConfiguredAvoidanceRules, extractExplicitAvoidances } from '../../../domain/writing-constraints';
+import { loadWritingAssistantSystemPrompt } from '../../../shared/prompt-guard';
 
-const systemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/task-card-builder.system.md'));
+const systemPrompt = loadWritingAssistantSystemPrompt(resolve(__dirname, '../prompts/task-card-builder.system.md'));
 
 export interface TaskCardBuilderInput {
   articleId?: string;
@@ -65,50 +66,6 @@ export class TaskCardBuilderProgram implements PromptProgram<TaskCardBuilderInpu
       writingStandard: input.writingStandard,
       domainContext: input.domainContext,
       userPreferences: context.memory,
-      requiredOutputShape: {
-        taskCard: {
-          topic: 'string; 简洁题目，不要直接复制完整指令',
-          writingGoal: 'string; 具体写作目标，必须非空',
-          audience: 'string; 目标读者，必须非空',
-          topRules: {
-            languageEra: 'string; 语言时代感标签，没有则输出空字符串',
-            summary: 'string; 写作标准给用户看的简短摘要，没有则输出空字符串',
-            writingStandards: 'string[]; 顶部写作规则，没有则输出 []',
-            replacementHints: 'Array<{ avoid: string; prefer: string }>; 替代表，没有则输出 []',
-          },
-          scope: {
-            editions: 'string[]',
-            chapters: 'string[]',
-            characters: 'string[]',
-            themes: 'string[]',
-          },
-          structure: {
-            articleType: 'essay | analysis | commentary | speech | longform',
-            expectedLength: 'string; 中文长度描述',
-            outlinePreference: 'string; 中文结构偏好',
-          },
-          style: {
-            register: 'string; 中文语体描述',
-            tone: 'string; 中文语气描述',
-            classicalFlavor: 'boolean',
-            characterVoice: 'string; 可为空但必须是字符串',
-          },
-          constraints: {
-            citationRequired: 'boolean',
-            mustInclude: 'string[]',
-            mustAvoid: 'string[]',
-            sourcePolicy: 'string; 中文资料使用策略',
-          },
-          interactionMode: {
-            askBeforeWriting: 'boolean',
-            localEditFirst: 'boolean',
-          },
-        },
-        missingQuestions: 'string[]; 没有问题时输出 []',
-        followUpPrompts: 'Array<{ question: string; options: string[]; allowCustom: boolean; selectionMode?: "single" | "multi" }>; 和 missingQuestions 对应，没有问题时输出 []',
-        summary: 'string; 必须非空',
-        confidence: 'number; 0 到 1',
-      },
     });
 
     const response = await llm.chat({

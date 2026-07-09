@@ -1,10 +1,11 @@
 import { resolve } from 'node:path';
 import { nowIso, safeJsonParse, TaskCardFollowUpPrompt, WritingTaskCard } from '@wa/core';
-import { loadPromptTemplate, PromptProgram } from '@wa/runtime';
+import { PromptProgram } from '@wa/runtime';
 import { normalizeTaskCardPolicies } from '../../../domain/task-card-policy';
 import { extractConfiguredAvoidanceRules, extractExplicitAvoidances } from '../../../domain/writing-constraints';
+import { loadWritingAssistantSystemPrompt } from '../../../shared/prompt-guard';
 
-const systemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/task-card-reviser.system.md'));
+const systemPrompt = loadWritingAssistantSystemPrompt(resolve(__dirname, '../prompts/task-card-reviser.system.md'));
 
 export interface TaskCardReviserInput {
   articleId: string;
@@ -49,13 +50,6 @@ export class TaskCardReviserProgram implements PromptProgram<TaskCardReviserInpu
             instruction,
             currentTaskCard: input.currentTaskCard,
             userPreferences: context.memory,
-            requiredOutputShape: {
-              taskCard: '完整 WritingTaskCard；structure.articleType 只能是 essay | analysis | commentary | speech | longform',
-              summary: 'string; 概括本次改动，必须非空',
-              missingQuestions: 'string[]; 还需要用户补充的问题，没有则输出 []',
-              followUpPrompts: 'Array<{ question: string; options: string[]; allowCustom: boolean; selectionMode?: "single" | "multi" }>; 和 missingQuestions 对应，没有则输出 []',
-              changedFields: 'string[]; 修改过的字段路径，没有则输出 []',
-            },
           }),
         },
       ],

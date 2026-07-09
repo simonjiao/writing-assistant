@@ -1,8 +1,9 @@
 import { resolve } from 'node:path';
 import { DialogueBrief, DialogueBriefItemKind, safeJsonParse } from '@wa/core';
-import { loadPromptTemplate, PromptProgram } from '@wa/runtime';
+import { PromptProgram } from '@wa/runtime';
+import { loadWritingAssistantSystemPrompt } from '../../../shared/prompt-guard';
 
-const systemPrompt = loadPromptTemplate(resolve(__dirname, '../prompts/dialogue-brief-updater.system.md'));
+const systemPrompt = loadWritingAssistantSystemPrompt(resolve(__dirname, '../prompts/dialogue-brief-updater.system.md'));
 
 export interface DialogueBriefUpdaterInput {
   message: string;
@@ -57,13 +58,6 @@ export class DialogueBriefUpdaterProgram implements PromptProgram<DialogueBriefU
               evidenceNotes: input.currentBrief.evidenceNotes.map((item) => item.text),
               unresolvedConflicts: input.currentBrief.unresolvedConflicts.map((item) => item.text),
             } : undefined,
-            requiredOutputShape: {
-              activeRequirements: [{ kind: 'requirement | avoidance | source | preference | revision', text: 'string' }],
-              evidenceNotes: ['string'],
-              recentUserIntents: ['string'],
-              supersededRequirements: ['string'],
-              conflicts: [{ text: 'string', requirements: ['string'] }],
-            },
           }),
         },
       ],

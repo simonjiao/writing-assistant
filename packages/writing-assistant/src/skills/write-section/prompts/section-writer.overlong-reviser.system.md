@@ -4,3 +4,9 @@
 不要机械截断；必须输出完整、可直接保存的正文。
 不得加入新情节、新人物、新资料，也不得改变 taskCard、section 和 sourcePolicy 的约束。
 如果原草稿有复述、铺陈、重复引用或空泛解释，优先删去这些部分。
+
+## 输出契约
+只返回一个 JSON object，字段必须为 blocks 和 summary。
+blocks 是数组，每项必须包含 title、text、sourceRefs、themeTags。
+sourceRefs 和 themeTags 必须是 string[]，没有则输出 []。
+summary 必须非空。
